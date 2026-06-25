@@ -1,0 +1,8 @@
+X:1
+T:Goldberg Variations Aria - Bass Skeleton
+C:Johann Sebastian Bach
+M:3/4
+L:1/16
+K:G
+V:1 name="Bass skeleton"
+[V:1] G,12 | ^F,12 | E,12 | D,8- D,2 C,2 | B,,12 | C,8- C,2 D,2 | E,2 C,2 D,8 | G,,6 D,2 E,3 ^F, | G,12- | G,4 ^F,2 E,2 ^F,2 B,2 | E,6 E,2 ^F,2 G,2 | A,6 B,2 A,2 G,2 | ^F,12 | G,12 | A,12 | D,12 | D8 C4 | B,6 A,2 B,4 | C6 B,2 A,4 | B,6 A,2 G,2 ^F,2 | E,8 D,4 | C,8 B,,4 | A,,2 C,2 B,,2 A,,2 B,,4 | E,2 B,,2 E,,2 B,,2 E,2 D,2 | C,12 | B,,12 | A,,6 G,,2 ^F,,2 E,,2 | D,,2 A,,2 D,2 C,2 B,,2 A,,2 | G,,2 D,2 G,2 F,2 E,2 D,2 | C,2 G,2 C2 B,2 A,2 G,2 | ^F,2 D,2 G,2 B,2 D2 D,2 | G,6 D,2 G,,4 |]

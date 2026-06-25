@@ -1,0 +1,53 @@
+%Baroque
+%Bach, Johann Sebastian
+%Keyboard
+X:1
+T:goldberg-variations.mxl
+C:Music21
+%%score ( 1 2 3 ) ( 4 5 6 7 )
+L:1/16
+Q:1/4=66
+M:4/4
+K:Bb
+V:1 treble nm="Piano" snm="Pno"
+V:2 treble 
+L:1/8
+V:3 treble 
+V:4 bass nm="Piano" snm="Pno"
+V:5 bass 
+V:6 bass 
+L:1/8
+V:7 bass 
+V:1
+"_𝅘𝅥 = 66" z8 z ABc dcBA | G2d2G2c2- c^FGA BAGF |$[K:treble] G2 z2 z2 G2 _A2G2A2=A2 | %3
+ Bcdc BAG^F e2 z2 z2 c2- | ccBA Bcd=e =f2e2 fga2- |$ agfa gf=ed P^c2>=B2 cde2 | %6
+ d2 z2 z2 d2 _e2d2e2=e2 | f2g2a2g2- g2^f=e d^cd2 ::$ z8 z _ag=f =efge | c2d_e f2B2 z fed cedf | %10
+ e2f2 g4- gfg_a dcdf |$[K:treble] BcdB e2_A2- A2GF G2e2- | e2dc d2 z2 z =E=FG FEDC | %13
+ cBc2 ^F2 z2 z2 dc BAG=F |$[K:treble] E2 z2 z2 c2- c2_B2 A2Bc | d2=F2 E2c2- cB/A/G/A/^F G4 :| %16
+V:2
+ x8 | x7 A, |$[K:treble] x8 | x8 | x8 |$ x7 =E | x8 | x8 ::$ x8 | x8 | x8 |$[K:treble] x8 | x8 | %13
+ x8 |$[K:treble] x8 | D/C/4B,/4A,/4B,/4 x4 x2 x/ :| %16
+V:3
+ x16 | x16 |$[K:treble] B,2A,2B,2=B,2 CDED C x3 | ^F2 z2 z2 D2- Dx4D=EF | %4
+ G2^F2 GAB2- BAGB AG=F x |$ x16 | F2=E2F2^F2 G2A2B2A2- | A2GF =EDE2 D4 z4 ::$ %8
+ z BAG ^FGAF D2=E=F G2C2 | z GF_E DFEG F2G2 _A4- | AG_AB x12 |$[K:treble]x4>F4- F2ED E2 z2 | %12
+ x8 DCD2 x4 | z2 _ED CB,A,G, ^F,2 z2 z2 D2- |$[K:treble] D2C2 =B,2CD E2x4D2 | x16 :| %16
+V:4
+ z B,CD EDCB, A,2E2A,2D2- | DG,A,B, CB,A,G, A,2 z2 z2 x2 |$ %2
+[K:bass] G,,D,=E,^F, G,=F,_E,D, C,2=B,,2C,2^C,2 | D,2B,,2C,2D,2 G,4- G,^F,G,A, | %4
+ B,CD2 G,2G2 D6 C2 |$ PD2>^C2 D=EF2 E2 z2 z2 x2 | x16 | x16 ::$ x16 | x16 | x4 EDEG CDEC F2B,2- |$ %11
+[K:bass] B,2_A,G, x4 x8 | z ^F,G,A, G,F,=E,D, x4 G,2 z2 | x16 |$ %14
+[K:bass] G,,F,G,_A, G,F,E,D, C,=B,,C,^C, D,E,D,=C, |x2>G,2 _A,G,2^F, G,4 z4 :| %16
+V:5
+ G,,4 G,4 ^F,4 =F,4 | =E,4 _E,4 D,A,,B,,C, D,2D,,2 |$[K:bass] x16 | x16 | x16 |$ %5
+ B,2A,2B,2G,2 A,=E,F,G, A,=B,^CA, | x16 | x16 ::$ x16 | x16 | E,2 z2 z2 E,2 _A,6 G,F, |$ %11
+[K:bass] G,4- G,F,E,D, E,G,,_A,,B,, E,,G,,=A,,=B,, | C,4 z2 C,2 _B,,4 z2 B,,2 | x16 |$ %14
+[K:bass] x16 | B,,A,,B,,=B,, C,2D,2 G,,D,_B,,D, G,D,B,,G,, :| %16
+V:6
+ x8 | x8 |$[K:bass]x4x2x/_B,/A,/G,/ |x4x/D/C/B,/ C/ x3/2 |x15/2=E/ |$ x8 | x8 | x8 ::$ x8 | x8 | %10
+ x8 |$[K:bass] x2 A, x4 x | x8 | x8 |$[K:bass]x4xG, ^F, x | x8 :| %16
+V:7
+ x16 | x16 |$[K:bass] x16 | x16 | x16 |$ x16 | DF,G,A, D,CB,A, G,B,,C,D, G,,G,2_D, | %7
+ D,A,D2- D2>^C2 DB,A,G, ^F,A,F,D, ::$ D,2 D4 C2 =B,2 _B,4 =A,G, | A,2 _A,4 G,2 D,2E,2F,2B,,2 | %10
+ x16 |$[K:bass] x16 | x16 | A,,G,,A,,B,, A,,G,,^F,,=E,, D,,C,D,_E, D,C,B,,A,, |$[K:bass] x16 | %15
+ x16 :| %16

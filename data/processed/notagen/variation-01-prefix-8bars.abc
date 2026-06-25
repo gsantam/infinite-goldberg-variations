@@ -1,0 +1,23 @@
+%Baroque
+%Bach, Johann Sebastian
+%Keyboard
+%%score ( 1 2 3 ) ( 4 5 6 7 )
+L:1/8
+Q:1/4=108
+M:3/4
+K:G
+V:1 treble 
+V:2 treble 
+V:3 treble 
+V:4 bass 
+V:5 bass 
+V:6 bass 
+V:7 bass 
+[V:1]"^ = 108" G/F/G- G/D/E/F/ G/A/B/^c/|[V:4]G,,B,/A,/B,G,G,,G,|
+[V:1]d/^c/d- d/A/B/c/ d/e/f/d/|[V:4]F,,F,/E,/F,D,F,,D,|
+[V:1]g/f/g- g/f/e/d/ ^c/e/A/G/|[V:4]E,,E,/D,/E,G,A,,^C|
+[V:1]F/E/D/^C/ D/F/ x3|[V:4]x3A,/G,/ F,/A,/D,|[V:5]D,F,/E,/F,D, D,, z/ =C,/|
+[V:1]z d/=c/dGB,d|[V:4]B,,/A,,/B,,- B,,/D,/E,/F,/ G,/A,/B,/G,/|
+[V:1]z e/d/eACe|[V:4]C,/B,,/C,- C,/E,/F,/G,/ A,/B,/C/A,/|
+[V:1]z f/e/fdac-|[V:4]D,/^C,/D,- D,/A,/B,/=C/ D/E/F/D/|
+[V:1]cB z/ G/B/d/ g/d/g/a/|[V:4]G/F/G/D/ B,/D/G,/B,/ D,/G,/B,,/D,/|

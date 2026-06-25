@@ -1,0 +1,28 @@
+%Baroque
+%Bach, Johann Sebastian
+%Keyboard
+X:1
+T:goldberg-variations.mxl
+C:Music21
+%%score 1 2
+L:1/8
+Q:1/4=126
+M:6/8
+K:G
+V:1 treble nm="Piano" snm="Pno"
+V:2 bass nm="Piano" snm="Pno"
+V:1
+"^al tempo di Giga" B>AB D>GB | PA>GA d3 | Mg>fg A>eg | Pf>ef d3- |$ d2 (e/4f/4g/4a/4 b>)gd | %5
+ e2 (f/4g/4a/4b/4 c'>)ae | f>dg A>Bc |{/c} B3- B>AG/F/ |$ G2 d Mg3- | ga/g/f/e/ Mf3- | %10
+ f>gf e>^cd |$ P^c>de A3- | A2 (B/4^c/4d/4e/4 f>)dA | B2 (^c/4d/4e/4f/4 g>)eB |{/B} ^c>Aa d>ec | %15
+{/^c} d3- d3 ::$ f>ef A>df | g>fg b3 | e2 (f/4g/4a/4b/4 c'/)b/a/g/f/e/ | P^d>^cd B3- |$ %20
+ B>bf g>^de | c>e^g a2 (b/4a/4=g/4^f/4) | g>ab e>f^d | e>BG E2 B |$ B>^GA de/d/c/B/ | c>ed e>gf | %26
+ ga/g/f/e/ a>bg | Pf>ef d3- |$ d2 (e/4f/4g/4a/4 b>)gd | e2 (f/4g/4a/4b/4 c'>)ae | f>dd' g>af | %31
+ g3- g3 :| %32
+V:2
+ MG,2 G,, MG,3- | G,3 PF,>E,D, | E,2 D ^C2 A, | D3- D>EC |$ B,>CA, G,>A,B, | C>DB, A,>B,C | %6
+ D>CB, C2 D | G,>F,G, D,>A,C |$ PB,>A,B, E,>B,D | P^C>B,A, D>CD | G,>B,D[K:treble] G3- |$ %11
+ GA/G/F/E/ F>GA |[K:bass] D>A,F, D,>E,F, | G,>A,F, E,>F,G, | A,>G,F, B,>G,A, | D,>F,A, D3 ::$ %16
+ D2 D, D2 C | PB,>A,B, G,>A,B, | C>DB, A,>B,C | B,2 B,, B,>A,B, |$ G,2 A,/4B,/4^C/4^D/4 E>B,G, | %21
+ A,2 B,/4C/4D/4E/4 =F>E^D | E2 G, C>A,B, | E,3- E,>ED |$ PC>B,C ^G,>B,E, | A,>CB, C>B,A, | %26
+ B,>ED P^C>B,C | D3- D>EC |$ B,>CA, G,>A,B, | C>DB, A,>B,C | D>CB, E>CD | G,>D,B,, G,,3 :| %32

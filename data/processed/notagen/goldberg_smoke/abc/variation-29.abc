@@ -1,0 +1,86 @@
+%Baroque
+%Bach, Johann Sebastian
+%Keyboard
+X:1
+T:goldberg-variations.mxl
+C:Music21
+%%score ( 1 2 ) ( 3 4 5 )
+L:1/16
+Q:1/4=100
+M:3/4
+K:G
+V:1 treble nm="Piano" snm="Pno"
+V:2 treble 
+V:3 bass nm="Piano" snm="Pno"
+V:4 bass 
+V:5 bass 
+V:1
+"_𝅘𝅥 = 100" z2 z G z G z G z G z G | z2 z d z d z d z d z d | z2 z g z g z g z g z g |$ %3
+ f z z2 (3z c'b(3cba (3Bag(3Agf | g2 z g z g z g z g z =f | z2 z e z e z e z e z e |$ %6
+ z2 z d z d z d z d z =c | B z z2 (3z AB(3cBA (3BAG(3edc | %8
+ (3d z G(3FC z (3z z G(3AF z (3z z B(3^cA z |$ (3z z d(3^cG z (3z z d(3ec z (3z z f(3dB z | %10
+ (3z z =c(3BG z (3z z A(3GE z (3z z F(3E^C z |$ %11
+ (3z z F(3E^C z (3z z[K:bass] D(3^CA, z (3z z B,(3A,F, z | %12
+ (3z z B,(3A,F, z (3z z G,(3F,D, z (3z z E,(3D,B,, z |$ %13
+ (3z z E,(3D,B,, z (3z z C,(3B,,G,, z (3z z A,,(3G,,E,, z | %14
+ (3z G,A,(3EA,G, (3z F,A,(3DA,F, (3z E,G,(3^CG,E, | z2 z D z D z D z4 ::$ %16
+[K:treble] (3z z b(3af z (3z z g(3fd z (3z z e(3dB z | (3z z e(3dB z (3z z c(3BG z (3z z A(3GE z |$ %18
+ (3z z =F(3EC z (3z z[K:bass] D(3CA, z (3z z B,(3A,^F, z | %19
+ (3z z G,(3F,^D, z (3z z E,(3D,B,, z (3z z =C,(3B,,G,, z |[K:treble] z2 z e z e z e z e z e |$ %21
+ z2 z e z e z e z e z e | (3z fg(3abc'- (3c'ba(3gfe (3^d=cB(3AGF | Ee z e z c z c z G z G |$ %24
+[K:bass] (3z E,=F,(3^F,G,^G, (3z B,C(3DCB,[K:treble] (3CDE(3F=GA | %25
+[K:bass] (3z D,_E,(3=E,=F,^F, (3z A,B,(3CB,A,[K:treble] (3B,CD(3EFG |$ %26
+ (3C z F(3EC z (3z z[K:bass] D(3CA, z (3z z B,(3A,^F, z | %27
+[K:treble] (3z z B(3AF z (3z z G(3FD z (3z z E(3DB, z | %28
+ (3z z e(3dB z (3z z c(3BG z (3z z A(3GE z |$ (3z z a(3ge z (3z z =f(3ec z (3z z d(3cA z | %30
+ (3z AB(3cde- (3edc(3BAG- (3GFG(3ABc |{/c} B2 z g z g z g z4 :| %32
+V:2
+ z2 z [B,D] z [B,D] z [B,D] z [B,D] z [B,D] | z2 z [FA] z [FA] z [FA] z [FA] z [FA] | %2
+ z2 z [Be] z [Be] z [Be] z [Be] z [^ce] |$ [Ad] z z2 x8 | %4
+ [Bd]2 z [Bd] z [Bd] z [Bd] z [Bd] z [Bd] | z2 z [Gc] z [Gc] z [Gc] z [Gc] z [Gc] |$ %6
+ z2 z [^FA] z [FA] z [FA] z [FA] z [FA] | [DG] z z2 x8 | x12 |$ x12 | x12 |$ x16/3[K:bass] x20/3 | %12
+ x12 |$ x12 | x12 | z2 z [F,A,] z [F,A,] z [F,A,] z4 ::$[K:treble] x12 | x12 |$ %18
+ x16/3[K:bass] x20/3 | x12 |[K:treble] z2 z [GB] z [GB] z [GB] z [GB] z [GB] |$ %21
+ z2 z [GB] z [GB] z [GB] z [GB] z [GB] | x12 | x [GB] z [GB] z [EG] z [EG] z [B,E] z [B,E] |$ %24
+[K:bass] x8[K:treble] x4 |[K:bass] x8[K:treble] x4 |$ x16/3[K:bass] x20/3 |[K:treble] x12 | x12 |$ %29
+ x12 | x12 | x2 z [Bd] z [Bd] z [Bd] z4 :| %32
+V:3
+ G,2G,,2[K:treble] F z F z F z F z |[K:bass] F,2F,,2[K:treble] ^c z c z c z c z | %2
+[K:bass] E,2E,,2[K:treble] f z e z f z e z |$[K:bass] x12 | B,,2B,2[K:treble] f z f z f z d z | %5
+[K:bass] C,2C2[K:treble] d z d z d z c z |$[K:bass] D,2D2[K:treble] ^c z c z c z A z | %7
+[K:bass] x12 | x22/3[K:treble] x14/3 |$ x12 | x34/3[K:bass] x2/3 |$ x12 | x12 |$ x12 | x12 | %15
+ D,,2D,2 _D z D z D,,4 ::$[K:treble] x12 | x12 |$ x10/3[K:bass] x26/3 | x12 | %20
+ E,,2E,2[K:treble] ^d z d z G z d z |$[K:bass] C,2C2[K:treble] _e z e z B z e z |[K:bass] x12 | %23
+ E,2[K:treble] ^d z B z B z F z F z |$[K:bass] x12 | x12 |$ x12 | x12 | x4/3[K:treble] x32/3 |$ %29
+ x12 | x2[K:bass] x10 | G,2G,,2[K:treble] f z f z[K:bass] G,4 :| %32
+V:4
+ x4[K:treble] [A,C] z [A,C] z [A,C] z [A,C] z |[K:bass] x4[K:treble] [EG] z [EG] z [EG] z [EG] z | %2
+[K:bass] x4[K:treble] [Ad] z [G^c] z [Ad] z [Gc] z |$[K:bass] x12 | %4
+ x4[K:treble] [Ac] z [Ac] z [Ac] z [GB] z |[K:bass] x4[K:treble] [=FB] z [FB] z [FB] z [EA] z |$ %6
+[K:bass] x4[K:treble] [EG] z [EG] z [EG] z [DF] z |[K:bass] x12 | x22/3[K:treble] x14/3 |$ x12 | %10
+ x34/3[K:bass] x2/3 |$ x12 | x12 |$ x12 | x12 | x4 [E,G,] z [E,G,] z x4 ::$[K:treble] x12 | x12 |$ %18
+ x10/3[K:bass] x26/3 | x12 | x4[K:treble] [FA] z [FA] z G, z [FA] z |$ %21
+[K:bass] x4[K:treble] [FA] z [FA] z B, z [FA] z |[K:bass] x12 | %23
+ x2[K:treble] [FA] z [^DF] z [DF] z [A,D] z [A,D] z |$[K:bass] x12 | x12 |$ x12 | x12 | %28
+ x4/3[K:treble] x32/3 |$ x12 | x2[K:bass] x10 | x4[K:treble] [Ac] z [Ac] z[K:bass] x4 :| %32
+V:5
+ x4[K:treble] x8 |[K:bass] x4[K:treble] x8 |[K:bass] x4[K:treble] x8 |$ %3
+[K:bass] z DA,F, D,>DF,>C D,>B,C,>A, | x4[K:treble] x8 |[K:bass] x4[K:treble] x8 |$ %6
+[K:bass] x4[K:treble] x8 |[K:bass] z G,D,B,, G,,>G,F,>D G,>EA,>F | %8
+ (3B,D z (3z z A, (3B,D z (3:2:2z2[K:treble] C (3DG z (3z z E |$ %9
+ (3FA z (3z z E (3FA z (3z z G (3Ad z (3z z A | %10
+ (3GB z (3z z F (3EG z (3z z D (3^CE z (3z z[K:bass] B, |$ %11
+ (3A,^C z (3z z B, (3A,C z (3z z G, (3F,A, z (3z z E, | %12
+ (3D,F, z (3z z E, (3D,F, z (3z z C, (3B,,D, z (3z z A,, |$ %13
+ (3G,,B,, z (3z z A,, (3G,,B,, z (3z z F,, (3E,,G,, z (3z z D,, | ^C,,2^C,2 D,2F,,2 G,,2A,,2 | %15
+ x12 ::$[K:treble] (3df z (3z z e (3df z (3z z =c (3Bd z (3z z A | %17
+ (3GB z (3z z A (3GB z (3z z F (3EG z (3z z D |$ %18
+ (3CE z (3z z[K:bass] B, (3A,C z (3z z G, (3^F,A, z (3z z E, | %19
+ (3^D,F, z (3z z ^C, (3B,,D, z (3z z A,, (3G,,B,, z (3z z F,, | x4[K:treble] x8 |$ %21
+[K:bass] x4[K:treble] x8 |[K:bass] A,2^D,2 E,2A,2 B,2B,,2 | x2[K:treble] x10 |$ %24
+[K:bass] C,2B,2 A,2^G,2 A,2C,2 | B,,2A,2 G,2F,2 G,2B,,2 |$ %26
+ (3A,,A, z (3z z B, (3A,C z (3z z G, (3^F,A, z (3z z E, | %27
+ (3D,D z (3z z E (3DF z (3z z C (3B,D z (3z z A, | %28
+ (3G,G[K:treble] z (3z z A (3GB z (3z z =F (3EG z (3z z D |$ %29
+ (3Cc z (3z z d (3ce z (3z z B (3Ac z (3z z G | ^F2[K:bass]A,2 B,2C2 D2D,2 | %31
+ x4[K:treble] x4[K:bass] x4 :| %32

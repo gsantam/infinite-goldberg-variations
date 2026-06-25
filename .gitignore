@@ -1,0 +1,27 @@
+.DS_Store
+__pycache__/
+*.pyc
+.venv/
+.venv*/
+
+# Local renders and temporary artifacts
+*.mid
+*.midi
+*.wav
+*.mp3
+*.pdf
+
+# Training outputs
+models/*.pth
+models/*.log
+runs/
+
+# Raw downloads and large intermediate artifacts
+data/raw/
+data/processed/notagen/*/interleaved/
+data/processed/notagen/*/augmented/
+data/processed/notagen/*/_2_data_preprocess_tmp.py
+
+# OS/editor noise
+.idea/
+.vscode/

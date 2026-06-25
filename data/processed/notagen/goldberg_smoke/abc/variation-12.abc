@@ -1,0 +1,60 @@
+%Baroque
+%Bach, Johann Sebastian
+%Keyboard
+X:1
+T:goldberg-variations.mxl
+C:Music21
+%%score ( 1 2 3 ) ( 4 5 6 7 )
+L:1/16
+Q:1/4=84
+M:3/4
+K:G
+V:1 treble nm="Piano" snm="Pno"
+V:2 treble 
+V:3 treble 
+V:4 bass nm="Piano" snm="Pno"
+V:5 bass 
+V:6 bass 
+V:7 bass 
+L:1/8
+V:1
+"^𝅘𝅥 = 84" z2 GF G2AB cBAG | dAB^c defg a2 z2 | z2 gf ed^cB AGFG |$ (G2PF)E D2 z2 z4 | %4
+ z d3- dBAG =FEDF | EGcd e2 A4 A2- |$ ABFG AGFe dcBA | G4 z4 z4 | z FGA B^cdf edcB | %9
+ AGFE D2 z2 z4 |$ z2 (^c2 c)BAB cdef | g2GF G4- GBAG | FEFG FAGF E4- |$ E2d2^c2B2 A2f2 | %14
+ G6 F2 EAG2- | G2FE Fd2^c d2 z2 ::$ x12 | z2 GF G2AB cBAG | g4- g^fag fge2 |$ %19
+{/e} f2-f/^e/f/=g/ f2A2 z2 f2 | gfga gfed cBAG | F12- |$ F2FG F2F2 F2GA | G4 z4 E4- | %24
+ EFGE FG^GA Bcde |$ d2 z2 z4 z4 | z CDE D_E^FG FGAB | A12- |$ A2D2E2F2 GBAc | B2A2B2c2 Md2>e2 | %30
+ d4- dBcd efga | bgdB G2 z2 z4 :| %32
+V:2
+ x12 | x12 | x12 |$x6A,B, CDED | x12 |x7D EFGE |$ FD x8 x2 |x2ED CDE x4 x | x12 | x12 |$ x12 | %11
+x4xB,^CB, A, x3 |x2DE x8 |$ x12 | x12 | x12 ::$ x12 | x12 | x12 |$ x12 | x12 |x2E^D E2E2 E2D^C |$ %22
+ x12 | x12 | x12 |$ x12 | x12 | x12 |$ x12 | x12 | x12 | x12 :| %32
+V:3
+ x12 | x12 | x12 |$ x12 | (D2E)F G2 z2 z4 | x12 |$ x12 | x12 | x12 | z ED^C B, x7 |$ %10
+ ^CDEF G2 z2 z4 | x12 | x4 D4- DB,^CD |$ EFED E^CDE F4- | F2G,2A,2B,2 ^C2E,2 | D6 E2 F^CD2 ::$ %16
+ x12 | x12 | x12 |$ x12 | x12 | x12 |$ ^D4 z4 F4- | FE^DF E=D^C=C B, x3 | x12 |$ %25
+ z A^GF G=FED EDCB, | C12- | C2G2 F2E2 DB,CA, |$ B,2C2B,2 x6 | x12 | x12 | x12 :| %32
+V:4
+ G,4 G,4 G,4 | x12 | x12 |$ x12 | B,,4 B,,4 B,,4 | x12 |$ x12 | x12 | x12 | x12 |$ %10
+ E,F,G,F, E,2F,2E,2D,2 | x12 | x12 |$ G,2G,,2 z E,F,G, A,F,E,D, | B,B,,E,D, ^C,A,,D,G, A,E,C,A,, | %15
+ D,E,D,^C, D,2A,,2 D,,2 z2 ::$ x12 | x12 | x12 |$ x12 | x12 | x12 |$ %22
+ B,CB,A, B,F,^D,F, B,,D,^C,B,, | x12 | x12 |$ B,,2B,2 z D,C,B,, C,B,,A,,^G,, | %26
+ A,,2A,2 z B,A,G, A,G,F,=E, | F,E,D,^C, D,=C,B,,A,, B,,A,,G,,F,, |$ x12 | x12 | x12 | x12 :| %32
+V:5
+ x12 | z2 DE D2=CB, A,B,CD | G,CB,A, G,F,E,D, ^C,2 z2 |$ z2 D,E, F,G, x6 | x12 | %5
+ z G,3- G,B,C x4 x |$x2A,G, F,2 C4 C2- | CB,x4xF, G,A,B,C | D4 z4 z4 | x12 |$ x12 | %11
+ z2 A,2- A,x4G,F,E, | D,2 x2 x8 |$ x12 | x12 | x12 ::$ z2 DE D2=CB, A,B,CD | %17
+ D,4- D,E,C,D, E,D,=F,2 |{/=F,} E,2-E,/=F,/E,/^D,/ E,2C2 z2 E,2 |$ ^D,E,D,^C, D,E,F,G, A,B,^C^D | %20
+ E12- | E2 x8 x2 |$ x12 | E,=C,B,,A,, G,,B,,E,^D, E,2=D,2 | G,2 z2 z4 z4 |$ x12 | x12 | x12 |$ %28
+ x12 | G,4- G,B,A,G, F,E,D,C, | B,,D,G,B, D2G,2- G,A,F,2 | G,4 z4 z4 :| %32
+V:6
+ x12 | F,4 F,4 F,4 | E,4 E,4 E,4 |$ D,D,,D,2 z2 C,B,,A,,2C,2 | x12 | C,4 C,4 C,4 |$ D,4 D,4 D,4 | %7
+ G,2>B,,2 E,D,C,E, D,C,B,,A,, | B,,2G,,2 z2 G,F,G,2E,2 | F,2B,2 z2 B,,^C, D,2B,,2 |$ x12 | %11
+ ^C,D,E,D, C,2E,2 C,2A,,2 | D,4 z D,E,F, G,A,G,F, |$ x12 | x12 | x12 ::$ D,4 D,4 =C,4 | %17
+ B,,2C,2B,,2A,,2 G,,2A,,B,, | C,2B,,2 C,2E,2 A,,2C,2 |$ B,,4 z4 z4 | z2 E,2F,2G,2A,2B,2 | %21
+ CDCB, CB,A,G, A,F,G,A, |$ x12 | x12 | C,2C2 z E,D,C, D,C,B,,A,, |$ x12 | x12 | x12 |$ %28
+ G,,A,G,F, G,F,E,^D, E,4- | E,D,C,E, D,6 A,,2 | B,,2 z2 z2 E,2 C,2D,2 | G,,4- G,,B,,D,F, G,4 :| %32
+V:7
+ x6 | x6 | x6 |$ x6 | x6 | x6 |$ x6 | x6 | x6 |x2x/A,/G,/E,/ F,/G,/A,/B,/ |$ x6 | x6 | x6 |$ x6 | %14
+ x6 | x6 ::$ x6 | x6 | x6 |$ x6 | x6 | x6 |$ x6 |x4x/A,/G,/F,/ | x6 |$ x6 | x6 | x6 |$ %28
+x2>A,2 PG,>F, | x6 | x6 | x6 :| %32

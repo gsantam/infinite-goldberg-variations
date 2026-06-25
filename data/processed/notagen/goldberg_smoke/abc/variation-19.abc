@@ -1,0 +1,45 @@
+%Baroque
+%Bach, Johann Sebastian
+%Keyboard
+X:1
+T:goldberg-variations.mxl
+C:Music21
+%%score ( 1 2 ) ( 3 4 5 6 )
+L:1/16
+Q:1/4=216
+M:3/8
+K:G
+V:1 treble nm="Piano" snm="Pno"
+V:2 treble 
+V:3 bass nm="Piano" snm="Pno"
+V:4 bass 
+L:1/8
+V:5 bass 
+L:1/8
+V:6 bass 
+L:1/8
+V:1
+"_𝅗𝅥𝅭 = 72" d2 d4- | d2 d4- | d2d2^c2 | d4 z2 | gfgdBd |$ edecAc | dcdedc | BABcBA | G2 g4- | %9
+ g2 f4- | f2e2d2 |$[K:treble] ^cd e4- | e2d2=c2- | c2B2g2- | gefde^c | d6 ::$ fefdAd | gfgdBd | %18
+ e^degfe | ^defdBd | e2 e4- |$ e2 e4- | e2e2^d2 | e4 z2 | z2 ecAc | d6- | d2cBc2- |$ c2dcBA | %28
+ dcdBGB | edecAc | fefadf | gfgdBG :| %32
+V:2
+ BABGDG | AGAFDF | GFGBAG | FEFGAF | G2 G4- |$ G2 G4- | G2G2F2 | G4 z2 | z2 z2 d2 | ^c4 =c2 | %10
+ B2E2^G2 |$[K:treble] A4 =G2 | F4 A2 | D2G2B2 | ^c2A2G2- | G2 F4 ::$ x6 |x4G2- | G2G2c2 | %19
+ F2 z2 z2 | BABGEG |$ cBcAFA | BABcBA | GFGABG | E4 z2 | z2 DGBG | E6 |$ D2 z2 z2 | x6 | x6 | x6 | %31
+ x6 :| %32
+V:3
+ G,2G,,2G,2 | F,2F,,2F,2 | E,2E,,2E,2 | D,2D,,2=C,2 | B,,2B,2G,2 |$ C2C,2C2 | B,A,B,CD2 | %7
+ G,2G,,D,G,A, | B,A,B,G,E,G, | A,G,A,F,D,F, | G,F,G,E,B,,E, |$ =G,F,G,E,^C,E, | A,G,A,F,D,F, | %13
+ B,A,B,G,E,G, | A,2A,,2A,2 | D^CDA,F,D, ::$ x6 | x6 | C2B,2A,2 | B,2A,G,A,F, | G,2E,2G,2 |$ %21
+ A,2A,,2A,2 | G,F,G,A,B,2 | E,2E2D2 | CB,CA,F,A, | B,A,B,G,E,G, | A,G,A,CE,G, |$ F,E,F,A,D,F, | %28
+ x6 | x6 | x6 | x6 :| %32
+V:4
+ x3 | x3 | x3 | x3 | x3 |$ x3 | x3 | x3 | x3 | x3 | x3 |$ x3 | x3 | x3 | x3 | x3 ::$ D D2- | %17
+ B,G,B, | x3 | x3 | x3 |$ x3 | x3 | x3 | x3 | x3 | x3 |$ x3 | G, G,2- | G,C,C- | CA,C- | C B,2 :| %32
+V:5
+ x3 | x3 | x3 | x3 | x3 |$ x3 | x3 | x3 | x3 | x3 | x3 |$ x3 | x3 | x3 | x3 | x3 ::$ DD,=C | x3 | %18
+ x3 | x3 | x3 |$ x3 | x3 | x3 | x3 | x3 | x3 |$ x3 | B,,G,,B,, | C,A,,C, | D,C,D, | G,3 :| %32
+V:6
+ x3 | x3 | x3 | x3 | x3 |$ x3 | x3 | x3 | x3 | x3 | x3 |$ x3 | x3 | x3 | x3 | x3 ::$ x3 | DB, x | %18
+ x3 | x3 | x3 |$ x3 | x3 | x3 | x3 | x3 | x3 |$ x3 | x3 | x3 | x3 | x3 :| %32

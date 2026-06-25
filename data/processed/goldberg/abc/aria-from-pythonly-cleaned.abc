@@ -1,0 +1,17 @@
+X:1
+T:Aria
+%%score ( 1 2 )
+L:1/8
+M:3/4
+K:G
+V:1 treble
+V:2 bass
+V:1
+| B4 z2 | z2 d2 z2 B2 |
+z6 | z6 | z6 | z6 | z6 | z6 | z6 | z6 | z6 | z6 | z6 | z6 | z6 | z6 | z6 | z6 |
+z6 | z6 | z6 | z6 | z6 | z6 | z6 | z6 | z6 | z6 | z6 | z6 | z6 | z6 | z6 | %32
+V:2
+| G6 | ^F6 z2 | E6 | D4- D =C | B,6 | C4- C D | E C D4 | G,3 D E3/2 ^F/ |
+G6- | G2 ^F E ^F B | E3 E ^F G | A3 B A G | ^F6 | G6 | A6 | D6 |
+d4 c2 | B3 A B2 | c3 B A2 | B3 A G ^F | E4 D2 | C4 B,2 | A, C B, A, B,2 | E B, E, B, E =D |
+C6 | B,6 | A,3 G, ^F, E, | D, A, D C B, A, | G, D G F E D | C G c B A G | ^F D G B d D | G3 D G,2 | %32

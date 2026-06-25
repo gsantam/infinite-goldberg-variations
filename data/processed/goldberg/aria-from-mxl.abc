@@ -1,0 +1,57 @@
+X:1
+T:J. S. Bach Goldberg-Variationen BWV 988 - Aria
+T:J. S. Bach Goldberg-Variationen BWV 988 - Aria
+C:Johann Sebastian Bach
+%%score ( 1 2 3 4 ) ( 5 6 7 8 )
+L:1/8
+Q:1/4=72
+M:3/4
+K:G
+V:1 treble 
+V:2 treble 
+V:3 treble 
+V:4 treble 
+V:5 bass 
+V:6 bass 
+V:7 bass 
+V:8 bass 
+V:1
+"^𝅘𝅥 = 72" g2 g2 Ma>b | a{/g}f{/e} d4 | MG2 PG3 F/G/ | A/4G/4F/G/4F/4E/{/E} D4 | d2 d2 Me>=f | %5
+ e{/d}c{/B} A3 !turn!^f | g/<f/a/<g/ f/<e/d/<c/{/c} a>c | B/<G/F{/F} MG4 | B2 B2 M^c>d | %9
+ d/^c/B/A/- A4 | !arpeggio!g2 x4 | g{/f}e P^c3 e | a/g/f/e/ d A2- A/4B/4c/ | %13
+ B/A/G/F/ E{/d} ^c2- c/4d/4e/ | d/^c/B/A/ g B2 c |{/^c} d-d/4e/4d/4^c/4{/c} d4 :: %16
+ MA2 PA2- A/A/4B/4c/4d/4e/ |{/e} d{/c}B{/A} G3 g |{/f} e3/2f/4^d/4{/d} Me3 a/4b/4a/4g/4 | %19
+ a>f{/e} ^d3 B | g>f{/f} e2- e/B/c/4B/4A/4B/4 | g/<e/f/<^d/{/d} e2- e/G/F/E/ | F>e{/e} ^dagf | %23
+{/f} e3/2f/4^d/4{/d} e4 | e{/d}c{/B} A3 B/c/ | d/4c/4B/c/4B/4A/{/A} G3 A/B/ | %26
+ c/d/c/B/ c/A/E/A/ c2- | c/d/c/B/ c/A/F/A/ c/e/d/c/ | B/c/B/A/ B/G/D/G/ B/G/c/d/ | %29
+ e/=f/e/d/ e/c/G/c/ e/c/^f/g/ | a/c/B/A/ B/c/d/G/ B/A/G/F/ | G2- G/D/G/F/{/F} G2 :| %32
+V:2
+ x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | x2 d4 | e2 x4 | x6 | x6 | x6 | x6 | x6 :: x6 | x6 | %18
+ x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 :| %32
+V:3
+ x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | G2 Pg3 f/g/ | x6 | x6 | x6 | F2 E>F G2- | %15
+ G2 F4 :: x6 | x6 | x6 | x6 | x6 | x6 | F3 cBA- | A2 G4 | x6 | x6 | x3 E- E/B/A/G/ | F2 z F3 | %28
+ G z z D3/2G3/2- | G2 z G3/2c3/2 | x6 | z/ C/B,/A,/ B,4 :| %32
+V:4
+ x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | B2 x4 | x6 | x6 | x6 | x6 | x6 :: x6 | x6 | x6 | %19
+ x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 :| %32
+V:5
+ z2 z2 D2 | z2 z2 D2 | z2 z2 ^C2 | z2 z2 A,2 | z2 z2 G,2 | z2 z2 A,2 | z C- CB,/A,/ G,/F,/E,/F,/ | %7
+ G,A, B,4 | z2 z2 E2 | A,2 PF,E,F,B, | z B, E3 D | ^CD E4 | z2 z2 D2 | z2 B,2 E2 | x6 | %15
+ z2 z A, D2 :: z E MF4 | z C D4 | z E G2 PFE | ^DE F4 | z A,PG,F, G,2 | z A,PG,F,G,B, | %22
+ z2 z2 z ^D, | E,2 x4 | z2 z2 A,2- | A,F,{/E,} D,E,/F,/ G,/F,/G,- | G,E, A, z z2 | x6 | x6 | x6 | %30
+ x6 | x6 :| %32
+V:6
+ G,6 | F,6 | E,6 | D,4- D,C, | B,,6 | C,4- C,D, | E,C, D,4 | G,,3 D,ME,>F, | G,6- | G,2 x4 | %10
+ E,3 E,F,G, | A,3 B,A,G, | F,6 | G,6 | x6 | D,6 :: D4 C2 | B,3 A, B,2 | C3 B, A,2 | B,3 A,G,F, | %20
+ E,4 D,2 | C,4 B,,2 | A,,C,B,,A,, B,,2 | E,B,,E,,B,,E,=D, | C,6 | B,,6 | A,,3 G,,F,,E,, | x6 | x6 | %29
+ x6 | x6 | x6 :| %32
+V:7
+ x2 B,4 | x2 A,4 | x2 G,4 | x2 F,4 | x2 D,4 | x2 E,3 x | x6 | x6 | x2 B,4 | x6 | x6 | x6 | x2 A,4 | %13
+ x6 | x6 | x6 :: x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | x2 E,4 | x6 | x6 | x6 | x6 | x6 | x6 | %31
+ x6 :| %32
+V:8
+ x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | A,6 | x6 :: x6 | x6 | x6 | %19
+ x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | D,,A,,D,C,B,,A,, | G,,D,G,=F,E,D, | C,G,CB,A,G, | %30
+ F,D, G,B, DD, | G,3 D, G,,2 :| %32
+

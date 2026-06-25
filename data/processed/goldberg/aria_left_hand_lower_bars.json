@@ -1,0 +1,135 @@
+{
+  "source": "data/raw/ksnortum-bach-goldberg/includes/aria-bwv-988-parts.ily",
+  "voice": "leftHandLower",
+  "bar_count": 32,
+  "bars": [
+    {
+      "index": 1,
+      "content": "g2."
+    },
+    {
+      "index": 2,
+      "content": "fs2."
+    },
+    {
+      "index": 3,
+      "content": "e2."
+    },
+    {
+      "index": 4,
+      "content": "d2~ d8 c"
+    },
+    {
+      "index": 5,
+      "content": "b2."
+    },
+    {
+      "index": 6,
+      "content": "c2~ c8 d"
+    },
+    {
+      "index": 7,
+      "content": "e8 c d2"
+    },
+    {
+      "index": 8,
+      "content": "g,4. d'8 e8. fs16"
+    },
+    {
+      "index": 9,
+      "content": "g2.~"
+    },
+    {
+      "index": 10,
+      "content": "g4 fs8 e fs b"
+    },
+    {
+      "index": 11,
+      "content": "e,4. e8 fs g"
+    },
+    {
+      "index": 12,
+      "content": "a4. b8 a g"
+    },
+    {
+      "index": 13,
+      "content": "fs2."
+    },
+    {
+      "index": 14,
+      "content": "g2."
+    },
+    {
+      "index": 15,
+      "content": "a2."
+    },
+    {
+      "index": 16,
+      "content": "d,2."
+    },
+    {
+      "index": 17,
+      "content": "d'2 c4"
+    },
+    {
+      "index": 18,
+      "content": "b4. a8 b4"
+    },
+    {
+      "index": 19,
+      "content": "c4. b8 a4"
+    },
+    {
+      "index": 20,
+      "content": "b4. a8 g fs"
+    },
+    {
+      "index": 21,
+      "content": "e2 d4"
+    },
+    {
+      "index": 22,
+      "content": "c2 b4"
+    },
+    {
+      "index": 23,
+      "content": "a8 c b a b4"
+    },
+    {
+      "index": 24,
+      "content": "e8 b e, b' e d"
+    },
+    {
+      "index": 25,
+      "content": "c2."
+    },
+    {
+      "index": 26,
+      "content": "b2."
+    },
+    {
+      "index": 27,
+      "content": "a4. g8 fs e"
+    },
+    {
+      "index": 28,
+      "content": "d8 a' d c b a"
+    },
+    {
+      "index": 29,
+      "content": "g8 d' g f e d"
+    },
+    {
+      "index": 30,
+      "content": "c8 g' c b a g"
+    },
+    {
+      "index": 31,
+      "content": "fs8 d g b d d,"
+    },
+    {
+      "index": 32,
+      "content": "g4. d8 g,4"
+    }
+  ]
+}
