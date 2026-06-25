@@ -1,0 +1,44 @@
+%%score ( 1 2 3 ) ( 4 5 6 7 )
+L:1/8
+Q:1/4=108
+M:3/4
+K:G
+V:1 treble 
+V:2 treble 
+V:3 treble 
+V:4 bass 
+V:5 bass 
+V:6 bass 
+V:7 bass 
+[V:1]"^ = 108" G/F/G- G/D/E/F/ G/A/B/^c/|[V:4]G,,B,/A,/B,G,G,,G,|
+[V:1]d/^c/d- d/A/B/c/ d/e/f/d/|[V:4]F,,F,/E,/F,D,F,,D,|
+[V:1]g/f/g- g/f/e/d/ ^c/e/A/G/|[V:4]E,,E,/D,/E,G,A,,^C|
+[V:1]F/E/D/^C/ D/F/ x3|[V:4]x3A,/G,/ F,/A,/D,|[V:5]D,F,/E,/F,D, D,, z/ =C,/|
+[V:1]z d/=c/dGB,d|[V:4]B,,/A,,/B,,- B,,/D,/E,/F,/ G,/A,/B,/G,/|
+[V:1]z e/d/eACe|[V:4]C,/B,,/C,- C,/E,/F,/G,/ A,/B,/C/A,/|
+[V:1]z f/e/fdac-|[V:4]D,/^C,/D,- D,/A,/B,/=C/ D/E/F/D/|
+[V:1]cB z/ G/B/d/ g/d/g/a/|[V:4]G/F/G/D/ B,/D/G,/B,/ D,/G,/B,,/D,/|
+[V:1]b/g/d/B/ G/B/d/g/ b/g/f/e/|[V:4]G,,G,B,G,G,,G,|
+[V:1]a/e/^c/A/ F/A/c/e/ a/f/e/d/|[V:4]F,,F,A,F,F,,F,|
+[V:1]g/d/B/G/ E/G/B/d/ g/f/e/d/|[V:4]E,,E,G,E,E,,G,|
+[V:1]^c/G/E/^C/ A,/C/E/G/ c/e/d/c/|[V:4]A,,E,G,E,A,,G,|
+[V:1]d[K:bass]F,F,[K:treble]Adf|[V:2]x[K:bass] x2[K:treble] x3|[V:3]x[K:bass] x2[K:treble] x3|[V:4]F,/A,/D/F/ A/F/D/A,/ F,/A,/D,/F,/|
+[V:1]B[K:bass]G,G,[K:treble]Beg|[V:2]x[K:bass] x2[K:treble] x3|[V:3]x[K:bass] x2[K:treble] x3|[V:4]G,/B,/D/G/ B/G/D/B,/ G,/B,/E,/G,/|
+[V:1]^c/e/A/G/ F/A/d/f/ g/e/d/c/|[V:4]A,^C D/A,/F,/D,/ A,A,,|
+[V:1]f/d/^c/B/ A/G/F/E/ D2::[V:4]D,,/D,/E,/F,/ G,/A,/B,/^C/ D2::
+[V:1]f/g/a- a/b/a/g/ f/e/d/c/|[V:4]D,,F,/E,/F,D,D,,F,|
+[V:1]B/c/d- d/e/d/c/ B/A/G/F/|[V:4]G,,B,/A,/B,G,G,,B,|
+[V:1]E/^G/A/B/ A/E/A/B/ c/A/^d/e/|[V:4]C,C/B,/CF,A,C|
+[V:1]f/e/^d/^c/ B4-|[V:2]x4xF/A/|[V:4]A,F, ^D,/B,,/D,/F,/ B,/^D/ x|
+[V:1]B/^d/e- e/^D/E- E/ x3/2|[V:3]G>F G3/2 x2 x/|[V:4]x4x/^D,/E,|[V:5]x2 x2 G,>B,,|[V:6]x7/2F,/ x2|
+[V:1]z/ ^g/a- a/^G/A- A/^G,/A,-|[V:2]x>B c3/2 x2 x/|[V:4]C,3/2x2B,/ C>E,|
+[V:1]A,/B,/C/F/ B,/^D/E/G/ F/E/D/A/|[V:4]^D,A,G,^A,,B,,F,|
+[V:1]G/F/E/^D/ E/G/ x z2|[V:4]x3B,/A,/ x2|[V:5]E,G,/F,/G,E, E,, z/ =D,/|[V:7]x4 G,/B,/E,|
+[V:1]z eceaA|[V:4]C,/E,/A,/C/ E/C/A,/E,/ C,/E,/D,/C,/|
+[V:1]z dBdgG|[V:4]B,,/D,/G,/B,/ D/B,/G,/D,/ B,,/D,/C,/B,,/|
+[V:1]c/A/E/C/ A,/C/E/A/ c/A/c/e/|[V:4]A,,C,E,G,F,E,|
+[V:1]f/c/A/F/ D/F/A/c/ f/c/f/a/|[V:4]D,F,A,CB,A,|
+[V:1]b/g/d/B/ G/B/d/g/ b/=f/b/d'/|[V:4]G,B,D=FED|
+[V:1]e/d'/c'/e/ d/c'/b/d/ c/e/^f/g/|[V:4]CE^F^GA=G|
+[V:1]a/c/B/A/ B/d/B/G/ c/A/G/F/|[V:4]FDGG,DD,|
+[V:1]B/G/F/E/ D/C/B,/A,/ G,2:|[V:4]G,/G,,/A,,/B,,/ C,/D,/E,/F,/ G,2:|

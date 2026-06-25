@@ -1,0 +1,63 @@
+%Baroque
+%Bach, Johann Sebastian
+%Keyboard
+X:1
+T:goldberg-variations.mxl
+C:Music21
+%%score ( 1 2 3 ) ( 4 5 6 7 8 )
+L:1/8
+Q:1/4=126
+M:9/8
+K:G
+V:1 treble nm="Piano" snm="Pno"
+V:2 treble 
+V:3 treble 
+V:4 bass nm="Piano" snm="Pno"
+V:5 bass 
+V:6 bass 
+V:7 bass 
+V:8 bass 
+V:1
+"^𝅘𝅥𝅭 = 84" G2 F G2 A Bd^c | d2 A d2 e{/e} f/g/f/e/d | gba bgf g3- | gfe fga d3- |$ %4
+ dgf gba bd'/c'/b/a/ | bc'/b/a/g/ ab/a/g/f/ ga/g/f/e/ | d z z g z z f z z |$ g z z c z z B z z | %8
+ z9 | z9 |$ z ba gaf e/d/^cd |{/d} ^c3- cde ABc | d2 f g2 a B3- |$ BAG A6- | %14
+ Ad^c d/e/fe fa/g/f/e/ | fg/f/e/d/ ef/e/d/^c/ d3 ::$[K:treble] PA6- A3- | AGF GBA B2 z | %18
+ Pa6- a3- |$[K:treble] agf gba b2 ^d | eg/f/e/=d/ ce/d/c/B/ Ac/B/A/G/ | F2 e ^d!turn!ef B3- |$ %22
+ B^de- e/=d/c/B/c- c/B/A/G/A- | AFG MB3- Bcd | e^GB A3- ABc |$ dFA D2 F B3- | B2 ^D EFG FGA | %27
+ D3 D3 D3- | DGF GAB cd/c/B/A/ |$[K:treble] Bc/B/A/G/ AB/A/G/F/ GB/A/G/F/ | G z z D z z F z z | %31
+ G z z C z z B,3 :| %32
+V:2
+ x9 | x9 | x9 | z3 D2 E{/E} F/G/F/E/D |$ GBA BGF G3- | GFE FGA D3- | DGF GBA Bd/c/B/A/ |$ %7
+ Bc/B/A/G/ AB/A/G/F/ GA/G/F/E/ | DBA GAF E/D/^CD |{/D} ^C3- CDE A,B,C |$ x9 | x9 |x7A/G/F/E/ |$ %13
+ FG/F/E/D/ EF/E/D/^C/ DE/D/C/B,/ | x9 | x3 G z z F3 ::$[K:treble] x9 | x9 | x9 |$[K:treble] x9 | %20
+ x9 | x9 |$ z9 | z9 | z9 |$ z3 B,3- B,CD | x9 | x9 | x9 |$[K:treble] x9 | x9 | x9 :| %32
+V:3
+ x9 | x9 | x9 | x9 |$ x9 | x9 | x9 |$ x9 | x9 | x9 |$ x9 | x9 | x9 |$ x9 | x9 | x9 ::$ %16
+[K:treble] x9 | x9 | x9 |$[K:treble] x9 | x9 | x9 |$ x9 | x9 | x9 |$ x9 | E x8 | D x8 | x9 |$ %29
+[K:treble] x9 | x9 | x9 :| %32
+V:4
+ G,3 z z F, G,2 E, | F,3 z z A, D,2 F, | x9 | x9 |$ B,3 z z D G,2 B, | E3 z z A, B,A,B, | %6
+ CB,A, B,DC D2 D, |$ G,2 G,, G,,2 G, G,F,/E,/D,/C,/ | B,,G,,A,, B,,C,D, G,,2 G,- | %9
+ G,F,E, A,2 G, F,G,A, |$ x9 | x9 | x9 |$ G,2 B,, ^C,D,E, F,E,F, | x9 | x9 ::$ %16
+ D,F,A, DE/D/C/B,/ CD/C/B,/A,/ | x9 | x9 |$ x9 | x9 | x9 |$ G,A,/G,/F,/E,/ C^D,E, B,,E,D, | %23
+ ME,3- E,G,B, E2 D | C3- CB,C F,G,A, |$ B,D,F, B,,C,D, G,,A,,B,, | x9 | x9 | x9 |$ x9 | x9 | x9 :| %32
+V:5
+ x9 | x9 | G,2 F, G,2 A, B,D^C | D2 A, z2 z z2 C |$ x9 | x9 | x9 |$ x9 | x9 | x9 |$ %10
+ D2 F G2 A B,3- | B,A,^G, A,6- | A,D^C D/E/FE x x x |$ x9 | A, z z D z z ^C z z | D z z x2 x4 ::$ %16
+ x9 | B,3- B,CD G,A,B, | EG/F/E/=D/ CE/D/C/B,/ A,C/B,/A,/G,/ |$ F,2 E ^D!turn!EF B,3 | %20
+ B,^DE- E/=D/C/B,/C C/B,/A,/G,/A, | A,F,G, z3 z3 |$ x9 | x9 | x9 |$ x9 |x_A,B, =A,3- A,B,C | %27
+xF,A, D,2 F, B,3- | B,2 ^D, E,F,G, F,G,A, |$ D,3 D,3 D,3- | D,G,F, G,A,B, CD/C/B,/A,/ | %31
+ B,C/B,/A,/G,/ A,B,/A,/G,/F,/ G,3 :| %32
+V:6
+ x9 | x9 | E,6- E,2 A, | D,3 x6 |$ x9 | x9 | x9 |$ x9 | x9 | x9 |$ B,3- B,2 A, G,2 E, | %11
+ A,,2 z z z =G, F,2 E, | F,2 A, B,2 ^C D2 D, |$ x9 | G,F,E, F,A,G, A,2 A,, | %15
+ D,2 D,, D,,2 D, D,3 ::$ x9 | x9 | C z z A, z z F, z z |$ _E,2 F, B,3- B,G,A, | %20
+ G, z z E, z z C, z z | A,,2 ^A,, B,,C/B,/=A,/G,/ A,B,/A,/G,/F,/ |$ x9 | x9 | x9 |$ x9 | %26
+ C,3 C,3 C,3- | C,D,/C,/B,,/A,,/ B,,C,D, G,,A,,B,, | E,, z z E, z z A,, z z |$ %29
+ G,,A,,B,, C,B,,A,, B,,G,,A,, | B,,3- B,,A,,G,, D,2 D,, | G,,2 G,,, G,,,2 G,, G,,3 :| %32
+V:7
+ x9 | x9 | x9 | x9 |$ x9 | x9 | x9 |$ x9 | x9 | x9 |$ x9 | x9 | x6 F x2 |$ x9 | x9 | x9 ::$ x9 | %17
+ x9 | x9 |$ x9 | x9 | x9 |$ x9 | x9 | x9 |$ x9 | x9 | x9 | x9 |$ x9 | x9 | x9 :| %32
+V:8
+ x9 | x9 | x9 | x9 |$ x9 | x9 | x9 |$ x9 | x9 | x9 |$ x9 | x9 | x9 |$ x9 | x9 | x9 ::$ x9 | x8 ^D | %18
+ x9 |$ x9 | x9 | x9 |$ x9 | x9 | x9 |$ x9 | x9 | x9 | x9 |$ x9 | x9 | x9 :| %32

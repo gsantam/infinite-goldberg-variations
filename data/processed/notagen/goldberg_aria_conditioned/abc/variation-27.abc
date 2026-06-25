@@ -1,0 +1,82 @@
+%Baroque
+%Bach, Johann Sebastian
+%Keyboard
+X:1
+T:goldberg-variations.mxl
+C:Music21
+%%score ( 1 2 3 4 ) ( 5 6 7 8 )
+L:1/8
+Q:1/4=72
+M:3/4
+K:G
+V:1 treble nm="Piano" snm="Pno"
+L:1/16
+V:2 treble 
+L:1/4
+V:3 treble 
+V:4 treble 
+L:1/4
+V:5 bass nm="Piano" snm="Pno"
+V:6 bass 
+V:7 bass 
+L:1/4
+V:8 bass 
+V:1
+"^𝅘𝅥 = 72" g4 (g4 Ma2>)b2 | a2{/g}f2{/e} d8 | MG4 PG6 FG | (A/G/F)(G/F/E){/E} D8 |$ %4
+ d4 (d4 Me2>)=f2 | e2{/d}c2{/B} A6 !turn!^f2 | (g<f)(a<g) (f<e)(d<c){/c} a2>c2 | (B<G)F2{/F} MG8 |$ %8
+ B4 (B4 M^c2>)d2 | d^cBA- A8 | !arpeggio!g4 x8 | g2{/f}e2 P^c6 e2 |$ (agfe) d2 A4- A/B/c | %13
+ (BAGF) E2{/d} ^c4- c/d/e | (d^cBA) g2 B4 c2 |{/^c} d2-d/e/d/^c/{/c} d8 ::$ MA4 PA4- A(A/B/c/d/e) | %17
+{/e} d2{/c}B2{/A} G6 g2 |{/f} e3f/^d/{/d} Me6 a/b/a/g/ |$ a2>f2{/e} ^d6 B2 | %20
+ g2>f2{/f} e4- eB(c/B/A/B/) | (g<e)(f<^d){/d} e4- eGFE |$ F2>e2{/e} ^d2a2g2f2 | %23
+{/f} e3f/^d/{/d} e8 | e2{/d}c2{/B} A6 Bc | (d/c/B)(c/B/A){/A} G6 AB |$ cdcB cAEA c4- | %27
+ cdcB cAFA cedc | BcBA BGDG BGcd |$ e=fed ecGc ec^fg | acBA BcdG BAGF | G4- GDGF{/F} G4 :| %32
+V:2
+ x3 | x3 | x3 | x3 |$ x3 | x3 | x3 | x3 |$ x3 | x d2 | e x2 | x3 |$ x3 | x3 | x3 | x3 ::$ x3 | x3 | %18
+ x3 |$ x3 | x3 | x3 |$ x3 | x3 | x3 | x3 |$ x3 | x3 | x3 |$ x3 | x3 | x3 :| %32
+V:3
+ x6 | x6 | x6 | x6 |$ x6 | x6 | x6 | x6 |$ x6 | x6 | G2 Pg3 f/g/ | x6 |$ x6 | x6 | F2 E>F G2- | %15
+ G2 F4 ::$ x6 | x6 | x6 |$ x6 | x6 | x6 |$ F3 cBA- | A2 G4 | x6 | x6 |$ x3 E- E/B/A/G/ | F2 z F3 | %28
+ G z z D3/2G3/2- |$ G2 z G3/2c3/2 | x6 | z/ C/B,/A,/ B,4 :| %32
+V:4
+ x3 | x3 | x3 | x3 |$ x3 | x3 | x3 | x3 |$ x3 | x3 | B x2 | x3 |$ x3 | x3 | x3 | x3 ::$ x3 | x3 | %18
+ x3 |$ x3 | x3 | x3 |$ x3 | x3 | x3 | x3 |$ x3 | x3 | x3 |$ x3 | x3 | x3 :| %32
+V:5
+ z2 z2 D2 | z2 z2 D2 | z2 z2 ^C2 | z2 z2 A,2 |$ z2 z2 G,2 | z2 z2 A,2 | z C- CB,/A,/ G,/F,/E,/F,/ | %7
+ G,A, B,4 |$ z2 z2 E2 | A,2 PF,E,F,B, | z B, E3 D | ^CD E4 |$ z2 z2 D2 | z2 B,2 E2 | x6 | %15
+ z2 z A, D2 ::$ z E MF4 | z C D4 | z E G2 PFE |$ ^DE F4 | z A,PG,F, G,2 | z A,PG,F,G,B, |$ %22
+ z2 z2 z ^D, | E,2 x4 | z2 z2 A,2- | A,F,{/E,} D,E,/F,/ G,/F,/G,- |$ G,E, A, z z2 | x6 | x6 |$ x6 | %30
+ x6 | x6 :| %32
+V:6
+ G,6 | F,6 | E,6 | D,4- D,C, |$ B,,6 | C,4- C,D, | E,C, D,4 | G,,3 D,ME,>F, |$ G,6- | G,2 x4 | %10
+ E,3 E,F,G, | A,3 B,A,G, |$ F,6 | G,6 | x6 | D,6 ::$ D4 C2 | B,3 A, B,2 | C3 B, A,2 |$ B,3 A,G,F, | %20
+ E,4 D,2 | C,4 B,,2 |$ A,,C,B,,A,, B,,2 | E,B,,E,,B,,E,=D, | C,6 | B,,6 |$ A,,3 G,,F,,E,, | x6 | %28
+ x6 |$ x6 | x6 | x6 :| %32
+V:7
+ x B,2 | x A,2 | x G,2 | x F,2 |$ x D,2 | x E,3/2 x/ | x3 | x3 |$ x B,2 | x3 | x3 | x3 |$ x A,2 | %13
+ x3 | x3 | x3 ::$ x3 | x3 | x3 |$ x3 | x3 | x3 |$ x3 | x3 | x E,2 | x3 |$ x3 | x3 | x3 |$ x3 | x3 | %31
+ x3 :| %32
+V:8
+ x6 | x6 | x6 | x6 |$ x6 | x6 | x6 | x6 |$ x6 | x6 | x6 | x6 |$ x6 | x6 | A,6 | x6 ::$ x6 | x6 | %18
+ x6 |$ x6 | x6 | x6 |$ x6 | x6 | x6 | x6 |$ x6 | D,,A,,D,C,B,,A,, | G,,D,G,=F,E,D, |$ C,G,CB,A,G, | %30
+ F,D, G,B, DD, | G,3 D, G,,2 :| %32
+V:1 treble nm="Piano" snm="Pno"
+V:2 bass nm="Piano" snm="Pno"
+V:1
+"^𝅘𝅥𝅭 = 84" z12 | A2B^cde fedef2 | G2 z2 z2 e2 z2 z2 |$[K:treble] F2GABc dedcd2 | %4
+ d2 z2 z2 G2 z2 z2 | cdcBAG FAcedc |$[K:treble] BcBAGF EGBdcB | A2!turn!B2c2 D2 d4- | %8
+ dfed^cB cdecde |$[K:treble] MA12- | AAGFED ^CDEDEC | F2 z2 z2 B,2 z2 z2 |$ %12
+[K:treble] BcBAGF EGBd^cB | ABAGFE ^DFAcBA | G2!turn!A2B2- B2A2G2- | GFEDE^C D6 ::$ a2gfed cdedca | %17
+ B2 z2 z2 g2 z2 z2 | c'd'c'bag abagfe |$ _e2!turn!=e2f2 B6- | BABdcB c=fcA=FA | %21
+ ^DEFAGF G2PG3F/G/ |$[K:treble] ABcBA2 !turn!A6- | AFGABc dcBA^GF | E^GABcd edcde2 |$ %25
+[K:treble] A2 z2 z2 f2 z2 z2 | B2cdef gagfge | c'bagfe d6- |$ dcdefg aecABc | FGABcA Bdg2 z2 | %30
+ z2 e2d2 c2dcBA | BdBGAF MG6 :| %32
+V:2
+ G,2A,B,CD EDCDE2 | F,2 z2 z2 D2 z2 z2 | E,2F,G,A,B, CDCB,C2 |$[K:bass] C2 z2 z2 F,2 z2 z2 | %4
+ B,CB,A,G,F, E,G,B,DCB, | A,B,A,G,F,E, D,F,A,CB,A, |$[K:bass] G,2!turn!A,2B,2 C,2 C4- | %7
+ CEDCB,A, B,CDB,CD | MG,12- |$[K:bass] G,G,F,E,D,^C, B,,C,D,C,D,B,, | E,2 z2 z2 A,,2 z2 z2 | %11
+ A,B,A,G,F,E, D,F,A,CB,A, |$[K:bass] G,A,G,F,E,D, ^C,E,G,B,A,G, | F,2!turn!G,2A,2- A,2G,2F,2- | %14
+ F,E,D,^C,D,B,, PC,4- C,B,,/C,/ | D,2F,,2A,,2 D,,6 ::$ z12 |[K:treble] G2FEDC B,CDCB,G | %18
+ A,2 z2 z2 F2 z2 z2 |$ BcBAGF GAGFED | C2!turn!D2E2[K:bass] A,6- | A,G,A,CB,A, B,EB,G,E,G, |$ %22
+[K:bass] ^C,^D,E,G,F,E, F,2PF,3E,/F,/ | G,A,B,A,G,2 !turn!^G,6- | G,E,F,^G,A,B, CB,A,=G,F,E, |$ %25
+[K:bass] D,F,G,A,B,C DCB,CD2 | G,2 z2 z2 E2 z2 z2 |[K:treble] A,2B,CDE FGFEFD |$ BAGFED C6- | %29
+ CB,CDEF GDB,G,A,B, |[K:bass] E,F,G,A,B,G, A,CF2 z2 | z2 D2C2 B,2CB,A,G, :| %32

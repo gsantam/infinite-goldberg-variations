@@ -1,0 +1,56 @@
+X:1
+T:J. S. Bach Goldberg-Variationen BWV 988 - Variation 1
+T:J. S. Bach Goldberg-Variationen BWV 988 - Variation 1
+C:Johann Sebastian Bach
+%%score ( 1 2 3 ) ( 4 5 6 7 )
+L:1/8
+Q:1/4=108
+M:3/4
+K:G
+V:1 treble 
+V:2 treble 
+V:3 treble 
+V:4 bass 
+V:5 bass 
+V:6 bass 
+V:7 bass 
+V:1
+"^𝅘𝅥 = 108" G/F/G- G/D/E/F/ G/A/B/^c/ | d/^c/d- d/A/B/c/ d/e/f/d/ | g/f/g- g/f/e/d/ ^c/e/A/G/ | %3
+ F/E/D/^C/ D/F/ x3 | z d/=c/dGB,d | z e/d/eACe | z f/e/fdac- | cB z/ G/B/d/ g/d/g/a/ | %8
+ b/g/d/B/ G/B/d/g/ b/g/f/e/ | a/e/^c/A/ F/A/c/e/ a/f/e/d/ | g/d/B/G/ E/G/B/d/ g/f/e/d/ | %11
+ ^c/G/E/^C/ A,/C/E/G/ c/e/d/c/ | d[K:bass]F,F,[K:treble]Adf | B[K:bass]G,G,[K:treble]Beg | %14
+ ^c/e/A/G/ F/A/d/f/ g/e/d/c/ | f/d/^c/B/ A/G/F/E/ D2 :: f/g/a- a/b/a/g/ f/e/d/c/ | %17
+ B/c/d- d/e/d/c/ B/A/G/F/ | E/^G/A/B/ A/E/A/B/ c/A/^d/e/ | f/e/^d/^c/ B4- | %20
+ B/^d/e- e/^D/E- E/ x3/2 | z/ ^g/a- a/^G/A- A/^G,/A,- | A,/B,/C/F/ B,/^D/E/G/ F/E/D/A/ | %23
+ G/F/E/^D/ E/G/ x z2 | z eceaA | z dBdgG | c/A/E/C/ A,/C/E/A/ c/A/c/e/ | %27
+ f/c/A/F/ D/F/A/c/ f/c/f/a/ | b/g/d/B/ G/B/d/g/ b/=f/b/d'/ | e/d'/c'/e/ d/c'/b/d/ c/e/^f/g/ | %30
+ a/c/B/A/ B/d/B/G/ c/A/G/F/ | B/G/F/E/ D/C/B,/A,/ G,2 :| %32
+V:2
+ x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | x[K:bass] x2[K:treble] x3 | %13
+ x[K:bass] x2[K:treble] x3 | x6 | x6 :: x6 | x6 | x6 |x4xF/A/ | x6 |x>B c3/2 x2 x/ | x6 | x6 | x6 | %25
+ x6 | x6 | x6 | x6 | x6 | x6 | x6 :| %32
+V:3
+ x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | x[K:bass] x2[K:treble] x3 | %13
+ x[K:bass] x2[K:treble] x3 | x6 | x6 :: x6 | x6 | x6 | x6 | G>F G3/2 x2 x/ | x6 | x6 | x6 | x6 | %25
+ x6 | x6 | x6 | x6 | x6 | x6 | x6 :| %32
+V:4
+ G,,B,/A,/B,G,G,,G, | F,,F,/E,/F,D,F,,D, | E,,E,/D,/E,G,A,,^C |x3A,/G,/ F,/A,/D, | %4
+ B,,/A,,/B,,- B,,/D,/E,/F,/ G,/A,/B,/G,/ | C,/B,,/C,- C,/E,/F,/G,/ A,/B,/C/A,/ | %6
+ D,/^C,/D,- D,/A,/B,/=C/ D/E/F/D/ | G/F/G/D/ B,/D/G,/B,/ D,/G,/B,,/D,/ | G,,G,B,G,G,,G, | %9
+ F,,F,A,F,F,,F, | E,,E,G,E,E,,G, | A,,E,G,E,A,,G, | F,/A,/D/F/ A/F/D/A,/ F,/A,/D,/F,/ | %13
+ G,/B,/D/G/ B/G/D/B,/ G,/B,/E,/G,/ | A,^C D/A,/F,/D,/ A,A,, | D,,/D,/E,/F,/ G,/A,/B,/^C/ D2 :: %16
+ D,,F,/E,/F,D,D,,F, | G,,B,/A,/B,G,G,,B, | C,C/B,/CF,A,C | A,F, ^D,/B,,/D,/F,/ B,/^D/ x | %20
+x4x/^D,/E, | C,3/2x2B,/ C>E, | ^D,A,G,^A,,B,,F, |x3B,/A,/ x2 | %24
+ C,/E,/A,/C/ E/C/A,/E,/ C,/E,/D,/C,/ | B,,/D,/G,/B,/ D/B,/G,/D,/ B,,/D,/C,/B,,/ | A,,C,E,G,F,E, | %27
+ D,F,A,CB,A, | G,B,D=FED | CE^F^GA=G | FDGG,DD, | G,/G,,/A,,/B,,/ C,/D,/E,/F,/ G,2 :| %32
+V:5
+ x6 | x6 | x6 | D,F,/E,/F,D, D,, z/ =C,/ | x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | %15
+ x6 :: x6 | x6 | x6 | x6 | x2 x2 G,>B,, | x6 | x6 | E,G,/F,/G,E, E,, z/ =D,/ | x6 | x6 | x6 | x6 | %28
+ x6 | x6 | x6 | x6 :| %32
+V:6
+ x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 :: x6 | x6 | x6 | %19
+ x6 |x7/2F,/ x2 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 :| %32
+V:7
+ x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 :: x6 | x6 | x6 | %19
+ x6 | x6 | x6 | x6 | x4 G,/B,/E, | x6 | x6 | x6 | x6 | x6 | x6 | x6 | x6 :| %32
+

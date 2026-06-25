@@ -1,0 +1,15 @@
+X:1
+T:variation-09-bwv-988
+C:Johann Sebastian Bach
+M:4/4
+L:1/16
+% original_key:G
+K:C
+V:1 name="upper_1"
+V:2 name="upper_2"
+V:3 name="upper_3"
+V:4 name="lower_1"
+[V:1] B2 A2 B2 c2 d2 A2 d2 c2 | G2 ^F2 G2 A2 B2 a g B2 A2 | G2 B2 g2 a2 b2 ^f2 b2 a2 | e2 a b e2 ^f2 g2 b a g2 B2 | ^c2 ^f g ^c2 ^d2 e2 g ^f e2 G2 | A2 d e A2 B2 c2 e d e ^f B2 | A2 B ^c d6 ^c B ^c d g2 | ^f4 e4 d7 z | B2 A2 B2 c2 d2 A2 d2 c2 | G2 ^F2 G2 A2 B2 a g B2 A2 | G2 B2 g2 a2 b2 ^f2 b2 a2 | e2 a b e2 ^f2 g2 b a g2 B2 | ^c2 ^f g ^c2 ^d2 e2 g ^f e2 G2 | A2 d e A2 B2 c2 e d e ^f B2 | A2 B ^c d6 ^c B ^c d g2 | ^f4 e4 d7 z | ^f2 d2 e2 ^f2 g2 d2 g2 a2 | d2 B2 ^c2 ^d2 e2 g ^f e2 ^f2 | g2 ^c2 f4 B A G ^F G A B G | ^F E2 ^F ^D4 G ^F E ^D E ^F G E | D C2 D B, C ^G2 C2 c B c e d c | B4 ^c4 ^F2 A G A c B A | G4 ^f2 e2 d2 g ^f g a b2 | e2 e2 d2 c2 B7 z | ^f2 d2 e2 ^f2 g2 d2 g2 a2 | d2 B2 ^c2 ^d2 e2 g ^f e2 ^f2 | g2 ^c2 f4 B A G ^F G A B G | ^F E2 ^F ^D4 G ^F E ^D E ^F G E | D C2 D B, C ^G2 C2 c B c e d c | B4 ^c4 ^F2 A G A c B A | G4 ^f2 e2 d2 g ^f g a b2 | e2 e2 d2 c2 B7 z |]
+[V:2] z16 | B2 d2 g6 ^F2 ^f4 | g2 ^f2 e6 z e d4 | g2 d2 c'6 d2 b2 ^f2 | e2 B2 a6 B2 g2 d2 | c2 G2 f6 G2 c2 g2- | g2 ^f4 e2 ^f2 g2 a2 e2- | e2 d4 ^c2 z8 | z16 | B2 d2 g6 ^F2 ^f4 | g2 ^f2 e6 z e d4 | g2 d2 c'6 d2 b2 ^f2 | e2 B2 a6 B2 g2 d2 | c2 G2 f6 G2 c2 g2- | g2 ^f4 e2 ^f2 g2 a2 e2- | e2 d4 ^c2 z8 | z16 | b2 e2 a6 B2 g2 z2 | z2 e4 d c f2 e ^d e2 z2 | z2 c4 B A E2 z2 B4- | B2 A4 z10 | z16 | z16 | z16 | z16 | z16 | z16 | z16 | z4 C B,3 A2 z2 G4- | G2 ^F4 E2 d8- | d2 g2 A4 B8- | B2 a2 ^f3 g g7 z |]
+[V:3] z16 | z16 | z16 | z16 | z16 | z16 | z16 | z16 | z16 | z16 | z16 | z16 | z16 | z16 | z16 | z16 | z16 | z16 | z16 | z16 | z4 C B,3 A2 z2 G4- | G2 ^F4 E2 d8- | d2 g2 A4 B8- | B2 a2 ^f3 g g7 z | z16 | b2 e2 a6 B2 g2 z2 | z2 e4 d c f2 e ^d e2 z2 | z2 c4 B A E2 z2 B4- | B2 A4 z10 | z16 | z16 | z16 |]
+[V:4] G,,4 G,6 ^F, E, ^F,2 D,2 | G,2 A,2 B,2 C2 D5 z ^D2 | E4 z2 C2 G,2 D2 G2 A B | c2 B2 A2 d2 G8- | G2 G,4 ^F,2 E,2 E ^D E4- | E2 E,4 D,2 C,2 C B, C D E D | ^C A, D ^C B, A, B, ^G, A, B, A, G, ^F, E, D, ^C, | D, ^C, B,, A,, G,, E,, A,,2 D,,2 ^F,, A,, D,4 | G,,4 G,6 ^F, E, ^F,2 D,2 | G,2 A,2 B,2 C2 D5 z ^D2 | E4 z2 C2 G,2 D2 G2 A B | c2 B2 A2 d2 G8- | G2 G,4 ^F,2 E,2 E ^D E4- | E2 E,4 D,2 C,2 C B, C D E D | ^C A, D ^C B, A, B, ^G, A, B, A, G, ^F, E, D, ^C, | D, ^C, B,, A,, G,, E,, A,,2 D,,2 ^F,, A,, D,4 | D,2 D4 C2 B, A, B, C B, A, G, ^F, | G,2 G4 ^F2 E ^D E ^F E D C B, | ^A, E ^F G A2 A,2 G, A, B, G, E, ^F, G, E, | C2 A,2 B,2 B,,2 E,,4 z2 E,2- | E,2 C,2 D,2 E,2 A,,2 A,2 E, D, E, ^F, | G, A, B, G, A, ^F, G, A, D, E, ^F, G, ^F, E, D, C, | B,, G,, A,, B,, C, D, E, ^F, G, A, B, A, G, ^F, E, D, | C, B,, C, A,, D,2 D,,2 G,,2 B,, D, G,4 | D,2 D4 C2 B, A, B, C B, A, G, ^F, | G,2 G4 ^F2 E ^D E ^F E D C B, | ^A, E ^F G A2 A,2 G, A, B, G, E, ^F, G, E, | C2 A,2 B,2 B,,2 E,,4 z2 E,2- | E,2 C,2 D,2 E,2 A,,2 A,2 E, D, E, ^F, | G, A, B, G, A, ^F, G, A, D, E, ^F, G, ^F, E, D, C, | B,, G,, A,, B,, C, D, E, ^F, G, A, B, A, G, ^F, E, D, | C, B,, C, A,, D,2 D,,2 G,,2 B,, D, G,4 |]

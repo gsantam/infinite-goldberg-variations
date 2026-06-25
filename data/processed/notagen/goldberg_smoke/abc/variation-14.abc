@@ -1,0 +1,56 @@
+%Baroque
+%Bach, Johann Sebastian
+%Keyboard
+X:1
+T:goldberg-variations.mxl
+C:Music21
+%%score 1 ( 2 3 )
+L:1/16
+Q:1/4=100
+M:3/4
+K:G
+V:1 treble nm="Piano" snm="Pno"
+V:2 bass nm="Piano" snm="Pno"
+L:1/8
+V:3 bass 
+V:1
+"^𝅘𝅥 = 100" MG,,2 z2[K:treble] !trill(!g6- gf/g/ | a2 z2[K:bass] MF,4- F,A,G,F, | %2
+ E,2 z2[K:treble] (e2d2 ^c2de) |$ F2 z2[K:bass] !trill(!C,6- C,B,,/C,/ | B,,2G,,2B,,2D,2 G,2B,,2 | %5
+ C,2E,2G,2C2 E,2G,2 | F,2A,2 D,2F,2A,2C2 |$ B,2G,2B,2D2 G2 z2 | %8
+[K:treble] z b/a/.b z z e/d/.e z z A/G/.A z | z a/g/.a z z d/^c/.d z z G/F/.G z |$ %10
+[K:treble] z g/f/.g z z B/A/.B z z E/D/.E z | %11
+[K:bass] z G,/F,/.G, z z ^C,/B,,/.C, z z G,,/F,,/.G,, z |$ %12
+[K:treble] z/ D/E/F/A/F/E/D/ z/ D/E/F/A/F/E/D/ z/ D/E/F/A/F/E/D/ | %13
+ .B2 z2[K:bass] .=F,2 z2 .E,2 z2 |$[K:treble] z E/D/.EA/G/ .AD/^C/.DG/F/ .GC/B,/.CF/E/ | %15
+ .FD^CD F/E/DA/G/F d2 z2 ::$[K:treble] fad'a fadf afga | dgbg dgBd gBcd | Gcec AcFA cFGA |$ %19
+ ^DFBF DFB,D FDEF |[K:treble] B,EGE B,EG,B, E^DEG | C=FAF CFA,C FEFA |$ %22
+ ^D^FAF _EFB,E[K:bass] F,A,G,F, | G,B,EB, G,B,E,F, G,E,G,B, |$ %24
+ E2 z E,/=D,/.E, z z C/B,/.C z z[K:treble] A/=G/ | %25
+ .A z z[K:bass] D,/C,/.D, z z B,/A,/.B, z z[K:treble] G/F/ |$ %26
+[K:treble] .G z z[K:bass] C,/B,,/.C, z z A,/G,/.A, z z[K:treble] F/E/ | %27
+ .F z z d/c/.d z z g/f/.g z z b/a/ |$[K:treble] .b2 z2 .D2 z2 .=F2 z2 | %29
+ z/ E/=F/G/c/G/F/E/ z/ ^F/G/A/c/A/G/F/ z/ G/A/_B/^c/B/A/G/ |$ %30
+[K:treble] .d=c/=B/.cB/A/ .B_B/A/.BA/G/ .Ad/c/.dG/F/ | G/A/=B/c/d/c/B/A/ GBDG G,2 z2 :| %32
+V:2
+ B,/G,/D,/G,/ B,/G,/D/B,/ G,/B,/A,/G,/ | x3[K:treble] x3 | x6 |$ x6 | x6 | x6 | x6 |$ x6 | x6 | %9
+ x6 |$[K:treble] x6 | x3/2[K:bass] x9/2 |$[K:bass] x2[K:treble] x4 |[K:bass] x6 |$[K:bass] x6 | %15
+ x6 ::$[K:bass] x2[K:treble] x4 | x6 | x6 |$ x2[K:bass] x4 |[K:bass] x6 | x6 |$ x5[K:treble] x | %23
+ x6 |$[K:bass] x6 | x6 |$[K:bass] x6 |[K:treble] x6 |$[K:treble] x6 | x2[K:bass] x4 |$[K:bass] x6 | %31
+ x6 :| %32
+V:3
+ x12 | DA,F,A, DA,[K:treble]AF DFED | GDB,D GEBG EBAG |$ dAFA dAaf dfed | gdBd gdbg d=fed | %5
+ ecGc ecge cdcB | AFDF AFdA FAGF |$ GDB,D GDBG dcBA | G2 z g/f/.g z z ^c/B/.c z z F/E/ | %9
+ .F z z f/e/.f z z B/A/.B z z E/D/ |$[K:treble] .E z z e/d/.e z z G/F/.G z z ^C/B,/ | %11
+ .^C z z[K:bass] E,/D,/.E, z z A,,/G,,/.A,, z z F,,/E,,/ |$ %12
+[K:bass] .F,,2 z2[K:treble] .d2 z2 .c2 z2 | %13
+[K:bass] z/ G,/A,/B,/D/B,/A,/G,/ z/ G,/A,/_B,/D/B,/A,/G,/ z/ ^G,/A,/=B,/D/B,/A,/G,/ |$ %14
+[K:bass] A,^C/B,/.CF,/E,/ .F,B,/A,/.B,E,/D,/ .E,A,/G,/.A,D,/^C,/ | %15
+ D,/E,/F,/G,/A,/G,/F,/E,/ D,F,A,,D, D,,2 z2 ::$[K:bass] D,2 z2[K:treble] P=c'6- c'b/c'/ | %17
+ b2 z2 M=F4- FAGF | E2 z2 ^f2a2 ^d2ef |$ B2 z2[K:bass] A,,6- A,,G,,/A,,/ | %20
+[K:bass] G,,2E,,2G,,2B,,2G,,2E,,2 | A,,2A,,,2A,,2C,2B,,2A,,2 |$ B,,2^D,2F,2B,2 B,,2[K:treble]E^D | %23
+ E2G2 B2e^de2 z2 |$[K:bass] z C,/B,,/.C, z z A,/^G,/.A, z z E/D/.E z | %25
+ z B,,/A,,/.B,, z z G,/F,/.G, z z D/C/.D z |$[K:bass] z A,,/G,,/.A,, z z E,/D,/.E, z z C/B,/.C z | %27
+[K:treble] z A/G/.A z z f/e/.f z z a/g/.a z |$ %28
+[K:treble] z/ G/A/B/d/B/A/G/ z/ G/A/B/d/B/A/G/ z/ G/A/B/d/B/A/G/ | %29
+ .c2 z2[K:bass] .A,2 z2 .E,2 z2 |$[K:bass] .F,A,/G,/.A,D/C/ .DG,/F,/.G,C/=B,/ .CF,/E,/.F,B,/A,/ | %31
+ .B,G,F,G, B,/A,/G,D/C/B, G2 z2 :| %32

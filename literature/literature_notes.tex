@@ -1,0 +1,1350 @@
+\documentclass[11pt]{article}
+
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{hyperref}
+
+\title{Music Generation with Rule-Based Reinforcement Learning: Literature Notes}
+\author{}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\section{Project Motivation}
+\label{sec:motivation}
+
+The goal of this project is to learn and test whether reinforcement learning,
+especially GRPO-style optimization, can improve symbolic music generation when
+the reward is based on explicit music-theory rules. The target domain is
+classical music, since parts of the style can be formalized more rigidly than in
+many other genres.
+
+The core research question is:
+
+\begin{quote}
+Can rule-based reinforcement learning improve the structural, harmonic, and
+voice-leading quality of symbolic classical music generation without collapsing
+diversity or overfitting to narrow heuristics?
+\end{quote}
+
+This should be framed as a domain-specific experiment, not as a claim that one
+set of music-theory rules can solve general music generation. Rule rewards are
+expected to be useful precisely because the initial domain is constrained.
+
+A more concrete target application is Goldberg-style variation generation:
+
+\begin{quote}
+Generate a new Bach-like keyboard variation that preserves the Goldberg Aria's
+underlying structure while varying the surface melody, rhythm, and texture.
+\end{quote}
+
+For this target, ``similarity to the Aria'' cannot mean note-level copying. The
+model should preserve deeper structure: meter, 32-bar binary form, phrase
+boundaries, harmonic path, bass movement, and cadence locations. At the same
+time, the model should be rewarded for producing a genuine variation rather than
+reconstructing the Aria.
+
+\section{Papers}
+\label{sec:papers}
+
+\subsection{NotaGen: Advancing Musicality in Symbolic Music Generation with Large Language Model Training Paradigms}
+\label{sec:paper-notagen}
+
+\textbf{Status: read.}
+
+\textbf{Reference:}
+\url{https://arxiv.org/abs/2502.18008}
+
+\textbf{Why it matters.}
+NotaGen is the closest modern paper for symbolic classical sheet music
+generation. It uses ABC notation, large-scale pretraining, supervised
+fine-tuning on high-quality classical compositions, and a preference
+optimization stage called CLaMP-DPO.
+
+\textbf{Main points.}
+\begin{itemize}[leftmargin=*]
+  \item The model is trained on symbolic sheet music, not directly on audio.
+  \item Music is represented in ABC notation, which makes symbolic music look
+  like structured text.
+  \item The paper targets high-quality classical sheet music generation.
+  \item The RL/preference stage improves generation quality and controllability,
+  but it does not use predefined hand-written music-theory rewards.
+  \item It uses bar-stream patching and the Tunesformer architecture.
+  \item The most relevant takeaways for this project are the symbolic
+  representation, long-piece generation strategy, tokenization design, and
+  preference-optimization loop.
+\end{itemize}
+
+\textbf{Relevance to this project.}
+NotaGen provides a strong modern baseline for symbolic classical generation.
+However, our proposed project differs because we want inspectable, rule-based
+rewards such as voice-leading, harmony, cadence, range, and meter constraints.
+
+\textbf{Theory links.}
+The main technical sections connected to this paper are ABC notation
+(Section~\ref{sec:abc}), length/bar annotations (Section~\ref{sec:length}),
+bar-stream tokenization (Section~\ref{sec:tokenizers}), and alignment
+(Section~\ref{sec:alignment}).
+
+\textbf{Improvement points discussed.}
+\begin{itemize}[leftmargin=*]
+  \item Replace or supplement CLaMP-style centroid similarity with explicit,
+  decomposable symbolic rewards.
+  \item Avoid relying on composer-period-instrumentation prompts as if those
+  factors were independent.
+  \item Treat counterfactual prompts, such as ``Mozart in a Romantic style'', as
+  out-of-distribution unless the training setup explicitly supports
+  disentanglement.
+  \item Track diversity because optimizing toward an average prompt embedding
+  can favor central, safe samples.
+\end{itemize}
+
+\subsubsection{CLaMP 2 Score and Prompt-Conditioned Similarity}
+
+NotaGen uses the CLaMP 2 Score to quantify semantic similarity between generated
+pieces and real pieces associated with the same prompt. Let \(P\) be the set of
+prompts. For a prompt \(p \in P\), let \(Y_p\) be the set of real pieces matching
+that prompt. CLaMP 2 embeds each real piece into a semantic feature space, and
+the average feature vector for the prompt is:
+
+\[
+\bar{z}_p = \frac{1}{|Y_p|}\sum_{y \in Y_p} z_y
+\]
+
+For a generated piece \(x_p\), the model computes its feature \(z_{x_p}\) and
+scores it by similarity to \(\bar{z}_p\). Intuitively, if the prompt is
+``Classical period, Mozart, piano'', the generated piece should land near real
+pieces matching that prompt in CLaMP 2 embedding space.
+
+This is useful as a high-level style metric, but it raises several concerns:
+
+\begin{itemize}[leftmargin=*]
+  \item \textbf{Prompt entanglement.} Composer, period, and instrumentation are
+  not independent. For example, the composer often almost determines the period,
+  so the model may learn composer identity while treating period as redundant.
+  \item \textbf{Weak counterfactual control.} Prompts such as ``Mozart in a
+  Romantic style'' may be out-of-distribution if the training set does not
+  contain such combinations. The model may ignore one attribute, produce an
+  unstable blend, or generate generic music.
+  \item \textbf{Centroid-seeking behavior.} Optimizing similarity to the average
+  embedding for a prompt can reward safe, central examples. It does not literally
+  force the average melody, but strong optimization can reduce novelty and
+  diversity by favoring pieces close to the prompt centroid.
+\end{itemize}
+
+For this project, CLaMP-style similarity should therefore be treated as a weak
+auxiliary signal or evaluation metric, not as the main reward. A cleaner first
+objective is:
+
+\[
+R = R_{\text{rule compliance}} - \lambda_{\text{KL}}D_{\text{KL}}
+  + R_{\text{diversity/novelty}}
+\]
+
+This keeps the initial experiment focused on whether explicit symbolic rules can
+improve classical generation, while avoiding the harder problem of disentangling
+composer, period, and instrumentation.
+
+\subsubsection{CLaMP-DPO Optimization Loop}
+
+The CLaMP-DPO stage is best understood as an iterative generate-score-train
+procedure, rather than as online reinforcement learning with an environment. For
+each prompt \(p\), the current model generates a candidate set:
+
+\[
+X_p = \{x_p^1, x_p^2, \ldots, x_p^n\}
+\]
+
+In the paper, \(n\) is approximately 100 pieces per prompt in each iteration.
+These are not final outputs; they are a sample pool used to estimate which
+generations are better or worse under the CLaMP 2 Score. High-scoring and
+low-scoring generations can then be used to construct preference comparisons for
+DPO-style training.
+
+The number of outer iterations is denoted by \(K\). NotaGen sets \(K=3\), so the
+loop is roughly:
+
+\begin{enumerate}[leftmargin=*]
+  \item generate around 100 pieces per prompt with the current model;
+  \item embed and score the generated pieces with CLaMP 2;
+  \item build preference pairs or rankings from those scores;
+  \item update the model with CLaMP-DPO;
+  \item repeat for three outer iterations.
+\end{enumerate}
+
+The reason for generating many pieces per prompt is that preference optimization
+needs comparisons. One sample gives a noisy signal, while a pool of samples gives
+enough variation to identify relatively good and bad generations for the same
+prompt.
+
+For this project, an analogous loop could be built with rule-based rewards:
+
+\begin{verbatim}
+for each prompt or conditioning context:
+    generate N candidate pieces
+    parse and score each piece with symbolic rules
+    form preference pairs from high-score and low-score samples
+    train with DPO/GRPO-style optimization
+\end{verbatim}
+
+The important design difference is that our score would be decomposable and
+inspectable. Instead of rewarding proximity to a style centroid in CLaMP space,
+we can directly ask why a sample scored well or poorly: invalid meter, voice
+crossing, unresolved dissonance, missing cadence, parallel fifths, low diversity,
+and so on.
+
+\subsection{SMART: Tuning a Symbolic Music Generation System with an Audio Domain Aesthetic Reward}
+\label{sec:paper-smart}
+
+\textbf{Status: reading.}
+
+\textbf{Reference:}
+\url{https://arxiv.org/abs/2504.16839}
+
+\textbf{Why it matters.}
+SMART is directly relevant because it uses group relative policy optimization
+(GRPO) to fine-tune a symbolic piano MIDI generator.
+
+\textbf{Main points.}
+\begin{itemize}[leftmargin=*]
+  \item The model generates symbolic piano MIDI.
+  \item MIDI is tokenized with the REMI+ tokenizer implemented in MidiTok.
+  \item The reward comes from an audio-domain aesthetic model after rendering
+  symbolic outputs to audio.
+  \item The reward model, Meta Audiobox Aesthetics (MAA), was trained on
+  human-rated natural audio and did not use synthetic/generated audio in its own
+  training data.
+  \item There is no extra alignment fine-tuning stage before GRPO: the policy and
+  reference are initialized from the supervised MIDI base model, then GRPO starts
+  directly.
+  \item GRPO improves average subjective ratings in a small listening study.
+  \item The paper reports a key risk: over-optimization can substantially reduce
+  diversity.
+\end{itemize}
+
+\textbf{Relevance to this project.}
+SMART is useful for the RL method and failure modes. The main difference is that
+our reward would be explicit and symbolic, rather than an aesthetic model applied
+to rendered audio.
+
+\textbf{Theory links.}
+The main technical sections connected to this paper are REMI+ tokenization
+(Section~\ref{sec:tokenizers}), alignment (Section~\ref{sec:alignment}), and
+rule-based rewards (Section~\ref{sec:rewards}).
+
+\textbf{Improvement points discussed.}
+\begin{itemize}[leftmargin=*]
+  \item MAA is used out-of-distribution: it is trained on natural audio but used
+  to score generated MIDI rendered through a soundfont.
+  \item The reward is not prompt-conditioned and is not trained on model
+  generations, unlike many text RLHF reward/preference models.
+  \item The method is a low-effort but useful GRPO template: supervised base
+  model, external reward, KL to a frozen reference, and measurement of output
+  shifts.
+  \item Replace the OOD audio aesthetic reward with on-distribution symbolic rule
+  rewards that can be inspected and debugged.
+  \item Keep explicit diversity metrics, because SMART shows reward
+  over-optimization can collapse output diversity.
+\end{itemize}
+
+\subsection{Combining Reinforcement Learning and Constraint Programming for Sequence-Generation Tasks with Hard Constraints}
+\label{sec:paper-constraints}
+
+\textbf{Status: read.}
+
+\textbf{Reference:}
+\href{https://drops.dagstuhl.de/entities/document/10.4230/LIPIcs.CP.2022.30}{DROPS: 10.4230/LIPIcs.CP.2022.30}
+
+\textbf{Why it matters.}
+This is the closest prior work to the rule-based reward direction. It combines
+RL with constraint programming for sequence generation, using music generation as
+a constrained test domain.
+
+\textbf{Main points.}
+\begin{itemize}[leftmargin=*]
+  \item Machine learning models imitate a dataset but do not naturally enforce
+  hard constraints.
+  \item Constraint programming enforces constraints but does not naturally
+  imitate a corpus style.
+  \item The paper combines both by using constraint information inside an
+  RL-based generation setup.
+  \item The goal is to generate melodic lines that respect both corpus style and
+  music-theory constraints.
+  \item The evaluation mainly focuses on constraint satisfaction and corpus
+  compatibility, not on broader musical quality.
+\end{itemize}
+
+\textbf{Relevance to this project.}
+This paper gives a conceptual foundation for using rule or constraint signals.
+Our project can modernize the idea using contemporary symbolic models and
+GRPO-style training.
+
+\textbf{Theory links.}
+The main technical sections connected to this paper are rule-based rewards
+(Section~\ref{sec:rewards}), candidate experiments (Section~\ref{sec:experiments}),
+and open design choices (Section~\ref{sec:design}).
+
+\textbf{Improvement points to investigate.}
+\begin{itemize}[leftmargin=*]
+  \item Compare soft scalar rewards with hard constraint satisfaction.
+  \item Use modern policy-optimization methods rather than older RL-Tuner style
+  methods.
+  \item Start with deterministic symbolic rules before adding learned aesthetic
+  or style rewards.
+  \item Do not copy the evaluation as-is: rule compliance is necessary evidence,
+  but it is not enough to show musical quality.
+\end{itemize}
+
+\subsection{Music Transformer: Generating Music with Long-Term Structure}
+\label{sec:paper-music-transformer}
+
+\textbf{Status: known background.}
+
+\textbf{Reference:}
+\url{https://arxiv.org/abs/1809.04281}
+
+\textbf{Why it matters.}
+Music Transformer is a foundational symbolic music generation paper. Its main
+contribution is not post-training, but the modeling of long-range musical
+structure with Transformer attention. It helped establish that symbolic music can
+be modeled as an event sequence while still requiring architectural support for
+motifs, repetition, rhythmic patterns, and phrase-level dependencies.
+
+\textbf{Main points.}
+\begin{itemize}[leftmargin=*]
+  \item Uses an event-based symbolic representation rather than raw audio.
+  \item Treats music generation as autoregressive sequence modeling.
+  \item Emphasizes long-term structure as a central difficulty in music
+  generation.
+  \item Uses relative attention to better represent relationships between events
+  across time.
+  \item Shows that local note plausibility is insufficient: the model must
+  preserve and develop musical ideas over longer spans.
+\end{itemize}
+
+\textbf{Theory links.}
+The main technical section connected to this paper is pre-training
+(Section~\ref{sec:pretraining}). It also informs the design choices around
+tokenization (Section~\ref{sec:tokenizers}) and structure rewards
+(Section~\ref{sec:rewards}).
+
+\textbf{Improvement points for this project.}
+\begin{itemize}[leftmargin=*]
+  \item The base model must be good enough before GRPO; rule-based RL cannot fix
+  a model with no musical prior.
+  \item Long-range structure should be evaluated separately from local rule
+  compliance.
+  \item Rule rewards should not only check note-level correctness; they should
+  eventually include phrase, repetition, cadence, and development signals.
+\end{itemize}
+
+\subsection{Theme Transformer}
+\label{sec:paper-theme-transformer}
+
+\textbf{Status: summarized.}
+
+\textbf{Full title:} Theme Transformer: Symbolic Music Generation with
+Theme-Conditioned Transformer.
+
+\textbf{Reference:}
+\url{https://arxiv.org/abs/2111.04093}
+
+\textbf{Why it matters.}
+Theme Transformer is directly relevant to the question of conditioning a music
+generator on a source musical idea. The paper argues that prompt-based
+conditioning is weak: if a theme is only placed at the beginning of the sequence,
+an autoregressive Transformer may gradually ignore it. The authors instead use a
+theme-conditioned encoder-decoder architecture, where the theme is encoded
+separately and the decoder can cross-attend to it throughout generation.
+
+\textbf{Main idea.}
+The paper distinguishes:
+
+\[
+p(x_t \mid x_{<t})
+\]
+
+for ordinary autoregressive generation, from:
+
+\[
+p(x_t \mid x_{<t}; c_{1:\tau})
+\]
+
+where \(c_{1:\tau}\) is a separately supplied theme condition. This is important
+for our project because the Goldberg Aria skeleton should not merely be a prefix
+prompt; it should remain available as an explicit conditioning object during the
+whole generation.
+
+\textbf{How themes are obtained.}
+The authors do not manually label themes. They automatically retrieve repeated
+thematic material from each piece:
+
+\begin{enumerate}[leftmargin=*]
+  \item split each song into non-overlapping two-bar fragments;
+  \item learn a melody embedding with contrastive learning;
+  \item create positive pairs using musically motivated augmentations;
+  \item cluster fragments inside a piece with DBSCAN;
+  \item use the largest cluster as the theme cluster;
+  \item choose the earliest fragment in that cluster as the conditioning theme.
+\end{enumerate}
+
+The contrastive augmentations teach the embedding to treat certain surface
+changes as still theme-like:
+
+\begin{itemize}[leftmargin=*]
+  \item pitch shifting within the scale;
+  \item varying the duration of the last note;
+  \item splitting or combining repeated notes.
+\end{itemize}
+
+\textbf{Architecture.}
+The model adds theme-region markers:
+
+\begin{verbatim}
+THEME-START
+THEME-END
+\end{verbatim}
+
+These delimit generated regions where the theme is expected to recur. The
+proposed architecture makes two key changes to a standard seq2seq Transformer:
+
+\begin{itemize}[leftmargin=*]
+  \item \textbf{Gated parallel attention:} decoder self-attention and
+  cross-attention to the theme are arranged in parallel. Inside theme regions,
+  upper decoder layers emphasize cross-attention so the theme condition has a
+  stronger effect.
+  \item \textbf{Theme-aligned positional encoding:} when a theme appears later in
+  the generated piece, the positional encoding for cross-attention is reset so
+  that position 1 of the generated theme aligns with position 1 of the original
+  conditioning theme.
+\end{itemize}
+
+\textbf{Data and representation.}
+The experiments use POP909, a dataset of Mandarin pop piano arrangements, not
+classical Bach. The model uses symbolic MIDI-style event tokens. Notes are
+represented with pitch, duration, and velocity tokens, separated for melody and
+accompaniment tracks. Metric tokens encode bars, subbeats, and tempo. The
+vocabulary contains 730 tokens for the piano representation. Training uses
+512-token windows, which correspond to roughly nine bars on average.
+
+\textbf{Evaluation.}
+The paper compares a prompt-based Transformer, a basic seq2seq Transformer, and
+the proposed Theme Transformer. It evaluates both general coherence and
+theme-condition preservation:
+
+\begin{itemize}[leftmargin=*]
+  \item pitch-class consistency;
+  \item melody inconsistency;
+  \item groove consistency;
+  \item theme inconsistency;
+  \item theme uncontrollability;
+  \item theme gap, i.e. the bar distance between theme occurrences.
+\end{itemize}
+
+Theme Transformer performs better than the baselines at making the condition
+recur with plausible variation. Listening tests also favor it on theme
+controllability, theme repetition, and theme variation.
+
+\textbf{Limitations for our project.}
+\begin{itemize}[leftmargin=*]
+  \item It preserves recurring melodic material, not a harmonic or bass
+  scaffold.
+  \item The two-bar segmentation is simple and can miss musically meaningful
+  phrase boundaries.
+  \item The model often creates local variations of the theme rather than a
+  convincing long-term development.
+  \item The training context is short relative to full-piece form.
+  \item The domain is pop piano, not Bach keyboard variation.
+\end{itemize}
+
+\textbf{Relevance to the Goldberg direction.}
+Theme Transformer supports the core design choice that the Aria structure should
+be an explicit condition, not just a textual prompt. However, our conditioning
+object should be different from their two-bar melody theme. For Goldberg-style
+variation, the condition should be a structured Aria skeleton:
+
+\begin{itemize}[leftmargin=*]
+  \item 32-bar binary form;
+  \item 3/4 meter;
+  \item per-bar bass or scale-degree skeleton;
+  \item harmonic progression;
+  \item cadence map;
+  \item phrase boundaries;
+  \item optional variation type or texture target.
+\end{itemize}
+
+The project is therefore better described as structure-conditioned variation
+generation rather than only theme-conditioned generation. Theme Transformer is a
+useful precedent, but our reward should measure preservation of the Aria's deep
+structure while penalizing surface copying.
+
+\textbf{Theory links.}
+The main technical sections connected to this paper are tokenization
+(Section~\ref{sec:tokenizers}), pre-training (Section~\ref{sec:pretraining}),
+post-training/alignment (Section~\ref{sec:alignment}), and Goldberg-style
+structure rewards (Section~\ref{sec:goldberg-rewards}).
+
+\section{ABC Notation Notes}
+\label{sec:abc}
+
+ABC notation is a plain-text representation for symbolic music. It is attractive
+for language-model-based music generation because it encodes notes, durations,
+voices, meter, key, bar lines, dynamics, and articulations in text.
+
+\subsection{Header and Body}
+
+A minimal ABC example:
+
+\begin{verbatim}
+X:1
+T:Simple Tune
+M:4/4
+L:1/4
+K:C
+C D E F | G A B c |
+\end{verbatim}
+
+The header contains metadata:
+
+\begin{itemize}[leftmargin=*]
+  \item \verb|X:|: tune or index number.
+  \item \verb|T:|: title.
+  \item \verb|M:|: meter.
+  \item \verb|L:|: default note length.
+  \item \verb|K:|: key.
+\end{itemize}
+
+The body contains the actual notes and musical events.
+
+\subsection{Durations}
+
+Durations are encoded relative to the default unit length \verb|L:|.
+
+\begin{verbatim}
+M:4/4
+L:1/8
+K:C
+C D E2 F/ G3/2 |
+\end{verbatim}
+
+If \verb|L:1/8|:
+
+\begin{itemize}[leftmargin=*]
+  \item \verb|C| means one eighth note.
+  \item \verb|E2| means two units, i.e. a quarter note.
+  \item \verb|F/| or \verb|F/2| means half a unit, i.e. a sixteenth note.
+  \item \verb|G3/2| means one and a half units, i.e. a dotted eighth note.
+\end{itemize}
+
+Rests use the same duration system:
+
+\begin{verbatim}
+z      % rest of length L
+z2     % rest of length 2 * L
+z/2    % rest of length L / 2
+\end{verbatim}
+
+\subsection{Bars}
+
+The character \verb+|+ is a bar line. It separates measures:
+
+\begin{verbatim}
+M:4/4
+L:1/4
+K:C
+C D E F | G A B c |
+\end{verbatim}
+
+In this example, every note has default duration \verb|L:1/4|, so each bar
+contains four quarter notes.
+
+Common variants:
+
+\begin{itemize}[leftmargin=*]
+  \item \verb+|]+: end of tune.
+  \item \verb+||+: double bar line.
+  \item \verb+|:+: repeat start.
+  \item \verb+:|+: repeat end.
+\end{itemize}
+
+\subsection{Voices}
+
+Multiple voices are encoded with \verb|V:| fields and inline voice switches:
+
+\begin{verbatim}
+X:1
+T:Two voices
+M:4/4
+L:1/4
+K:C
+V:1 name="Soprano"
+V:2 name="Bass"
+[V:1] C D E F | G A B c |
+[V:2] C, C, G,, G,, | C, C, G,, G,, |
+\end{verbatim}
+
+\verb|[V:1]| switches to voice 1 and \verb|[V:2]| switches to voice 2.
+Explicit voices are useful for rule rewards because they allow us to check
+voice-leading, voice crossing, ranges, cadences, and parallel intervals.
+
+Chords can be represented with bracketed simultaneous notes:
+
+\begin{verbatim}
+[CEG]2
+\end{verbatim}
+
+This means C, E, and G played together for duration \verb|2 * L|.
+
+\subsection{Octaves}
+
+Uppercase and lowercase note names indicate different octaves:
+
+\begin{verbatim}
+C D E F G A B
+c d e f g a b
+\end{verbatim}
+
+Lowercase notes are one octave above uppercase notes. Commas lower pitch by
+octaves and apostrophes raise pitch:
+
+\begin{verbatim}
+C,   % one octave below C
+C,,  % two octaves below C
+c'   % one octave above c
+\end{verbatim}
+
+\subsection{Example Line}
+
+The following line:
+
+\begin{verbatim}
+[r:15/30][V:1]._d2 (d2 c2)|
+[V:2].f2) (f2 e2)|
+[V:3]z2 z2!p! (F,2|
+[V:4]z2 z2!p! (F,,2|
+\end{verbatim}
+
+can be read as:
+
+\begin{itemize}[leftmargin=*]
+  \item \verb|[r:15/30]|: bar-position annotation from the paper, likely current
+  bar index 15 and countdown/remaining index 30.
+  \item \verb|[V:1]| through \verb|[V:4]|: four voice streams.
+  \item \verb|_d2|: D-flat with duration \verb|2 * L|.
+  \item \verb|z2|: rest with duration \verb|2 * L|.
+  \item \verb|F,2| and \verb|F,,2|: low F notes in different octaves.
+  \item \verb|.|: staccato articulation.
+  \item \verb|(| and \verb|)|: slur marks.
+  \item \verb|!p!|: piano dynamic marking.
+\end{itemize}
+
+\section{Length and Bar Annotations}
+\label{sec:length}
+
+NotaGen uses stream-based training and inference for long pieces. It annotates
+body lines with a marker such as:
+
+\begin{verbatim}
+[r:15/30]
+\end{verbatim}
+
+The first number is the current bar index. The second is a countdown or remaining
+bar index. This is future information about planned length, but not future
+information about the actual notes.
+
+The countdown is useful because musical endings depend on knowing that the end
+is near. A bar can mean different things depending on the total planned length:
+
+\begin{itemize}[leftmargin=*]
+  \item bar 16 of a 16-bar piece is an ending;
+  \item bar 16 of a 128-bar piece is early or middle material;
+  \item bar 16 of a 32-bar piece is near the midpoint.
+\end{itemize}
+
+This makes generation length-conditioned. For a controlled generation setup, the
+inference loop can supply these annotations:
+
+\begin{verbatim}
+[r:1/31]  generate first bar or line
+[r:2/30]  generate second bar or line
+...
+[r:32/0]  generate ending
+\end{verbatim}
+
+For an open-ended generator, countdown annotations are less natural because the
+model would need to decide the end itself.
+
+\section{Tokenizers and Symbolic Representations}
+\label{sec:tokenizers}
+
+\subsection{Tokenizers Used in the Read Papers}
+
+\subsubsection{NotaGen}
+
+NotaGen uses ABC notation with bar-stream patching. This is a hierarchical
+character-level representation:
+
+\begin{itemize}[leftmargin=*]
+  \item the score is represented as ABC text;
+  \item the text is split into semantically meaningful units, such as header
+  lines and bars;
+  \item each unit is split into fixed-length character patches and padded when
+  needed;
+  \item each patch is projected into a patch embedding;
+  \item a patch-level decoder models long-range structure;
+  \item a character-level decoder predicts the next patch character by
+  character.
+\end{itemize}
+
+This means the low-level tokens are characters, but the main sequence modeled by
+the patch-level Transformer is a sequence of bar/header patch embeddings.
+
+\subsubsection{SMART}
+
+SMART uses MIDI, not ABC. The MIDI files are tokenized using the REMI+ tokenizer
+as implemented in the MidiTok library. REMI-style tokenization converts MIDI into
+a sequence of musical event tokens, such as:
+
+\begin{verbatim}
+Bar
+TimeSig_4/4
+Tempo_120
+Position_0
+Pitch_60
+Velocity_12
+Duration_1.0
+\end{verbatim}
+
+The exact vocabulary depends on the MidiTok configuration, but the important
+event types are:
+
+\begin{itemize}[leftmargin=*]
+  \item \verb|Bar| or similar new-bar tokens;
+  \item \verb|TimeSig| tokens for meter;
+  \item \verb|Tempo| tokens;
+  \item \verb|Position| tokens for onset position inside a bar;
+  \item \verb|Pitch| tokens for MIDI pitch;
+  \item \verb|Velocity| tokens for loudness;
+  \item \verb|Duration| tokens for note length.
+\end{itemize}
+
+The paper notes that the tokenizer uses 20 velocity bins. During base model
+training, SMART uses random crops up to 512 REMI+ tokens, padded with special
+\verb|PAD| tokens when necessary. During GRPO training, prompts are also written
+in REMI+ syntax: each prompt includes a token for the start of a new bar, a
+random time-signature token, and a random tempo token.
+
+\subsubsection{Theme Transformer}
+
+Theme Transformer uses symbolic MIDI-style event tokens. Each note is represented
+by note-related events:
+
+\begin{itemize}[leftmargin=*]
+  \item pitch;
+  \item duration;
+  \item velocity.
+\end{itemize}
+
+The representation separates melody and accompaniment tracks, so a melody pitch
+and an accompaniment pitch are different token types. It also includes metric
+tokens:
+
+\begin{itemize}[leftmargin=*]
+  \item bar;
+  \item subbeat position inside a bar;
+  \item tempo.
+\end{itemize}
+
+The distinctive part is the addition of theme-region tokens:
+
+\begin{verbatim}
+THEME-START
+THEME-END
+\end{verbatim}
+
+These markers tell the model where a generated region is intended to instantiate
+the conditioning theme. For our Goldberg target, the analogous idea would not be
+only theme-region tokens, but explicit structure-conditioning tokens or side
+inputs for bar index, Aria bass/harmony, cadence role, and phrase position.
+
+\subsection{BPE}
+
+Byte Pair Encoding (BPE) can be applied to ABC notation. It learns frequent text
+chunks, such as:
+
+\begin{verbatim}
+" C2"
+"|[V:"
+"!p!"
+"z2 z2"
+\end{verbatim}
+
+BPE is easy to implement and efficient in many language-model pipelines. However,
+it is not musically aligned by default. It may split or merge musical units in
+ways that make symbolic reasoning harder. For rule-based rewards, we still need
+to parse the decoded ABC and validate its structure.
+
+\subsection{Bar-Stream Patching}
+
+Bar-stream patching does not mean that a whole bar becomes one vocabulary token.
+Instead, it is a hierarchical character-level method.
+
+The pipeline is:
+
+\begin{verbatim}
+ABC text
+-> split into header lines and bars
+-> split each line/bar into fixed-length character patches
+-> pad the final patch when needed
+-> flatten one-hot character vectors
+-> linear projection to one patch embedding
+-> patch-level decoder models patch sequence
+-> character-level decoder predicts the next patch character by character
+\end{verbatim}
+
+For example, a bar:
+
+\begin{verbatim}
+[V:1] C2 D2 |
+\end{verbatim}
+
+is represented as characters inside a fixed-size patch:
+
+\begin{verbatim}
+[ V : 1 ]   C 2   D 2   | <pad> <pad> ...
+\end{verbatim}
+
+Each character has an ID or one-hot vector. The full fixed-length character
+array is projected into one patch embedding.
+
+\subsection{Training Objective}
+
+The model predicts characters, not patch IDs. For target patch \(P_{i+1}\):
+
+\[
+p(P_{i+1} \mid P_1, \ldots, P_i)
+= \prod_t p(c_t \mid P_1, \ldots, P_i, c_{<t})
+\]
+
+During training, teacher forcing provides the previous characters in the current
+target patch. A causal mask prevents each character position from seeing future
+characters, so all character losses can still be computed in parallel.
+
+The context for generating a character inside the current patch is:
+
+\begin{verbatim}
+compressed previous patches + previous characters within current patch
+\end{verbatim}
+
+It is not:
+
+\begin{verbatim}
+all previous characters from the full piece as separate tokens
+\end{verbatim}
+
+This is the key architectural tradeoff. Bar-stream patching improves efficiency
+and gives the model a bar-level structural bias, but earlier patch internals are
+compressed into patch embeddings.
+
+\section{Pre-Training}
+\label{sec:pretraining}
+
+The project should separate two questions:
+
+\begin{enumerate}[leftmargin=*]
+  \item Can we train or reuse a symbolic model that already has a useful musical
+  prior?
+  \item Can post-training with rule-based rewards improve that model without
+  damaging style or diversity?
+\end{enumerate}
+
+Music Transformer is the relevant foundational background for the first
+question. Its lesson is that symbolic music generation is not only next-token
+prediction. A model can produce locally plausible notes while failing at
+long-range musical coherence.
+
+\subsection{Autoregressive Symbolic Modeling}
+
+The pre-training objective is standard language modeling over symbolic music
+tokens:
+
+\[
+p(x) = \prod_t p(x_t \mid x_{<t})
+\]
+
+The tokens may be ABC characters, ABC patches, REMI+ MIDI events, or more
+music-aware note/duration/chord events. In all cases, the base model learns a
+distribution over musical sequences from data before any rule-based RL is
+applied.
+
+For this project, pre-training or supervised fine-tuning should provide:
+
+\begin{itemize}[leftmargin=*]
+  \item basic syntax validity;
+  \item plausible local note transitions;
+  \item common rhythmic patterns;
+  \item style priors from the target corpus;
+  \item some ability to maintain meter and phrase-level expectations.
+\end{itemize}
+
+Rule-based GRPO should be viewed as post-training on top of this prior, not as a
+replacement for learning musical style from data.
+
+\subsection{Long-Term Structure}
+
+Music Transformer emphasizes that musical quality depends on relationships over
+long spans:
+
+\begin{itemize}[leftmargin=*]
+  \item motif repetition and variation;
+  \item rhythmic consistency;
+  \item phrase structure;
+  \item harmonic direction;
+  \item preparation and resolution;
+  \item cadence placement.
+\end{itemize}
+
+This is important for our reward design. A reward that only checks local
+constraints can make music more formally correct while leaving it boring or
+fragmented. Long-range structure should therefore be evaluated separately from
+local rule compliance.
+
+\subsection{Representation Implications}
+
+The representation chosen for pre-training affects what the model can learn and
+what the reward can inspect:
+
+\begin{itemize}[leftmargin=*]
+  \item ABC text is convenient for sheet music and classical symbolic structure.
+  \item Bar-stream patching gives the model a structural bias around bars while
+  retaining character-level generation.
+  \item REMI+ MIDI event tokens are convenient for performance-like piano MIDI,
+  especially when velocity, tempo, and duration matter.
+  \item Music-aware symbolic tokens may be simpler for a first Bach/SATB reward
+  pipeline because they map directly to notes, durations, voices, and bars.
+\end{itemize}
+
+The first implementation should prefer a representation that is easy to parse and
+score. A slightly less efficient tokenizer is acceptable if it makes the reward
+module reliable.
+
+\subsection{Base Model Requirement}
+
+The base model must be strong enough that generated candidates contain meaningful
+musical variation. GRPO can then prefer better candidates within a group. If all
+candidate samples are invalid or musically empty, the reward signal will mostly
+teach syntax hacks rather than musical improvement.
+
+A practical pre-training baseline is:
+
+\begin{verbatim}
+target corpus: Bach chorales or another constrained classical subset
+representation: ABC, MusicXML-derived events, or REMI-like symbolic events
+objective: next-token prediction
+evaluation: syntax validity, bar validity, corpus likelihood, diversity
+\end{verbatim}
+
+Only after this baseline generates mostly parseable and stylistically plausible
+samples should we move to post-training with rule rewards.
+
+\section{Post-Training and Alignment}
+\label{sec:alignment}
+
+The two alignment methods discussed so far are quite different. NotaGen uses an
+offline preference-optimization loop based on CLaMP-DPO, while SMART uses direct
+on-policy GRPO with an external audio aesthetic reward. The former is more
+interesting as an alignment pipeline, even though its reward target is not ideal
+for our project. The latter is a useful minimal implementation template for GRPO.
+
+\subsection{NotaGen: CLaMP-DPO}
+
+NotaGen starts from a pretrained and supervised fine-tuned symbolic model. It
+then uses CLaMP 2 as an automatic scorer to construct preference data.
+
+The method is:
+
+\begin{enumerate}[leftmargin=*]
+  \item define prompts \(p\), such as period-composer-instrumentation
+  combinations;
+  \item compute a reference embedding centroid \(\bar{z}_p\) from real pieces
+  matching each prompt;
+  \item generate a candidate set \(X_p\) for each prompt;
+  \item score generated pieces by similarity between \(z_{x_p}\) and
+  \(\bar{z}_p\);
+  \item construct preference pairs from relatively high-scoring and low-scoring
+  generations;
+  \item update the model with DPO-style training.
+\end{enumerate}
+
+The paper sets \(K=3\) outer iterations and generates approximately 100 pieces
+per prompt in each iteration. The 100 samples are used to create enough
+within-prompt variation for preference construction; they are not the final
+output count.
+
+\textbf{Strengths.}
+\begin{itemize}[leftmargin=*]
+  \item Uses generated samples to construct alignment data.
+  \item The comparison is prompt-specific rather than global.
+  \item Avoids training a new human preference model.
+  \item Fits well with symbolic generation because CLaMP operates on symbolic
+  music representations.
+\end{itemize}
+
+\textbf{Weaknesses for our project.}
+\begin{itemize}[leftmargin=*]
+  \item The score is similarity to an embedding centroid, not explicit musical
+  correctness.
+  \item Prompt variables are entangled; composer may dominate period.
+  \item Counterfactual prompts are not naturally supported.
+  \item Strong optimization can favor typical, central samples over creative or
+  unusual but valid music.
+\end{itemize}
+
+\textbf{Adaptation idea.}
+Use the same generate-score-preference-train structure, but replace CLaMP
+similarity with decomposable symbolic rewards:
+
+\begin{verbatim}
+generate candidates
+parse symbolic music
+score meter, harmony, voice leading, cadence, diversity
+construct high-vs-low preference pairs
+train with DPO or GRPO-style optimization
+\end{verbatim}
+
+\subsection{SMART: Direct GRPO with MAA}
+
+SMART starts from a supervised MIDI base model. The policy and frozen reference
+model are initialized from that same base model, and then the system directly
+runs GRPO.
+
+The method is:
+
+\begin{enumerate}[leftmargin=*]
+  \item generate REMI+ prompts procedurally, including bar, time-signature, and
+  tempo tokens;
+  \item sample MIDI completions from the policy model;
+  \item render each MIDI completion to audio using a soundfont renderer;
+  \item crop audio to 10 seconds, matching MAA's receptive field;
+  \item score each audio sample with Meta Audiobox Aesthetics;
+  \item compute group-relative advantages from the rewards;
+  \item update the policy with a KL penalty to the frozen reference model.
+\end{enumerate}
+
+This can be summarized as:
+
+\begin{verbatim}
+supervised MIDI LM
+-> policy/reference initialization
+-> generate MIDI
+-> render to audio
+-> score with MAA
+-> GRPO update with KL to reference
+\end{verbatim}
+
+\textbf{Strengths.}
+\begin{itemize}[leftmargin=*]
+  \item Simple GRPO recipe.
+  \item Requires no custom reward-model training.
+  \item Demonstrates that RL can measurably shift symbolic music outputs.
+  \item Provides clear warnings about diversity collapse under stronger
+  optimization.
+\end{itemize}
+
+\textbf{Weaknesses for our project.}
+\begin{itemize}[leftmargin=*]
+  \item MAA was trained on natural human-rated audio, not on generated/rendered
+  symbolic music.
+  \item The reward model is not prompt-conditioned.
+  \item The reward is only 10-second audio-level aesthetics, so it cannot capture
+  long-range musical form.
+  \item The reward can be hacked through low-level correlates such as note
+  density, fewer pauses, more dynamics, or wider pitch range.
+  \item There is no intermediate generated-output preference dataset or
+  alignment fine-tuning stage.
+\end{itemize}
+
+\textbf{Adaptation idea.}
+Keep the simple GRPO skeleton, but score the generated symbolic object directly:
+
+\begin{verbatim}
+supervised symbolic LM
+-> policy/reference initialization
+-> generate symbolic candidates
+-> parse symbolic candidates
+-> score deterministic music-theory rules
+-> GRPO update with KL to reference
+\end{verbatim}
+
+This removes the audio rendering and OOD aesthetic reward from the critical path.
+The reward becomes narrower, but it is inspectable and on-distribution.
+
+\subsection{Constraint Paper: Constraints as Modern GRPO Rewards}
+
+The constraint-programming paper is useful less as an implementation template and
+more as a source of constraint ideas. We do not need to inherit the full CP
+machinery in the first version of this project.
+
+The practical takeaway is:
+
+\begin{verbatim}
+music generation can be guided by explicit constraints
+constraints can be converted into reward signals
+constraint satisfaction alone is not enough as evaluation
+\end{verbatim}
+
+A modern post-training version can be much simpler:
+
+\begin{verbatim}
+base symbolic model
+-> generate multiple candidates per prompt/context
+-> score each candidate with explicit symbolic rule functions
+-> use GRPO to increase probability of higher-scoring candidates
+-> keep KL to a reference model to preserve style/diversity
+\end{verbatim}
+
+In this setup, the reward can be implemented with ordinary symbolic checks rather
+than a CP solver:
+
+\[
+\begin{aligned}
+R ={}& R_{\text{parse}}
++ R_{\text{bar duration}}
++ R_{\text{voice range}} \\
+&- P_{\text{voice crossing}}
+- P_{\text{parallel fifths/octaves}}
+- P_{\text{unresolved dissonance}} \\
+&+ R_{\text{cadence}}
+- P_{\text{repetition}}
+\end{aligned}
+\]
+
+This gives us a cleaner first implementation:
+
+\begin{itemize}[leftmargin=*]
+  \item simpler than integrating a CP solver;
+  \item directly compatible with GRPO-style post-training;
+  \item interpretable, because each reward component can be inspected;
+  \item easier to debug when the model starts reward hacking;
+  \item easy to extend toward Bach chorale or SATB-specific rules.
+\end{itemize}
+
+CP may become useful later if we need hard guarantees, constrained decoding,
+repair of invalid samples, or global feasibility estimates for partial
+generations. For the first milestone, plain rule functions are the better
+engineering choice.
+
+\section{Rule-Based Reward Ideas}
+\label{sec:rewards}
+
+The reward can be built from symbolic checks over parsed ABC or converted
+MusicXML/MIDI representations. A possible reward decomposition is:
+
+\[
+R = R_{\text{parse}} + R_{\text{meter}} + R_{\text{harmony}}
+  + R_{\text{voice}} + R_{\text{cadence}} + R_{\text{style}}
+  - P_{\text{degenerate}}
+\]
+
+\subsection{Goldberg-Style Aria Structure Rewards}
+\label{sec:goldberg-rewards}
+
+For Goldberg-style variation generation, the main reward should not be generic
+similarity to Bach or raw similarity to the Aria. The objective should preserve
+the Aria's underlying structure while encouraging a different surface.
+
+A useful conditioning object is:
+
+\begin{itemize}[leftmargin=*]
+  \item 32-bar binary form;
+  \item 3/4 meter;
+  \item per-bar bass or scale-degree skeleton;
+  \item harmonic progression or chord labels;
+  \item cadence map;
+  \item phrase boundaries;
+  \item optional variation type, such as canon, figuration, dance-like texture,
+  or toccata-like texture.
+\end{itemize}
+
+A first reward decomposition could be:
+
+\[
+\begin{aligned}
+R ={}& R_{\text{parse}}
++ R_{\text{meter}}
++ R_{\text{bar count}}
++ R_{\text{cadence map}} \\
+&+ R_{\text{bass/harmony similarity}}
++ R_{\text{keyboard playability}}
++ R_{\text{Bach style}} \\
+&- P_{\text{surface copy}}
+- P_{\text{degenerate repetition}}
+- P_{\text{invalid texture}}
+\end{aligned}
+\]
+
+The important distinction is:
+
+\begin{itemize}[leftmargin=*]
+  \item reward similarity in harmony, bass function, phrase location, and cadence
+  placement;
+  \item penalize direct note-level copying of the Aria;
+  \item leave room for different rhythmic figuration, contrapuntal texture, and
+  melodic surface.
+\end{itemize}
+
+For DPO, candidate outputs for the same Aria-conditioned prompt can be ranked by
+this structure-aware reward. For GRPO, the same reward can be applied directly
+to a group of generated candidates. This is the concrete version of the project:
+post-train a symbolic model to preserve deep musical structure while varying the
+surface.
+
+\subsection{Low-Level Validity}
+
+\begin{itemize}[leftmargin=*]
+  \item Reward parseable ABC.
+  \item Penalize malformed headers, unmatched slurs, invalid voice markers, and
+  invalid duration syntax.
+  \item Reward every bar having the correct total duration under \verb|M:| and
+  \verb|L:|.
+  \item Penalize missing or extra bar lines.
+\end{itemize}
+
+\subsection{Voice-Level Rules}
+
+\begin{itemize}[leftmargin=*]
+  \item Keep voices within plausible SATB ranges.
+  \item Penalize voice crossing.
+  \item Penalize excessive leaps.
+  \item Reward stepwise melodic motion where stylistically appropriate.
+  \item Penalize unresolved leading tones.
+\end{itemize}
+
+\subsection{Harmony and Counterpoint}
+
+\begin{itemize}[leftmargin=*]
+  \item Reward consonant intervals on strong beats.
+  \item Penalize parallel fifths and octaves.
+  \item Penalize unresolved dissonances.
+  \item Reward plausible cadences near phrase endings.
+  \item Reward final tonic closure in simple classical settings.
+\end{itemize}
+
+\subsection{Structure}
+
+\begin{itemize}[leftmargin=*]
+  \item Use target-length conditioning or countdown annotations to encourage
+  phrase endings.
+  \item Reward phrase-level regularity, such as 4-bar or 8-bar phrases.
+  \item Penalize repeated trivial loops and excessive copying.
+\end{itemize}
+
+\section{Candidate Experiments}
+\label{sec:experiments}
+
+\subsection{Experiment 1: Rule Compliance After Supervised Fine-Tuning}
+
+Train a small symbolic model on a constrained dataset, such as Bach chorales.
+Evaluate whether the model already satisfies basic rule metrics after
+supervised training.
+
+\textbf{Goal:} establish baseline rule violations before RL.
+
+\subsection{Experiment 2: GRPO With Parse and Meter Rewards}
+
+Start with low-risk rewards:
+
+\begin{itemize}[leftmargin=*]
+  \item parseable ABC;
+  \item correct bar duration;
+  \item valid voice markers;
+  \item no empty or degenerate bars.
+\end{itemize}
+
+\textbf{Goal:} test the RL pipeline before using subjective or complex music
+rules.
+
+\subsection{Experiment 3: GRPO With Voice-Leading Rewards}
+
+Add SATB-specific rewards:
+
+\begin{itemize}[leftmargin=*]
+  \item range constraints;
+  \item voice crossing penalties;
+  \item parallel fifth and octave penalties;
+  \item melodic leap penalties.
+\end{itemize}
+
+\textbf{Goal:} test whether explicit classical rules improve symbolic quality.
+
+\subsection{Experiment 4: Reward Hacking and Diversity}
+
+Measure diversity before and after RL:
+
+\begin{itemize}[leftmargin=*]
+  \item pitch-class entropy;
+  \item n-gram diversity over notes or bars;
+  \item unique rhythmic patterns;
+  \item duplicate output rate;
+  \item average edit distance between generations.
+\end{itemize}
+
+\textbf{Goal:} avoid the over-optimization problem reported in SMART.
+
+\subsection{Experiment 5: Tokenization Comparison}
+
+Compare simple alternatives:
+
+\begin{itemize}[leftmargin=*]
+  \item flat character-level Transformer;
+  \item music-aware tokenization;
+  \item BPE;
+  \item bar-stream patching if implementation time allows.
+\end{itemize}
+
+\textbf{Goal:} understand whether bar-aligned structure matters for rule-based
+optimization.
+
+\section{Open Design Choices}
+\label{sec:design}
+
+\begin{itemize}[leftmargin=*]
+  \item Dataset: Bach chorales are likely the cleanest starting point because
+  SATB rules are well defined.
+  \item Representation: ABC is useful for language modeling; MusicXML or
+  music21 objects may be better for reward computation.
+  \item Tokenization: character-level or music-aware tokens are simpler than
+  implementing full bar-stream patching at first.
+  \item Conditioning: use target length or countdown annotations if we want
+  planned phrases and cadences; avoid them if we want open-ended generation.
+  \item Reward design: start with validity and meter before adding complex
+  harmony and counterpoint.
+  \item Evaluation: combine objective rule metrics with listening or expert
+  preference checks later.
+\end{itemize}
+
+\section{Initial Project Direction}
+\label{sec:initial-direction}
+
+A practical first milestone is:
+
+\begin{enumerate}[leftmargin=*]
+  \item Build or load a small Bach chorale dataset.
+  \item Convert pieces into a stable symbolic representation.
+  \item Implement a parser and rule-evaluation module.
+  \item Train a small supervised baseline.
+  \item Verify the baseline has a useful musical prior: parseable syntax,
+  plausible local motion, and nontrivial diversity.
+  \item Run GRPO or a simpler post-training objective with parse and meter
+  rewards.
+  \item Add voice-leading rewards only after the pipeline is stable.
+\end{enumerate}
+
+This keeps the project focused: prove that rule-based optimization can improve
+measurable symbolic correctness before trying to optimize broad musical quality.
+
+\end{document}

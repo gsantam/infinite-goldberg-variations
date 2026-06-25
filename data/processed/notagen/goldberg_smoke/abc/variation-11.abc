@@ -1,0 +1,32 @@
+%Baroque
+%Bach, Johann Sebastian
+%Keyboard
+X:1
+T:goldberg-variations.mxl
+C:Music21
+%%score 1 2
+L:1/16
+Q:1/4=114
+M:12/16
+K:G
+V:1 treble nm="Piano" snm="Pno"
+V:2 bass nm="Piano" snm="Pno"
+V:1
+"^𝅘𝅥𝅮𝅭 = 152" BAGFED2<^C2-C2E | AGFED^C2<B,2-B,2A | GFED^CB,A,2CE2G |$ %3
+ FED[K:bass]^CB,A,G,F,E,D,E,=C, | B,,D,G,B,DGDB,G,=F,E,D, | ^C,E,G,_B,EGEB,A,G,^F,E, |$ %6
+ D,G,=B,[K:treble]DGBAFDCB,A, | G,B,DGBdg2dB2F | G3-G2Bed^cBAG |$ F3-F2ed^cBAGF | E2->E2FG^CBAGAB | %11
+ Ed^cBcdcefgfe |$ Pd6- d2FA2d | Pd6- d2^GB2d | Pd6- deg^ceg | f2->f2dAFDFA^cd ::$ z6 agfedc | %17
+ BAG z3 d'c'bag=f | edcBAG^F2^de2^A |$ B2^D F2A=cBAGAF | EGBegbgeBGFE | =FAc=fac'afcAG^F |$ %22
+ GBege=c'bagfe^d | egeBGFGEGBe^d | e=dcBAG2<F2-F2A |$ dcBAGF2<E2-E2d | cBAGFEFED^CDE | %27
+ FED[K:bass]=CB,A,B,A,G,F,G,A, |$ B,A,G,=F,E,D,E,D,C,B,,C,D, | E,C,E,G,CECA,C[K:treble]EAc | %30
+ FDFAdfdAdfac' | bgdBGFGBd g3 :| %32
+V:2
+ G,3-G,2B,ED^CB,A,G, | F,3-F,2ED^CB,A,G,F, | E,2G,B,2D^CB,A,G,F,E, |$ %3
+ D,E,F,G,A,B,[K:treble]^CDEFGA | PG6- G2B,D2G | PG6- G2^CE2G |$ PG6- GAcFAc | B2->B2GDB,G,B,DGA | %8
+ BAGFED2<^C2-C2E |$ AGFED^C2<B,2-B,2A | GFED^CB,EDC[K:bass]B,A,G, | ^CB,A,G,F,E,A,G,F,E,F,G, |$ %12
+ F,A,D[K:treble]FAdAFD=CB,A, | ^G,B,D=FBdBFED^CB, | A,D^FAdfe^cAGFE | %15
+ D[K:bass]A,F,D,A,,F,,D,,F,,A,, D,3 ::$ D,E,F,G,A,B,=CD,C-CB,A, | G,A,B,[K:treble]CDE=FG,F-FED | %18
+ C2->C2EGcBAG^FE |$[K:bass] ^D^CB,A,G,F,E,^D,^C,B,,=C,A,, | G,,2->G,,2B,,E,G,B,^DE2G,, | %21
+ A,,2->A,,2C,=F,A,C^DE2^A,, |$ B,,2->B,,2^C,^D,E,F,G,A,G,F, | G,E,G,B,E^DEGEB,G,B, | %24
+ C,3-C,2[K:treble]EAGFEDC |$ B,3B,2AGFEDCB, | A,2->A,2B,CDEFGFE | D2->D2EFGABcBA |$ %28
+ G2->G2ABcde=fed | c2->c2ecAECA,CE | AcAFDA,[K:bass]F,D,F,A,CF, | G,B,D[K:treble]GBdgdB G3 :| %32

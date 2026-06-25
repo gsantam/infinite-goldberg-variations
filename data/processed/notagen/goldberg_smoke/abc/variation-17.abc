@@ -1,0 +1,37 @@
+%Baroque
+%Bach, Johann Sebastian
+%Keyboard
+X:1
+T:goldberg-variations.mxl
+C:Music21
+%%score 1 2
+L:1/16
+Q:1/4=112
+M:3/4
+K:G
+V:1 treble nm="Piano" snm="Pno"
+V:2 bass nm="Piano" snm="Pno"
+V:1
+"^𝅘𝅥 = 112" Bdfa g2>c2 BAGB | A^ceg f2>B2 AGFA | GBdf e2>A2 GFEG |$ FEFE FAd^c dfa=c | %4
+ BgAf Ge=Fd EcDB | cEBD ACGB, ^FA,EG, |$[K:bass] A,FG,E F,DE,C D,B,C,A, | %7
+ B,,A,,B,,A,, B,,D,G,F, G,2 z2 |[K:treble] dbca BgAf GeFd | Ed^cB cea2 Ma2 z2 |$ %10
+[K:treble] BgAf GeFd E^cDB | ^CBA^G A^ce2 Me4- | ede^c dB=cA BGAF |$ GeFd E^c{/d}(cB){/c} BABg | %14
+ g3f/e/ fdBG AFGe | FEFE FAd^c d2 z2 ::$[K:treble] afge fde=c dBcA | BGAF GEF^D EC=DB, | %18
+[K:bass] CA,B,^G, A,F,=G,E, =F,^D,E,^C, |$[K:bass] ^D,^C,D,C, D,4- D,F,B,A, | %20
+[K:treble] G,B,A,C B,^D^CE DFEG | FAGB AcBd ce^df |$[K:treble] egfa gba=c' bgaf | %23
+ gef^d ecBA GFE2- | EeBd cBAc Bdce |$ dBAc BA^GB AcBd | cA=GB Afge fdec' | %27
+ c'2-c'/b/a/g/ fgaf{/e} d4- |$ dBcA BgA=f Ge=Fd | E2 z/ G/A/B/ cABG A^FGE | %30
+ Fed2- d/e/f/g/f/e/d/c/ BgAf | GFGF GBdf g2 z2 :| %32
+V:2
+ G,,B,,A,,C, B,,D,C,E, D,F,E,G, | F,A,G,B, A,[K:treble]^CB,D CEDF | EGFA GBA^c Bdce |$ d^cdc d8- | %4
+ dBcA BGA=F GEFD |[K:bass] ECDB, CA,B,G, A,^F,G,E, |$ F,D,E,C, D,B,,C,A,, B,,G,,A,,F,, | %7
+ G,,F,,G,,F,, G,,4- G,,D,G,F, |[K:treble] G,B,DF G2>A2 B^cdB | ^cBAG FE^D^C[K:bass] B,A,G,F, |$ %10
+[K:bass] E,G,B,^D[K:treble] E2>F2 GABG | AD^CB, CEAB ^cegB | AfGe FdE=c DBCA |$ %13
+[K:bass] B,GA,F G,EF,D E,^CD,B, | ^C,A,B,,G, A,,F,G,,E, F,,D,E,,C, | %15
+ D,^C,D,C, D,A,,F,,A,, D,,2 z2 ::$[K:bass] D,,F,,A,,^C, D,2>E,2 F,G,A,F, | %17
+ G,B,,C,D, G,,2>F,2 G,A,B,^G, | A,C,D,E, A,,2>^G,2 A,B,C^A, |$ %19
+[K:bass] B,^A,B,A, B,F,G,=A, B,,2[K:treble]!turn!^D2 | EGFA GFEG F^DE^C | %21
+[K:bass] ^D^CB,=D =CA,B,^G, A,=G,F,A, |$[K:bass] G,E,F,^D, E,D,^C,E, D,E,F,D, | %23
+ E,G,,A,,B,, E,,F,,G,,A,, B,,C,D,B,, | C,E,D,=F, E,G,^F,A, ^G,B,A,C |$ %25
+[K:treble] B,DCE D=FE^G ^FAGB | AcBd cABG AFGE | FDE^C DB=CA B,GA,F |$ B,2 z/ D/E/F/ GE=FD ECDB, | %29
+[K:bass] G,E,=F,D, E,CD,B, C,A,B,,G, | A,,G,F,C, B,,D,G,B, DB,CA, | B,A,B,A, B,G,D,B,, G,,2 z2 :| %32
