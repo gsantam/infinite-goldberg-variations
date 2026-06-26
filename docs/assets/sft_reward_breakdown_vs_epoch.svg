@@ -1,264 +1,240 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="940" height="860" viewBox="0 0 940 860" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="940" height="700" viewBox="0 0 940 700" role="img" aria-labelledby="title desc">
 <title id="title">Reward component means from metadata-only baseline through SFT epochs</title>
-<desc id="desc">Two-panel line chart showing normalized structural and harmonic reward components and a validated-bar panel. Epoch zero is the base model with metadata-only prompting.</desc>
+<desc id="desc">Two-panel line chart showing normalized structural and harmonic reward components. Epoch zero is the base model with metadata-only prompting.</desc>
 <rect width="100%" height="100%" fill="#ffffff"/>
 <text x="74" y="28" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="700" fill="#20242c">Reward components during SFT</text>
 <text x="74" y="50" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470">Means over 10 generated samples per epoch. Corrected stream-tag/bar validator; epoch 0 is the base model.</text>
-<text x="74" y="76" font-family="Arial, Helvetica, sans-serif" font-size="15" font-weight="700" fill="#20242c">Validated musical bars</text>
-<line x1="74" y1="268.00" x2="666" y2="268.00" stroke="#d9dee7" stroke-width="1"/>
-<text x="62" y="272.00" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="end">0</text>
-<line x1="74" y1="224.00" x2="666" y2="224.00" stroke="#d9dee7" stroke-width="1"/>
-<text x="62" y="228.00" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="end">8</text>
-<line x1="74" y1="180.00" x2="666" y2="180.00" stroke="#d9dee7" stroke-width="1"/>
-<text x="62" y="184.00" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="end">16</text>
-<line x1="74" y1="136.00" x2="666" y2="136.00" stroke="#d9dee7" stroke-width="1"/>
-<text x="62" y="140.00" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="end">24</text>
-<line x1="74" y1="92.00" x2="666" y2="92.00" stroke="#d9dee7" stroke-width="1"/>
-<text x="62" y="96.00" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="end">32</text>
-<line x1="74.00" y1="92" x2="74.00" y2="268" stroke="#d9dee7" stroke-width="1" opacity="0.45"/>
-<line x1="133.20" y1="92" x2="133.20" y2="268" stroke="#d9dee7" stroke-width="1" opacity="0.45"/>
-<line x1="192.40" y1="92" x2="192.40" y2="268" stroke="#d9dee7" stroke-width="1" opacity="0.45"/>
-<line x1="251.60" y1="92" x2="251.60" y2="268" stroke="#d9dee7" stroke-width="1" opacity="0.45"/>
-<line x1="310.80" y1="92" x2="310.80" y2="268" stroke="#d9dee7" stroke-width="1" opacity="0.45"/>
-<line x1="370.00" y1="92" x2="370.00" y2="268" stroke="#d9dee7" stroke-width="1" opacity="0.45"/>
-<line x1="429.20" y1="92" x2="429.20" y2="268" stroke="#d9dee7" stroke-width="1" opacity="0.45"/>
-<line x1="488.40" y1="92" x2="488.40" y2="268" stroke="#d9dee7" stroke-width="1" opacity="0.45"/>
-<line x1="547.60" y1="92" x2="547.60" y2="268" stroke="#d9dee7" stroke-width="1" opacity="0.45"/>
-<line x1="606.80" y1="92" x2="606.80" y2="268" stroke="#d9dee7" stroke-width="1" opacity="0.45"/>
-<line x1="666.00" y1="92" x2="666.00" y2="268" stroke="#d9dee7" stroke-width="1" opacity="0.45"/>
-<line x1="74" y1="268" x2="666" y2="268" stroke="#252a33" stroke-width="1.4"/>
-<line x1="74" y1="92" x2="74" y2="268" stroke="#252a33" stroke-width="1.4"/>
-<line x1="74.00" y1="92" x2="74.00" y2="268" stroke="#111827" stroke-dasharray="4 4" opacity="0.45"/>
-<polyline fill="none" stroke="#111827" stroke-width="3.0" stroke-linejoin="round" stroke-linecap="round" points="74.00,193.20 133.20,240.50 192.40,250.95 251.60,196.50 310.80,189.35 370.00,204.75 429.20,183.30 488.40,207.50 547.60,215.20 606.80,198.70 666.00,203.65"/>
-<circle cx="74.00" cy="193.20" r="3.8" fill="#ffffff" stroke="#111827" stroke-width="1.8"><title>validated bars epoch 0: 13.60 / 32</title></circle>
-<circle cx="133.20" cy="240.50" r="3.8" fill="#ffffff" stroke="#111827" stroke-width="1.8"><title>validated bars epoch 1: 5.00 / 32</title></circle>
-<circle cx="192.40" cy="250.95" r="3.8" fill="#ffffff" stroke="#111827" stroke-width="1.8"><title>validated bars epoch 2: 3.10 / 32</title></circle>
-<circle cx="251.60" cy="196.50" r="3.8" fill="#ffffff" stroke="#111827" stroke-width="1.8"><title>validated bars epoch 3: 13.00 / 32</title></circle>
-<circle cx="310.80" cy="189.35" r="3.8" fill="#ffffff" stroke="#111827" stroke-width="1.8"><title>validated bars epoch 4: 14.30 / 32</title></circle>
-<circle cx="370.00" cy="204.75" r="3.8" fill="#ffffff" stroke="#111827" stroke-width="1.8"><title>validated bars epoch 5: 11.50 / 32</title></circle>
-<circle cx="429.20" cy="183.30" r="3.8" fill="#ffffff" stroke="#111827" stroke-width="1.8"><title>validated bars epoch 6: 15.40 / 32</title></circle>
-<circle cx="488.40" cy="207.50" r="3.8" fill="#ffffff" stroke="#111827" stroke-width="1.8"><title>validated bars epoch 7: 11.00 / 32</title></circle>
-<circle cx="547.60" cy="215.20" r="3.8" fill="#ffffff" stroke="#111827" stroke-width="1.8"><title>validated bars epoch 8: 9.60 / 32</title></circle>
-<circle cx="606.80" cy="198.70" r="3.8" fill="#ffffff" stroke="#111827" stroke-width="1.8"><title>validated bars epoch 9: 12.60 / 32</title></circle>
-<circle cx="666.00" cy="203.65" r="3.8" fill="#ffffff" stroke="#111827" stroke-width="1.8"><title>validated bars epoch 10: 11.70 / 32</title></circle>
-<text x="437.20" y="173.30" font-family="Arial, Helvetica, sans-serif" font-size="12" font-weight="700" fill="#111827">best SFT: epoch 6, 15.4 bars</text>
-<text x="74" y="320" font-family="Arial, Helvetica, sans-serif" font-size="15" font-weight="700" fill="#20242c">Structure and format rewards</text>
-<line x1="74" y1="512.00" x2="666" y2="512.00" stroke="#d9dee7" stroke-width="1"/>
-<text x="62" y="516.00" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="end">0</text>
-<line x1="74" y1="468.00" x2="666" y2="468.00" stroke="#d9dee7" stroke-width="1"/>
-<text x="62" y="472.00" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="end">0.25</text>
-<line x1="74" y1="424.00" x2="666" y2="424.00" stroke="#d9dee7" stroke-width="1"/>
-<text x="62" y="428.00" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="end">0.5</text>
-<line x1="74" y1="380.00" x2="666" y2="380.00" stroke="#d9dee7" stroke-width="1"/>
-<text x="62" y="384.00" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="end">0.75</text>
-<line x1="74" y1="336.00" x2="666" y2="336.00" stroke="#d9dee7" stroke-width="1"/>
-<text x="62" y="340.00" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="end">1</text>
-<line x1="74.00" y1="336" x2="74.00" y2="512" stroke="#d9dee7" stroke-width="1" opacity="0.45"/>
-<line x1="133.20" y1="336" x2="133.20" y2="512" stroke="#d9dee7" stroke-width="1" opacity="0.45"/>
-<line x1="192.40" y1="336" x2="192.40" y2="512" stroke="#d9dee7" stroke-width="1" opacity="0.45"/>
-<line x1="251.60" y1="336" x2="251.60" y2="512" stroke="#d9dee7" stroke-width="1" opacity="0.45"/>
-<line x1="310.80" y1="336" x2="310.80" y2="512" stroke="#d9dee7" stroke-width="1" opacity="0.45"/>
-<line x1="370.00" y1="336" x2="370.00" y2="512" stroke="#d9dee7" stroke-width="1" opacity="0.45"/>
-<line x1="429.20" y1="336" x2="429.20" y2="512" stroke="#d9dee7" stroke-width="1" opacity="0.45"/>
-<line x1="488.40" y1="336" x2="488.40" y2="512" stroke="#d9dee7" stroke-width="1" opacity="0.45"/>
-<line x1="547.60" y1="336" x2="547.60" y2="512" stroke="#d9dee7" stroke-width="1" opacity="0.45"/>
-<line x1="606.80" y1="336" x2="606.80" y2="512" stroke="#d9dee7" stroke-width="1" opacity="0.45"/>
-<line x1="666.00" y1="336" x2="666.00" y2="512" stroke="#d9dee7" stroke-width="1" opacity="0.45"/>
-<line x1="74" y1="512" x2="666" y2="512" stroke="#252a33" stroke-width="1.4"/>
-<line x1="74" y1="336" x2="74" y2="512" stroke="#252a33" stroke-width="1.4"/>
-<line x1="74.00" y1="336" x2="74.00" y2="512" stroke="#111827" stroke-dasharray="4 4" opacity="0.45"/>
-<polyline fill="none" stroke="#4e79a7" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" points="74.00,336.00 133.20,336.00 192.40,336.00 251.60,371.20 310.80,353.60 370.00,336.00 429.20,336.00 488.40,353.60 547.60,336.00 606.80,353.60 666.00,336.00"/>
-<circle cx="74.00" cy="336.00" r="3.2" fill="#ffffff" stroke="#4e79a7" stroke-width="1.6"><title>parse: valid ABC epoch 0: 1.000</title></circle>
-<circle cx="133.20" cy="336.00" r="3.2" fill="#ffffff" stroke="#4e79a7" stroke-width="1.6"><title>parse: valid ABC epoch 1: 1.000</title></circle>
-<circle cx="192.40" cy="336.00" r="3.2" fill="#ffffff" stroke="#4e79a7" stroke-width="1.6"><title>parse: valid ABC epoch 2: 1.000</title></circle>
-<circle cx="251.60" cy="371.20" r="3.2" fill="#ffffff" stroke="#4e79a7" stroke-width="1.6"><title>parse: valid ABC epoch 3: 0.800</title></circle>
-<circle cx="310.80" cy="353.60" r="3.2" fill="#ffffff" stroke="#4e79a7" stroke-width="1.6"><title>parse: valid ABC epoch 4: 0.900</title></circle>
-<circle cx="370.00" cy="336.00" r="3.2" fill="#ffffff" stroke="#4e79a7" stroke-width="1.6"><title>parse: valid ABC epoch 5: 1.000</title></circle>
-<circle cx="429.20" cy="336.00" r="3.2" fill="#ffffff" stroke="#4e79a7" stroke-width="1.6"><title>parse: valid ABC epoch 6: 1.000</title></circle>
-<circle cx="488.40" cy="353.60" r="3.2" fill="#ffffff" stroke="#4e79a7" stroke-width="1.6"><title>parse: valid ABC epoch 7: 0.900</title></circle>
-<circle cx="547.60" cy="336.00" r="3.2" fill="#ffffff" stroke="#4e79a7" stroke-width="1.6"><title>parse: valid ABC epoch 8: 1.000</title></circle>
-<circle cx="606.80" cy="353.60" r="3.2" fill="#ffffff" stroke="#4e79a7" stroke-width="1.6"><title>parse: valid ABC epoch 9: 0.900</title></circle>
-<circle cx="666.00" cy="336.00" r="3.2" fill="#ffffff" stroke="#4e79a7" stroke-width="1.6"><title>parse: valid ABC epoch 10: 1.000</title></circle>
-<polyline fill="none" stroke="#59a14f" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" points="74.00,336.00 133.20,340.27 192.40,336.00 251.60,336.00 310.80,336.00 370.00,336.00 429.20,336.00 488.40,336.00 547.60,336.00 606.80,336.00 666.00,336.00"/>
-<circle cx="74.00" cy="336.00" r="3.2" fill="#ffffff" stroke="#59a14f" stroke-width="1.6"><title>stream tags: consistent epoch 0: 1.000</title></circle>
-<circle cx="133.20" cy="340.27" r="3.2" fill="#ffffff" stroke="#59a14f" stroke-width="1.6"><title>stream tags: consistent epoch 1: 0.976</title></circle>
-<circle cx="192.40" cy="336.00" r="3.2" fill="#ffffff" stroke="#59a14f" stroke-width="1.6"><title>stream tags: consistent epoch 2: 1.000</title></circle>
-<circle cx="251.60" cy="336.00" r="3.2" fill="#ffffff" stroke="#59a14f" stroke-width="1.6"><title>stream tags: consistent epoch 3: 1.000</title></circle>
-<circle cx="310.80" cy="336.00" r="3.2" fill="#ffffff" stroke="#59a14f" stroke-width="1.6"><title>stream tags: consistent epoch 4: 1.000</title></circle>
-<circle cx="370.00" cy="336.00" r="3.2" fill="#ffffff" stroke="#59a14f" stroke-width="1.6"><title>stream tags: consistent epoch 5: 1.000</title></circle>
-<circle cx="429.20" cy="336.00" r="3.2" fill="#ffffff" stroke="#59a14f" stroke-width="1.6"><title>stream tags: consistent epoch 6: 1.000</title></circle>
-<circle cx="488.40" cy="336.00" r="3.2" fill="#ffffff" stroke="#59a14f" stroke-width="1.6"><title>stream tags: consistent epoch 7: 1.000</title></circle>
-<circle cx="547.60" cy="336.00" r="3.2" fill="#ffffff" stroke="#59a14f" stroke-width="1.6"><title>stream tags: consistent epoch 8: 1.000</title></circle>
-<circle cx="606.80" cy="336.00" r="3.2" fill="#ffffff" stroke="#59a14f" stroke-width="1.6"><title>stream tags: consistent epoch 9: 1.000</title></circle>
-<circle cx="666.00" cy="336.00" r="3.2" fill="#ffffff" stroke="#59a14f" stroke-width="1.6"><title>stream tags: consistent epoch 10: 1.000</title></circle>
-<polyline fill="none" stroke="#9c755f" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" points="74.00,345.35 133.20,351.95 192.40,351.40 251.60,348.65 310.80,345.35 370.00,342.05 429.20,344.80 488.40,341.50 547.60,343.70 606.80,342.05 666.00,343.15"/>
-<circle cx="74.00" cy="345.35" r="3.2" fill="#ffffff" stroke="#9c755f" stroke-width="1.6"><title>line closure: closed bars epoch 0: 0.947</title></circle>
-<circle cx="133.20" cy="351.95" r="3.2" fill="#ffffff" stroke="#9c755f" stroke-width="1.6"><title>line closure: closed bars epoch 1: 0.909</title></circle>
-<circle cx="192.40" cy="351.40" r="3.2" fill="#ffffff" stroke="#9c755f" stroke-width="1.6"><title>line closure: closed bars epoch 2: 0.912</title></circle>
-<circle cx="251.60" cy="348.65" r="3.2" fill="#ffffff" stroke="#9c755f" stroke-width="1.6"><title>line closure: closed bars epoch 3: 0.928</title></circle>
-<circle cx="310.80" cy="345.35" r="3.2" fill="#ffffff" stroke="#9c755f" stroke-width="1.6"><title>line closure: closed bars epoch 4: 0.947</title></circle>
-<circle cx="370.00" cy="342.05" r="3.2" fill="#ffffff" stroke="#9c755f" stroke-width="1.6"><title>line closure: closed bars epoch 5: 0.966</title></circle>
-<circle cx="429.20" cy="344.80" r="3.2" fill="#ffffff" stroke="#9c755f" stroke-width="1.6"><title>line closure: closed bars epoch 6: 0.950</title></circle>
-<circle cx="488.40" cy="341.50" r="3.2" fill="#ffffff" stroke="#9c755f" stroke-width="1.6"><title>line closure: closed bars epoch 7: 0.969</title></circle>
-<circle cx="547.60" cy="343.70" r="3.2" fill="#ffffff" stroke="#9c755f" stroke-width="1.6"><title>line closure: closed bars epoch 8: 0.956</title></circle>
-<circle cx="606.80" cy="342.05" r="3.2" fill="#ffffff" stroke="#9c755f" stroke-width="1.6"><title>line closure: closed bars epoch 9: 0.966</title></circle>
-<circle cx="666.00" cy="343.15" r="3.2" fill="#ffffff" stroke="#9c755f" stroke-width="1.6"><title>line closure: closed bars epoch 10: 0.959</title></circle>
-<polyline fill="none" stroke="#f28e2b" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" points="74.00,345.35 133.20,338.20 192.40,340.40 251.60,340.95 310.80,342.05 370.00,340.40 429.20,340.95 488.40,340.95 547.60,340.95 606.80,341.50 666.00,340.95"/>
-<circle cx="74.00" cy="345.35" r="3.2" fill="#ffffff" stroke="#f28e2b" stroke-width="1.6"><title>bar token: emits | epoch 0: 0.947</title></circle>
-<circle cx="133.20" cy="338.20" r="3.2" fill="#ffffff" stroke="#f28e2b" stroke-width="1.6"><title>bar token: emits | epoch 1: 0.988</title></circle>
-<circle cx="192.40" cy="340.40" r="3.2" fill="#ffffff" stroke="#f28e2b" stroke-width="1.6"><title>bar token: emits | epoch 2: 0.975</title></circle>
-<circle cx="251.60" cy="340.95" r="3.2" fill="#ffffff" stroke="#f28e2b" stroke-width="1.6"><title>bar token: emits | epoch 3: 0.972</title></circle>
-<circle cx="310.80" cy="342.05" r="3.2" fill="#ffffff" stroke="#f28e2b" stroke-width="1.6"><title>bar token: emits | epoch 4: 0.966</title></circle>
-<circle cx="370.00" cy="340.40" r="3.2" fill="#ffffff" stroke="#f28e2b" stroke-width="1.6"><title>bar token: emits | epoch 5: 0.975</title></circle>
-<circle cx="429.20" cy="340.95" r="3.2" fill="#ffffff" stroke="#f28e2b" stroke-width="1.6"><title>bar token: emits | epoch 6: 0.972</title></circle>
-<circle cx="488.40" cy="340.95" r="3.2" fill="#ffffff" stroke="#f28e2b" stroke-width="1.6"><title>bar token: emits | epoch 7: 0.972</title></circle>
-<circle cx="547.60" cy="340.95" r="3.2" fill="#ffffff" stroke="#f28e2b" stroke-width="1.6"><title>bar token: emits | epoch 8: 0.972</title></circle>
-<circle cx="606.80" cy="341.50" r="3.2" fill="#ffffff" stroke="#f28e2b" stroke-width="1.6"><title>bar token: emits | epoch 9: 0.969</title></circle>
-<circle cx="666.00" cy="340.95" r="3.2" fill="#ffffff" stroke="#f28e2b" stroke-width="1.6"><title>bar token: emits | epoch 10: 0.972</title></circle>
-<polyline fill="none" stroke="#e15759" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" points="74.00,433.58 133.20,491.20 192.40,505.85 251.60,464.64 310.80,475.51 370.00,485.31 429.20,461.10 488.40,482.69 547.60,482.63 606.80,471.39 666.00,479.49"/>
-<circle cx="74.00" cy="433.58" r="3.2" fill="#ffffff" stroke="#e15759" stroke-width="1.6"><title>meter alignment: fits meter epoch 0: 0.446</title></circle>
-<circle cx="133.20" cy="491.20" r="3.2" fill="#ffffff" stroke="#e15759" stroke-width="1.6"><title>meter alignment: fits meter epoch 1: 0.118</title></circle>
-<circle cx="192.40" cy="505.85" r="3.2" fill="#ffffff" stroke="#e15759" stroke-width="1.6"><title>meter alignment: fits meter epoch 2: 0.035</title></circle>
-<circle cx="251.60" cy="464.64" r="3.2" fill="#ffffff" stroke="#e15759" stroke-width="1.6"><title>meter alignment: fits meter epoch 3: 0.269</title></circle>
-<circle cx="310.80" cy="475.51" r="3.2" fill="#ffffff" stroke="#e15759" stroke-width="1.6"><title>meter alignment: fits meter epoch 4: 0.207</title></circle>
-<circle cx="370.00" cy="485.31" r="3.2" fill="#ffffff" stroke="#e15759" stroke-width="1.6"><title>meter alignment: fits meter epoch 5: 0.152</title></circle>
-<circle cx="429.20" cy="461.10" r="3.2" fill="#ffffff" stroke="#e15759" stroke-width="1.6"><title>meter alignment: fits meter epoch 6: 0.289</title></circle>
-<circle cx="488.40" cy="482.69" r="3.2" fill="#ffffff" stroke="#e15759" stroke-width="1.6"><title>meter alignment: fits meter epoch 7: 0.167</title></circle>
-<circle cx="547.60" cy="482.63" r="3.2" fill="#ffffff" stroke="#e15759" stroke-width="1.6"><title>meter alignment: fits meter epoch 8: 0.167</title></circle>
-<circle cx="606.80" cy="471.39" r="3.2" fill="#ffffff" stroke="#e15759" stroke-width="1.6"><title>meter alignment: fits meter epoch 9: 0.231</title></circle>
-<circle cx="666.00" cy="479.49" r="3.2" fill="#ffffff" stroke="#e15759" stroke-width="1.6"><title>meter alignment: fits meter epoch 10: 0.185</title></circle>
-<polyline fill="none" stroke="#b07aa1" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" points="74.00,369.30 133.20,447.45 192.40,456.14 251.60,428.58 310.80,435.63 370.00,436.45 429.20,408.74 488.40,430.70 547.60,423.60 606.80,431.00 666.00,433.13"/>
-<circle cx="74.00" cy="369.30" r="3.2" fill="#ffffff" stroke="#b07aa1" stroke-width="1.6"><title>meter duration: close to meter epoch 0: 0.811</title></circle>
-<circle cx="133.20" cy="447.45" r="3.2" fill="#ffffff" stroke="#b07aa1" stroke-width="1.6"><title>meter duration: close to meter epoch 1: 0.367</title></circle>
-<circle cx="192.40" cy="456.14" r="3.2" fill="#ffffff" stroke="#b07aa1" stroke-width="1.6"><title>meter duration: close to meter epoch 2: 0.317</title></circle>
-<circle cx="251.60" cy="428.58" r="3.2" fill="#ffffff" stroke="#b07aa1" stroke-width="1.6"><title>meter duration: close to meter epoch 3: 0.474</title></circle>
-<circle cx="310.80" cy="435.63" r="3.2" fill="#ffffff" stroke="#b07aa1" stroke-width="1.6"><title>meter duration: close to meter epoch 4: 0.434</title></circle>
-<circle cx="370.00" cy="436.45" r="3.2" fill="#ffffff" stroke="#b07aa1" stroke-width="1.6"><title>meter duration: close to meter epoch 5: 0.429</title></circle>
-<circle cx="429.20" cy="408.74" r="3.2" fill="#ffffff" stroke="#b07aa1" stroke-width="1.6"><title>meter duration: close to meter epoch 6: 0.587</title></circle>
-<circle cx="488.40" cy="430.70" r="3.2" fill="#ffffff" stroke="#b07aa1" stroke-width="1.6"><title>meter duration: close to meter epoch 7: 0.462</title></circle>
-<circle cx="547.60" cy="423.60" r="3.2" fill="#ffffff" stroke="#b07aa1" stroke-width="1.6"><title>meter duration: close to meter epoch 8: 0.502</title></circle>
-<circle cx="606.80" cy="431.00" r="3.2" fill="#ffffff" stroke="#b07aa1" stroke-width="1.6"><title>meter duration: close to meter epoch 9: 0.460</title></circle>
-<circle cx="666.00" cy="433.13" r="3.2" fill="#ffffff" stroke="#b07aa1" stroke-width="1.6"><title>meter duration: close to meter epoch 10: 0.448</title></circle>
-<polyline fill="none" stroke="#edc948" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" points="74.00,437.20 133.20,484.50 192.40,494.95 251.60,440.50 310.80,433.35 370.00,448.75 429.20,427.30 488.40,451.50 547.60,459.20 606.80,442.70 666.00,447.65"/>
-<circle cx="74.00" cy="437.20" r="3.2" fill="#ffffff" stroke="#edc948" stroke-width="1.6"><title>bar count: close to 32 epoch 0: 0.425</title></circle>
-<circle cx="133.20" cy="484.50" r="3.2" fill="#ffffff" stroke="#edc948" stroke-width="1.6"><title>bar count: close to 32 epoch 1: 0.156</title></circle>
-<circle cx="192.40" cy="494.95" r="3.2" fill="#ffffff" stroke="#edc948" stroke-width="1.6"><title>bar count: close to 32 epoch 2: 0.097</title></circle>
-<circle cx="251.60" cy="440.50" r="3.2" fill="#ffffff" stroke="#edc948" stroke-width="1.6"><title>bar count: close to 32 epoch 3: 0.406</title></circle>
-<circle cx="310.80" cy="433.35" r="3.2" fill="#ffffff" stroke="#edc948" stroke-width="1.6"><title>bar count: close to 32 epoch 4: 0.447</title></circle>
-<circle cx="370.00" cy="448.75" r="3.2" fill="#ffffff" stroke="#edc948" stroke-width="1.6"><title>bar count: close to 32 epoch 5: 0.359</title></circle>
-<circle cx="429.20" cy="427.30" r="3.2" fill="#ffffff" stroke="#edc948" stroke-width="1.6"><title>bar count: close to 32 epoch 6: 0.481</title></circle>
-<circle cx="488.40" cy="451.50" r="3.2" fill="#ffffff" stroke="#edc948" stroke-width="1.6"><title>bar count: close to 32 epoch 7: 0.344</title></circle>
-<circle cx="547.60" cy="459.20" r="3.2" fill="#ffffff" stroke="#edc948" stroke-width="1.6"><title>bar count: close to 32 epoch 8: 0.300</title></circle>
-<circle cx="606.80" cy="442.70" r="3.2" fill="#ffffff" stroke="#edc948" stroke-width="1.6"><title>bar count: close to 32 epoch 9: 0.394</title></circle>
-<circle cx="666.00" cy="447.65" r="3.2" fill="#ffffff" stroke="#edc948" stroke-width="1.6"><title>bar count: close to 32 epoch 10: 0.366</title></circle>
-<text x="74" y="564" font-family="Arial, Helvetica, sans-serif" font-size="15" font-weight="700" fill="#20242c">Harmony rewards</text>
-<line x1="74" y1="756.00" x2="666" y2="756.00" stroke="#d9dee7" stroke-width="1"/>
-<text x="62" y="760.00" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="end">0</text>
-<line x1="74" y1="712.00" x2="666" y2="712.00" stroke="#d9dee7" stroke-width="1"/>
-<text x="62" y="716.00" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="end">0.25</text>
-<line x1="74" y1="668.00" x2="666" y2="668.00" stroke="#d9dee7" stroke-width="1"/>
-<text x="62" y="672.00" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="end">0.5</text>
-<line x1="74" y1="624.00" x2="666" y2="624.00" stroke="#d9dee7" stroke-width="1"/>
-<text x="62" y="628.00" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="end">0.75</text>
-<line x1="74" y1="580.00" x2="666" y2="580.00" stroke="#d9dee7" stroke-width="1"/>
-<text x="62" y="584.00" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="end">1</text>
-<line x1="74.00" y1="580" x2="74.00" y2="756" stroke="#d9dee7" stroke-width="1" opacity="0.45"/>
-<line x1="133.20" y1="580" x2="133.20" y2="756" stroke="#d9dee7" stroke-width="1" opacity="0.45"/>
-<line x1="192.40" y1="580" x2="192.40" y2="756" stroke="#d9dee7" stroke-width="1" opacity="0.45"/>
-<line x1="251.60" y1="580" x2="251.60" y2="756" stroke="#d9dee7" stroke-width="1" opacity="0.45"/>
-<line x1="310.80" y1="580" x2="310.80" y2="756" stroke="#d9dee7" stroke-width="1" opacity="0.45"/>
-<line x1="370.00" y1="580" x2="370.00" y2="756" stroke="#d9dee7" stroke-width="1" opacity="0.45"/>
-<line x1="429.20" y1="580" x2="429.20" y2="756" stroke="#d9dee7" stroke-width="1" opacity="0.45"/>
-<line x1="488.40" y1="580" x2="488.40" y2="756" stroke="#d9dee7" stroke-width="1" opacity="0.45"/>
-<line x1="547.60" y1="580" x2="547.60" y2="756" stroke="#d9dee7" stroke-width="1" opacity="0.45"/>
-<line x1="606.80" y1="580" x2="606.80" y2="756" stroke="#d9dee7" stroke-width="1" opacity="0.45"/>
-<line x1="666.00" y1="580" x2="666.00" y2="756" stroke="#d9dee7" stroke-width="1" opacity="0.45"/>
-<line x1="74" y1="756" x2="666" y2="756" stroke="#252a33" stroke-width="1.4"/>
-<line x1="74" y1="580" x2="74" y2="756" stroke="#252a33" stroke-width="1.4"/>
-<line x1="74.00" y1="580" x2="74.00" y2="756" stroke="#111827" stroke-dasharray="4 4" opacity="0.45"/>
-<polyline fill="none" stroke="#76b7b2" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" points="74.00,735.63 133.20,730.70 192.40,737.25 251.60,732.57 310.80,736.75 370.00,732.90 429.20,730.70 488.40,727.95 547.60,732.90 606.80,734.00 666.00,731.25"/>
-<circle cx="74.00" cy="735.63" r="3.2" fill="#ffffff" stroke="#76b7b2" stroke-width="1.6"><title>root: chord roots vs Aria epoch 0: 0.116</title></circle>
-<circle cx="133.20" cy="730.70" r="3.2" fill="#ffffff" stroke="#76b7b2" stroke-width="1.6"><title>root: chord roots vs Aria epoch 1: 0.144</title></circle>
-<circle cx="192.40" cy="737.25" r="3.2" fill="#ffffff" stroke="#76b7b2" stroke-width="1.6"><title>root: chord roots vs Aria epoch 2: 0.107</title></circle>
-<circle cx="251.60" cy="732.57" r="3.2" fill="#ffffff" stroke="#76b7b2" stroke-width="1.6"><title>root: chord roots vs Aria epoch 3: 0.133</title></circle>
-<circle cx="310.80" cy="736.75" r="3.2" fill="#ffffff" stroke="#76b7b2" stroke-width="1.6"><title>root: chord roots vs Aria epoch 4: 0.109</title></circle>
-<circle cx="370.00" cy="732.90" r="3.2" fill="#ffffff" stroke="#76b7b2" stroke-width="1.6"><title>root: chord roots vs Aria epoch 5: 0.131</title></circle>
-<circle cx="429.20" cy="730.70" r="3.2" fill="#ffffff" stroke="#76b7b2" stroke-width="1.6"><title>root: chord roots vs Aria epoch 6: 0.144</title></circle>
-<circle cx="488.40" cy="727.95" r="3.2" fill="#ffffff" stroke="#76b7b2" stroke-width="1.6"><title>root: chord roots vs Aria epoch 7: 0.159</title></circle>
-<circle cx="547.60" cy="732.90" r="3.2" fill="#ffffff" stroke="#76b7b2" stroke-width="1.6"><title>root: chord roots vs Aria epoch 8: 0.131</title></circle>
-<circle cx="606.80" cy="734.00" r="3.2" fill="#ffffff" stroke="#76b7b2" stroke-width="1.6"><title>root: chord roots vs Aria epoch 9: 0.125</title></circle>
-<circle cx="666.00" cy="731.25" r="3.2" fill="#ffffff" stroke="#76b7b2" stroke-width="1.6"><title>root: chord roots vs Aria epoch 10: 0.141</title></circle>
-<polyline fill="none" stroke="#ff9da7" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" points="74.00,733.33 133.20,738.40 192.40,736.70 251.60,727.59 310.80,728.50 370.00,724.65 429.20,718.60 488.40,716.40 547.60,721.90 606.80,715.30 666.00,718.60"/>
-<circle cx="74.00" cy="733.33" r="3.2" fill="#ffffff" stroke="#ff9da7" stroke-width="1.6"><title>bass: pitch classes vs Aria epoch 0: 0.129</title></circle>
-<circle cx="133.20" cy="738.40" r="3.2" fill="#ffffff" stroke="#ff9da7" stroke-width="1.6"><title>bass: pitch classes vs Aria epoch 1: 0.100</title></circle>
-<circle cx="192.40" cy="736.70" r="3.2" fill="#ffffff" stroke="#ff9da7" stroke-width="1.6"><title>bass: pitch classes vs Aria epoch 2: 0.110</title></circle>
-<circle cx="251.60" cy="727.59" r="3.2" fill="#ffffff" stroke="#ff9da7" stroke-width="1.6"><title>bass: pitch classes vs Aria epoch 3: 0.161</title></circle>
-<circle cx="310.80" cy="728.50" r="3.2" fill="#ffffff" stroke="#ff9da7" stroke-width="1.6"><title>bass: pitch classes vs Aria epoch 4: 0.156</title></circle>
-<circle cx="370.00" cy="724.65" r="3.2" fill="#ffffff" stroke="#ff9da7" stroke-width="1.6"><title>bass: pitch classes vs Aria epoch 5: 0.178</title></circle>
-<circle cx="429.20" cy="718.60" r="3.2" fill="#ffffff" stroke="#ff9da7" stroke-width="1.6"><title>bass: pitch classes vs Aria epoch 6: 0.212</title></circle>
-<circle cx="488.40" cy="716.40" r="3.2" fill="#ffffff" stroke="#ff9da7" stroke-width="1.6"><title>bass: pitch classes vs Aria epoch 7: 0.225</title></circle>
-<circle cx="547.60" cy="721.90" r="3.2" fill="#ffffff" stroke="#ff9da7" stroke-width="1.6"><title>bass: pitch classes vs Aria epoch 8: 0.194</title></circle>
-<circle cx="606.80" cy="715.30" r="3.2" fill="#ffffff" stroke="#ff9da7" stroke-width="1.6"><title>bass: pitch classes vs Aria epoch 9: 0.231</title></circle>
-<circle cx="666.00" cy="718.60" r="3.2" fill="#ffffff" stroke="#ff9da7" stroke-width="1.6"><title>bass: pitch classes vs Aria epoch 10: 0.212</title></circle>
-<polyline fill="none" stroke="#af7aa1" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" points="74.00,747.20 133.20,751.60 192.40,747.20 251.60,741.33 310.80,747.20 370.00,747.20 429.20,734.00 488.40,725.20 547.60,738.40 606.80,738.40 666.00,738.40"/>
-<circle cx="74.00" cy="747.20" r="3.2" fill="#ffffff" stroke="#af7aa1" stroke-width="1.6"><title>cadence root: bars 8/16/24/32 epoch 0: 0.050</title></circle>
-<circle cx="133.20" cy="751.60" r="3.2" fill="#ffffff" stroke="#af7aa1" stroke-width="1.6"><title>cadence root: bars 8/16/24/32 epoch 1: 0.025</title></circle>
-<circle cx="192.40" cy="747.20" r="3.2" fill="#ffffff" stroke="#af7aa1" stroke-width="1.6"><title>cadence root: bars 8/16/24/32 epoch 2: 0.050</title></circle>
-<circle cx="251.60" cy="741.33" r="3.2" fill="#ffffff" stroke="#af7aa1" stroke-width="1.6"><title>cadence root: bars 8/16/24/32 epoch 3: 0.083</title></circle>
-<circle cx="310.80" cy="747.20" r="3.2" fill="#ffffff" stroke="#af7aa1" stroke-width="1.6"><title>cadence root: bars 8/16/24/32 epoch 4: 0.050</title></circle>
-<circle cx="370.00" cy="747.20" r="3.2" fill="#ffffff" stroke="#af7aa1" stroke-width="1.6"><title>cadence root: bars 8/16/24/32 epoch 5: 0.050</title></circle>
-<circle cx="429.20" cy="734.00" r="3.2" fill="#ffffff" stroke="#af7aa1" stroke-width="1.6"><title>cadence root: bars 8/16/24/32 epoch 6: 0.125</title></circle>
-<circle cx="488.40" cy="725.20" r="3.2" fill="#ffffff" stroke="#af7aa1" stroke-width="1.6"><title>cadence root: bars 8/16/24/32 epoch 7: 0.175</title></circle>
-<circle cx="547.60" cy="738.40" r="3.2" fill="#ffffff" stroke="#af7aa1" stroke-width="1.6"><title>cadence root: bars 8/16/24/32 epoch 8: 0.100</title></circle>
-<circle cx="606.80" cy="738.40" r="3.2" fill="#ffffff" stroke="#af7aa1" stroke-width="1.6"><title>cadence root: bars 8/16/24/32 epoch 9: 0.100</title></circle>
-<circle cx="666.00" cy="738.40" r="3.2" fill="#ffffff" stroke="#af7aa1" stroke-width="1.6"><title>cadence root: bars 8/16/24/32 epoch 10: 0.100</title></circle>
-<polyline fill="none" stroke="#8cd17d" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" points="74.00,725.20 133.20,725.20 192.40,738.40 251.60,710.53 310.80,690.00 370.00,703.20 429.20,690.00 488.40,685.60 547.60,685.60 606.80,707.60 666.00,681.20"/>
-<circle cx="74.00" cy="725.20" r="3.2" fill="#ffffff" stroke="#8cd17d" stroke-width="1.6"><title>cadence bass: bars 8/16/24/32 epoch 0: 0.175</title></circle>
-<circle cx="133.20" cy="725.20" r="3.2" fill="#ffffff" stroke="#8cd17d" stroke-width="1.6"><title>cadence bass: bars 8/16/24/32 epoch 1: 0.175</title></circle>
-<circle cx="192.40" cy="738.40" r="3.2" fill="#ffffff" stroke="#8cd17d" stroke-width="1.6"><title>cadence bass: bars 8/16/24/32 epoch 2: 0.100</title></circle>
-<circle cx="251.60" cy="710.53" r="3.2" fill="#ffffff" stroke="#8cd17d" stroke-width="1.6"><title>cadence bass: bars 8/16/24/32 epoch 3: 0.258</title></circle>
-<circle cx="310.80" cy="690.00" r="3.2" fill="#ffffff" stroke="#8cd17d" stroke-width="1.6"><title>cadence bass: bars 8/16/24/32 epoch 4: 0.375</title></circle>
-<circle cx="370.00" cy="703.20" r="3.2" fill="#ffffff" stroke="#8cd17d" stroke-width="1.6"><title>cadence bass: bars 8/16/24/32 epoch 5: 0.300</title></circle>
-<circle cx="429.20" cy="690.00" r="3.2" fill="#ffffff" stroke="#8cd17d" stroke-width="1.6"><title>cadence bass: bars 8/16/24/32 epoch 6: 0.375</title></circle>
-<circle cx="488.40" cy="685.60" r="3.2" fill="#ffffff" stroke="#8cd17d" stroke-width="1.6"><title>cadence bass: bars 8/16/24/32 epoch 7: 0.400</title></circle>
-<circle cx="547.60" cy="685.60" r="3.2" fill="#ffffff" stroke="#8cd17d" stroke-width="1.6"><title>cadence bass: bars 8/16/24/32 epoch 8: 0.400</title></circle>
-<circle cx="606.80" cy="707.60" r="3.2" fill="#ffffff" stroke="#8cd17d" stroke-width="1.6"><title>cadence bass: bars 8/16/24/32 epoch 9: 0.275</title></circle>
-<circle cx="666.00" cy="681.20" r="3.2" fill="#ffffff" stroke="#8cd17d" stroke-width="1.6"><title>cadence bass: bars 8/16/24/32 epoch 10: 0.425</title></circle>
-<text x="74.00" y="780" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="middle">0</text>
-<text x="133.20" y="780" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="middle">1</text>
-<text x="192.40" y="780" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="middle">2</text>
-<text x="251.60" y="780" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="middle">3</text>
-<text x="310.80" y="780" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="middle">4</text>
-<text x="370.00" y="780" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="middle">5</text>
-<text x="429.20" y="780" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="middle">6</text>
-<text x="488.40" y="780" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="middle">7</text>
-<text x="547.60" y="780" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="middle">8</text>
-<text x="606.80" y="780" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="middle">9</text>
-<text x="666.00" y="780" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="middle">10</text>
-<text x="370.00" y="842" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#20242c" text-anchor="middle">Epoch</text>
-<text x="18" y="546.00" transform="rotate(-90 18 546.00)" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#20242c" text-anchor="middle">Mean component reward / bars</text>
-<text x="82.00" y="746" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470">base</text>
-<text x="815" y="94" font-family="Arial, Helvetica, sans-serif" font-size="13" font-weight="700" fill="#20242c" text-anchor="middle">Components</text>
-<line x1="696" y1="114" x2="720" y2="114" stroke="#4e79a7" stroke-width="2.5" stroke-linecap="round"/>
-<text x="730" y="118" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#20242c">parse: valid ABC</text>
-<line x1="696" y1="136" x2="720" y2="136" stroke="#59a14f" stroke-width="2.5" stroke-linecap="round"/>
-<text x="730" y="140" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#20242c">stream tags: consistent</text>
-<line x1="696" y1="158" x2="720" y2="158" stroke="#9c755f" stroke-width="2.5" stroke-linecap="round"/>
-<text x="730" y="162" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#20242c">line closure: closed bars</text>
-<line x1="696" y1="180" x2="720" y2="180" stroke="#f28e2b" stroke-width="2.5" stroke-linecap="round"/>
-<text x="730" y="184" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#20242c">bar token: emits |</text>
-<line x1="696" y1="202" x2="720" y2="202" stroke="#e15759" stroke-width="2.5" stroke-linecap="round"/>
-<text x="730" y="206" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#20242c">meter alignment: fits meter</text>
-<line x1="696" y1="224" x2="720" y2="224" stroke="#b07aa1" stroke-width="2.5" stroke-linecap="round"/>
-<text x="730" y="228" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#20242c">meter duration: close to meter</text>
-<line x1="696" y1="246" x2="720" y2="246" stroke="#edc948" stroke-width="2.5" stroke-linecap="round"/>
-<text x="730" y="250" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#20242c">bar count: close to 32</text>
-<line x1="696" y1="268" x2="720" y2="268" stroke="#76b7b2" stroke-width="2.5" stroke-linecap="round"/>
-<text x="730" y="272" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#20242c">root: chord roots vs Aria</text>
-<line x1="696" y1="290" x2="720" y2="290" stroke="#ff9da7" stroke-width="2.5" stroke-linecap="round"/>
-<text x="730" y="294" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#20242c">bass: pitch classes vs Aria</text>
-<line x1="696" y1="312" x2="720" y2="312" stroke="#af7aa1" stroke-width="2.5" stroke-linecap="round"/>
-<text x="730" y="316" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#20242c">cadence root: bars 8/16/24/32</text>
-<line x1="696" y1="334" x2="720" y2="334" stroke="#8cd17d" stroke-width="2.5" stroke-linecap="round"/>
-<text x="730" y="338" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#20242c">cadence bass: bars 8/16/24/32</text>
+<text x="74" y="72" font-family="Arial, Helvetica, sans-serif" font-size="15" font-weight="700" fill="#20242c">Structure and format rewards</text>
+<line x1="74" y1="302.00" x2="666" y2="302.00" stroke="#d9dee7" stroke-width="1"/>
+<text x="62" y="306.00" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="end">0</text>
+<line x1="74" y1="248.50" x2="666" y2="248.50" stroke="#d9dee7" stroke-width="1"/>
+<text x="62" y="252.50" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="end">0.25</text>
+<line x1="74" y1="195.00" x2="666" y2="195.00" stroke="#d9dee7" stroke-width="1"/>
+<text x="62" y="199.00" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="end">0.5</text>
+<line x1="74" y1="141.50" x2="666" y2="141.50" stroke="#d9dee7" stroke-width="1"/>
+<text x="62" y="145.50" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="end">0.75</text>
+<line x1="74" y1="88.00" x2="666" y2="88.00" stroke="#d9dee7" stroke-width="1"/>
+<text x="62" y="92.00" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="end">1</text>
+<line x1="74.00" y1="88" x2="74.00" y2="302" stroke="#d9dee7" stroke-width="1" opacity="0.45"/>
+<line x1="133.20" y1="88" x2="133.20" y2="302" stroke="#d9dee7" stroke-width="1" opacity="0.45"/>
+<line x1="192.40" y1="88" x2="192.40" y2="302" stroke="#d9dee7" stroke-width="1" opacity="0.45"/>
+<line x1="251.60" y1="88" x2="251.60" y2="302" stroke="#d9dee7" stroke-width="1" opacity="0.45"/>
+<line x1="310.80" y1="88" x2="310.80" y2="302" stroke="#d9dee7" stroke-width="1" opacity="0.45"/>
+<line x1="370.00" y1="88" x2="370.00" y2="302" stroke="#d9dee7" stroke-width="1" opacity="0.45"/>
+<line x1="429.20" y1="88" x2="429.20" y2="302" stroke="#d9dee7" stroke-width="1" opacity="0.45"/>
+<line x1="488.40" y1="88" x2="488.40" y2="302" stroke="#d9dee7" stroke-width="1" opacity="0.45"/>
+<line x1="547.60" y1="88" x2="547.60" y2="302" stroke="#d9dee7" stroke-width="1" opacity="0.45"/>
+<line x1="606.80" y1="88" x2="606.80" y2="302" stroke="#d9dee7" stroke-width="1" opacity="0.45"/>
+<line x1="666.00" y1="88" x2="666.00" y2="302" stroke="#d9dee7" stroke-width="1" opacity="0.45"/>
+<line x1="74" y1="302" x2="666" y2="302" stroke="#252a33" stroke-width="1.4"/>
+<line x1="74" y1="88" x2="74" y2="302" stroke="#252a33" stroke-width="1.4"/>
+<line x1="74.00" y1="88" x2="74.00" y2="302" stroke="#111827" stroke-dasharray="4 4" opacity="0.45"/>
+<polyline fill="none" stroke="#111827" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" points="74.00,211.05 133.20,268.56 192.40,281.27 251.60,215.06 310.80,206.37 370.00,225.09 429.20,199.01 488.40,228.44 547.60,237.80 606.80,217.74 666.00,223.76"/>
+<circle cx="74.00" cy="211.05" r="3.2" fill="#ffffff" stroke="#111827" stroke-width="1.6"><title>validated bars / 32 epoch 0: 0.425</title></circle>
+<circle cx="133.20" cy="268.56" r="3.2" fill="#ffffff" stroke="#111827" stroke-width="1.6"><title>validated bars / 32 epoch 1: 0.156</title></circle>
+<circle cx="192.40" cy="281.27" r="3.2" fill="#ffffff" stroke="#111827" stroke-width="1.6"><title>validated bars / 32 epoch 2: 0.097</title></circle>
+<circle cx="251.60" cy="215.06" r="3.2" fill="#ffffff" stroke="#111827" stroke-width="1.6"><title>validated bars / 32 epoch 3: 0.406</title></circle>
+<circle cx="310.80" cy="206.37" r="3.2" fill="#ffffff" stroke="#111827" stroke-width="1.6"><title>validated bars / 32 epoch 4: 0.447</title></circle>
+<circle cx="370.00" cy="225.09" r="3.2" fill="#ffffff" stroke="#111827" stroke-width="1.6"><title>validated bars / 32 epoch 5: 0.359</title></circle>
+<circle cx="429.20" cy="199.01" r="3.2" fill="#ffffff" stroke="#111827" stroke-width="1.6"><title>validated bars / 32 epoch 6: 0.481</title></circle>
+<circle cx="488.40" cy="228.44" r="3.2" fill="#ffffff" stroke="#111827" stroke-width="1.6"><title>validated bars / 32 epoch 7: 0.344</title></circle>
+<circle cx="547.60" cy="237.80" r="3.2" fill="#ffffff" stroke="#111827" stroke-width="1.6"><title>validated bars / 32 epoch 8: 0.300</title></circle>
+<circle cx="606.80" cy="217.74" r="3.2" fill="#ffffff" stroke="#111827" stroke-width="1.6"><title>validated bars / 32 epoch 9: 0.394</title></circle>
+<circle cx="666.00" cy="223.76" r="3.2" fill="#ffffff" stroke="#111827" stroke-width="1.6"><title>validated bars / 32 epoch 10: 0.366</title></circle>
+<polyline fill="none" stroke="#4e79a7" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" points="74.00,88.00 133.20,88.00 192.40,88.00 251.60,130.80 310.80,109.40 370.00,88.00 429.20,88.00 488.40,109.40 547.60,88.00 606.80,109.40 666.00,88.00"/>
+<circle cx="74.00" cy="88.00" r="3.2" fill="#ffffff" stroke="#4e79a7" stroke-width="1.6"><title>parse: valid ABC epoch 0: 1.000</title></circle>
+<circle cx="133.20" cy="88.00" r="3.2" fill="#ffffff" stroke="#4e79a7" stroke-width="1.6"><title>parse: valid ABC epoch 1: 1.000</title></circle>
+<circle cx="192.40" cy="88.00" r="3.2" fill="#ffffff" stroke="#4e79a7" stroke-width="1.6"><title>parse: valid ABC epoch 2: 1.000</title></circle>
+<circle cx="251.60" cy="130.80" r="3.2" fill="#ffffff" stroke="#4e79a7" stroke-width="1.6"><title>parse: valid ABC epoch 3: 0.800</title></circle>
+<circle cx="310.80" cy="109.40" r="3.2" fill="#ffffff" stroke="#4e79a7" stroke-width="1.6"><title>parse: valid ABC epoch 4: 0.900</title></circle>
+<circle cx="370.00" cy="88.00" r="3.2" fill="#ffffff" stroke="#4e79a7" stroke-width="1.6"><title>parse: valid ABC epoch 5: 1.000</title></circle>
+<circle cx="429.20" cy="88.00" r="3.2" fill="#ffffff" stroke="#4e79a7" stroke-width="1.6"><title>parse: valid ABC epoch 6: 1.000</title></circle>
+<circle cx="488.40" cy="109.40" r="3.2" fill="#ffffff" stroke="#4e79a7" stroke-width="1.6"><title>parse: valid ABC epoch 7: 0.900</title></circle>
+<circle cx="547.60" cy="88.00" r="3.2" fill="#ffffff" stroke="#4e79a7" stroke-width="1.6"><title>parse: valid ABC epoch 8: 1.000</title></circle>
+<circle cx="606.80" cy="109.40" r="3.2" fill="#ffffff" stroke="#4e79a7" stroke-width="1.6"><title>parse: valid ABC epoch 9: 0.900</title></circle>
+<circle cx="666.00" cy="88.00" r="3.2" fill="#ffffff" stroke="#4e79a7" stroke-width="1.6"><title>parse: valid ABC epoch 10: 1.000</title></circle>
+<polyline fill="none" stroke="#59a14f" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" points="74.00,88.00 133.20,93.19 192.40,88.00 251.60,88.00 310.80,88.00 370.00,88.00 429.20,88.00 488.40,88.00 547.60,88.00 606.80,88.00 666.00,88.00"/>
+<circle cx="74.00" cy="88.00" r="3.2" fill="#ffffff" stroke="#59a14f" stroke-width="1.6"><title>stream tags: consistent epoch 0: 1.000</title></circle>
+<circle cx="133.20" cy="93.19" r="3.2" fill="#ffffff" stroke="#59a14f" stroke-width="1.6"><title>stream tags: consistent epoch 1: 0.976</title></circle>
+<circle cx="192.40" cy="88.00" r="3.2" fill="#ffffff" stroke="#59a14f" stroke-width="1.6"><title>stream tags: consistent epoch 2: 1.000</title></circle>
+<circle cx="251.60" cy="88.00" r="3.2" fill="#ffffff" stroke="#59a14f" stroke-width="1.6"><title>stream tags: consistent epoch 3: 1.000</title></circle>
+<circle cx="310.80" cy="88.00" r="3.2" fill="#ffffff" stroke="#59a14f" stroke-width="1.6"><title>stream tags: consistent epoch 4: 1.000</title></circle>
+<circle cx="370.00" cy="88.00" r="3.2" fill="#ffffff" stroke="#59a14f" stroke-width="1.6"><title>stream tags: consistent epoch 5: 1.000</title></circle>
+<circle cx="429.20" cy="88.00" r="3.2" fill="#ffffff" stroke="#59a14f" stroke-width="1.6"><title>stream tags: consistent epoch 6: 1.000</title></circle>
+<circle cx="488.40" cy="88.00" r="3.2" fill="#ffffff" stroke="#59a14f" stroke-width="1.6"><title>stream tags: consistent epoch 7: 1.000</title></circle>
+<circle cx="547.60" cy="88.00" r="3.2" fill="#ffffff" stroke="#59a14f" stroke-width="1.6"><title>stream tags: consistent epoch 8: 1.000</title></circle>
+<circle cx="606.80" cy="88.00" r="3.2" fill="#ffffff" stroke="#59a14f" stroke-width="1.6"><title>stream tags: consistent epoch 9: 1.000</title></circle>
+<circle cx="666.00" cy="88.00" r="3.2" fill="#ffffff" stroke="#59a14f" stroke-width="1.6"><title>stream tags: consistent epoch 10: 1.000</title></circle>
+<polyline fill="none" stroke="#9c755f" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" points="74.00,99.37 133.20,107.39 192.40,106.73 251.60,103.38 310.80,99.37 370.00,95.36 429.20,98.70 488.40,94.69 547.60,97.36 606.80,95.36 666.00,96.69"/>
+<circle cx="74.00" cy="99.37" r="3.2" fill="#ffffff" stroke="#9c755f" stroke-width="1.6"><title>line closure: closed bars epoch 0: 0.947</title></circle>
+<circle cx="133.20" cy="107.39" r="3.2" fill="#ffffff" stroke="#9c755f" stroke-width="1.6"><title>line closure: closed bars epoch 1: 0.909</title></circle>
+<circle cx="192.40" cy="106.73" r="3.2" fill="#ffffff" stroke="#9c755f" stroke-width="1.6"><title>line closure: closed bars epoch 2: 0.912</title></circle>
+<circle cx="251.60" cy="103.38" r="3.2" fill="#ffffff" stroke="#9c755f" stroke-width="1.6"><title>line closure: closed bars epoch 3: 0.928</title></circle>
+<circle cx="310.80" cy="99.37" r="3.2" fill="#ffffff" stroke="#9c755f" stroke-width="1.6"><title>line closure: closed bars epoch 4: 0.947</title></circle>
+<circle cx="370.00" cy="95.36" r="3.2" fill="#ffffff" stroke="#9c755f" stroke-width="1.6"><title>line closure: closed bars epoch 5: 0.966</title></circle>
+<circle cx="429.20" cy="98.70" r="3.2" fill="#ffffff" stroke="#9c755f" stroke-width="1.6"><title>line closure: closed bars epoch 6: 0.950</title></circle>
+<circle cx="488.40" cy="94.69" r="3.2" fill="#ffffff" stroke="#9c755f" stroke-width="1.6"><title>line closure: closed bars epoch 7: 0.969</title></circle>
+<circle cx="547.60" cy="97.36" r="3.2" fill="#ffffff" stroke="#9c755f" stroke-width="1.6"><title>line closure: closed bars epoch 8: 0.956</title></circle>
+<circle cx="606.80" cy="95.36" r="3.2" fill="#ffffff" stroke="#9c755f" stroke-width="1.6"><title>line closure: closed bars epoch 9: 0.966</title></circle>
+<circle cx="666.00" cy="96.69" r="3.2" fill="#ffffff" stroke="#9c755f" stroke-width="1.6"><title>line closure: closed bars epoch 10: 0.959</title></circle>
+<polyline fill="none" stroke="#f28e2b" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" points="74.00,99.37 133.20,90.67 192.40,93.35 251.60,94.02 310.80,95.36 370.00,93.35 429.20,94.02 488.40,94.02 547.60,94.02 606.80,94.69 666.00,94.02"/>
+<circle cx="74.00" cy="99.37" r="3.2" fill="#ffffff" stroke="#f28e2b" stroke-width="1.6"><title>bar token: emits | epoch 0: 0.947</title></circle>
+<circle cx="133.20" cy="90.67" r="3.2" fill="#ffffff" stroke="#f28e2b" stroke-width="1.6"><title>bar token: emits | epoch 1: 0.988</title></circle>
+<circle cx="192.40" cy="93.35" r="3.2" fill="#ffffff" stroke="#f28e2b" stroke-width="1.6"><title>bar token: emits | epoch 2: 0.975</title></circle>
+<circle cx="251.60" cy="94.02" r="3.2" fill="#ffffff" stroke="#f28e2b" stroke-width="1.6"><title>bar token: emits | epoch 3: 0.972</title></circle>
+<circle cx="310.80" cy="95.36" r="3.2" fill="#ffffff" stroke="#f28e2b" stroke-width="1.6"><title>bar token: emits | epoch 4: 0.966</title></circle>
+<circle cx="370.00" cy="93.35" r="3.2" fill="#ffffff" stroke="#f28e2b" stroke-width="1.6"><title>bar token: emits | epoch 5: 0.975</title></circle>
+<circle cx="429.20" cy="94.02" r="3.2" fill="#ffffff" stroke="#f28e2b" stroke-width="1.6"><title>bar token: emits | epoch 6: 0.972</title></circle>
+<circle cx="488.40" cy="94.02" r="3.2" fill="#ffffff" stroke="#f28e2b" stroke-width="1.6"><title>bar token: emits | epoch 7: 0.972</title></circle>
+<circle cx="547.60" cy="94.02" r="3.2" fill="#ffffff" stroke="#f28e2b" stroke-width="1.6"><title>bar token: emits | epoch 8: 0.972</title></circle>
+<circle cx="606.80" cy="94.69" r="3.2" fill="#ffffff" stroke="#f28e2b" stroke-width="1.6"><title>bar token: emits | epoch 9: 0.969</title></circle>
+<circle cx="666.00" cy="94.02" r="3.2" fill="#ffffff" stroke="#f28e2b" stroke-width="1.6"><title>bar token: emits | epoch 10: 0.972</title></circle>
+<polyline fill="none" stroke="#e15759" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" points="74.00,206.65 133.20,276.70 192.40,294.53 251.60,244.41 310.80,257.63 370.00,269.55 429.20,240.12 488.40,266.36 547.60,266.29 606.80,252.63 666.00,262.47"/>
+<circle cx="74.00" cy="206.65" r="3.2" fill="#ffffff" stroke="#e15759" stroke-width="1.6"><title>meter alignment: fits meter epoch 0: 0.446</title></circle>
+<circle cx="133.20" cy="276.70" r="3.2" fill="#ffffff" stroke="#e15759" stroke-width="1.6"><title>meter alignment: fits meter epoch 1: 0.118</title></circle>
+<circle cx="192.40" cy="294.53" r="3.2" fill="#ffffff" stroke="#e15759" stroke-width="1.6"><title>meter alignment: fits meter epoch 2: 0.035</title></circle>
+<circle cx="251.60" cy="244.41" r="3.2" fill="#ffffff" stroke="#e15759" stroke-width="1.6"><title>meter alignment: fits meter epoch 3: 0.269</title></circle>
+<circle cx="310.80" cy="257.63" r="3.2" fill="#ffffff" stroke="#e15759" stroke-width="1.6"><title>meter alignment: fits meter epoch 4: 0.207</title></circle>
+<circle cx="370.00" cy="269.55" r="3.2" fill="#ffffff" stroke="#e15759" stroke-width="1.6"><title>meter alignment: fits meter epoch 5: 0.152</title></circle>
+<circle cx="429.20" cy="240.12" r="3.2" fill="#ffffff" stroke="#e15759" stroke-width="1.6"><title>meter alignment: fits meter epoch 6: 0.289</title></circle>
+<circle cx="488.40" cy="266.36" r="3.2" fill="#ffffff" stroke="#e15759" stroke-width="1.6"><title>meter alignment: fits meter epoch 7: 0.167</title></circle>
+<circle cx="547.60" cy="266.29" r="3.2" fill="#ffffff" stroke="#e15759" stroke-width="1.6"><title>meter alignment: fits meter epoch 8: 0.167</title></circle>
+<circle cx="606.80" cy="252.63" r="3.2" fill="#ffffff" stroke="#e15759" stroke-width="1.6"><title>meter alignment: fits meter epoch 9: 0.231</title></circle>
+<circle cx="666.00" cy="262.47" r="3.2" fill="#ffffff" stroke="#e15759" stroke-width="1.6"><title>meter alignment: fits meter epoch 10: 0.185</title></circle>
+<polyline fill="none" stroke="#b07aa1" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" points="74.00,128.49 133.20,223.51 192.40,234.08 251.60,200.57 310.80,209.14 370.00,210.14 429.20,176.45 488.40,203.15 547.60,194.52 606.80,203.51 666.00,206.10"/>
+<circle cx="74.00" cy="128.49" r="3.2" fill="#ffffff" stroke="#b07aa1" stroke-width="1.6"><title>meter duration: close to meter epoch 0: 0.811</title></circle>
+<circle cx="133.20" cy="223.51" r="3.2" fill="#ffffff" stroke="#b07aa1" stroke-width="1.6"><title>meter duration: close to meter epoch 1: 0.367</title></circle>
+<circle cx="192.40" cy="234.08" r="3.2" fill="#ffffff" stroke="#b07aa1" stroke-width="1.6"><title>meter duration: close to meter epoch 2: 0.317</title></circle>
+<circle cx="251.60" cy="200.57" r="3.2" fill="#ffffff" stroke="#b07aa1" stroke-width="1.6"><title>meter duration: close to meter epoch 3: 0.474</title></circle>
+<circle cx="310.80" cy="209.14" r="3.2" fill="#ffffff" stroke="#b07aa1" stroke-width="1.6"><title>meter duration: close to meter epoch 4: 0.434</title></circle>
+<circle cx="370.00" cy="210.14" r="3.2" fill="#ffffff" stroke="#b07aa1" stroke-width="1.6"><title>meter duration: close to meter epoch 5: 0.429</title></circle>
+<circle cx="429.20" cy="176.45" r="3.2" fill="#ffffff" stroke="#b07aa1" stroke-width="1.6"><title>meter duration: close to meter epoch 6: 0.587</title></circle>
+<circle cx="488.40" cy="203.15" r="3.2" fill="#ffffff" stroke="#b07aa1" stroke-width="1.6"><title>meter duration: close to meter epoch 7: 0.462</title></circle>
+<circle cx="547.60" cy="194.52" r="3.2" fill="#ffffff" stroke="#b07aa1" stroke-width="1.6"><title>meter duration: close to meter epoch 8: 0.502</title></circle>
+<circle cx="606.80" cy="203.51" r="3.2" fill="#ffffff" stroke="#b07aa1" stroke-width="1.6"><title>meter duration: close to meter epoch 9: 0.460</title></circle>
+<circle cx="666.00" cy="206.10" r="3.2" fill="#ffffff" stroke="#b07aa1" stroke-width="1.6"><title>meter duration: close to meter epoch 10: 0.448</title></circle>
+<polyline fill="none" stroke="#edc948" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" points="74.00,211.05 133.20,268.56 192.40,281.27 251.60,215.06 310.80,206.37 370.00,225.09 429.20,199.01 488.40,228.44 547.60,237.80 606.80,217.74 666.00,223.76"/>
+<circle cx="74.00" cy="211.05" r="3.2" fill="#ffffff" stroke="#edc948" stroke-width="1.6"><title>bar count: close to 32 epoch 0: 0.425</title></circle>
+<circle cx="133.20" cy="268.56" r="3.2" fill="#ffffff" stroke="#edc948" stroke-width="1.6"><title>bar count: close to 32 epoch 1: 0.156</title></circle>
+<circle cx="192.40" cy="281.27" r="3.2" fill="#ffffff" stroke="#edc948" stroke-width="1.6"><title>bar count: close to 32 epoch 2: 0.097</title></circle>
+<circle cx="251.60" cy="215.06" r="3.2" fill="#ffffff" stroke="#edc948" stroke-width="1.6"><title>bar count: close to 32 epoch 3: 0.406</title></circle>
+<circle cx="310.80" cy="206.37" r="3.2" fill="#ffffff" stroke="#edc948" stroke-width="1.6"><title>bar count: close to 32 epoch 4: 0.447</title></circle>
+<circle cx="370.00" cy="225.09" r="3.2" fill="#ffffff" stroke="#edc948" stroke-width="1.6"><title>bar count: close to 32 epoch 5: 0.359</title></circle>
+<circle cx="429.20" cy="199.01" r="3.2" fill="#ffffff" stroke="#edc948" stroke-width="1.6"><title>bar count: close to 32 epoch 6: 0.481</title></circle>
+<circle cx="488.40" cy="228.44" r="3.2" fill="#ffffff" stroke="#edc948" stroke-width="1.6"><title>bar count: close to 32 epoch 7: 0.344</title></circle>
+<circle cx="547.60" cy="237.80" r="3.2" fill="#ffffff" stroke="#edc948" stroke-width="1.6"><title>bar count: close to 32 epoch 8: 0.300</title></circle>
+<circle cx="606.80" cy="217.74" r="3.2" fill="#ffffff" stroke="#edc948" stroke-width="1.6"><title>bar count: close to 32 epoch 9: 0.394</title></circle>
+<circle cx="666.00" cy="223.76" r="3.2" fill="#ffffff" stroke="#edc948" stroke-width="1.6"><title>bar count: close to 32 epoch 10: 0.366</title></circle>
+<text x="74" y="368" font-family="Arial, Helvetica, sans-serif" font-size="15" font-weight="700" fill="#20242c">Harmony rewards</text>
+<line x1="74" y1="598.00" x2="666" y2="598.00" stroke="#d9dee7" stroke-width="1"/>
+<text x="62" y="602.00" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="end">0</text>
+<line x1="74" y1="544.50" x2="666" y2="544.50" stroke="#d9dee7" stroke-width="1"/>
+<text x="62" y="548.50" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="end">0.25</text>
+<line x1="74" y1="491.00" x2="666" y2="491.00" stroke="#d9dee7" stroke-width="1"/>
+<text x="62" y="495.00" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="end">0.5</text>
+<line x1="74" y1="437.50" x2="666" y2="437.50" stroke="#d9dee7" stroke-width="1"/>
+<text x="62" y="441.50" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="end">0.75</text>
+<line x1="74" y1="384.00" x2="666" y2="384.00" stroke="#d9dee7" stroke-width="1"/>
+<text x="62" y="388.00" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="end">1</text>
+<line x1="74.00" y1="384" x2="74.00" y2="598" stroke="#d9dee7" stroke-width="1" opacity="0.45"/>
+<line x1="133.20" y1="384" x2="133.20" y2="598" stroke="#d9dee7" stroke-width="1" opacity="0.45"/>
+<line x1="192.40" y1="384" x2="192.40" y2="598" stroke="#d9dee7" stroke-width="1" opacity="0.45"/>
+<line x1="251.60" y1="384" x2="251.60" y2="598" stroke="#d9dee7" stroke-width="1" opacity="0.45"/>
+<line x1="310.80" y1="384" x2="310.80" y2="598" stroke="#d9dee7" stroke-width="1" opacity="0.45"/>
+<line x1="370.00" y1="384" x2="370.00" y2="598" stroke="#d9dee7" stroke-width="1" opacity="0.45"/>
+<line x1="429.20" y1="384" x2="429.20" y2="598" stroke="#d9dee7" stroke-width="1" opacity="0.45"/>
+<line x1="488.40" y1="384" x2="488.40" y2="598" stroke="#d9dee7" stroke-width="1" opacity="0.45"/>
+<line x1="547.60" y1="384" x2="547.60" y2="598" stroke="#d9dee7" stroke-width="1" opacity="0.45"/>
+<line x1="606.80" y1="384" x2="606.80" y2="598" stroke="#d9dee7" stroke-width="1" opacity="0.45"/>
+<line x1="666.00" y1="384" x2="666.00" y2="598" stroke="#d9dee7" stroke-width="1" opacity="0.45"/>
+<line x1="74" y1="598" x2="666" y2="598" stroke="#252a33" stroke-width="1.4"/>
+<line x1="74" y1="384" x2="74" y2="598" stroke="#252a33" stroke-width="1.4"/>
+<line x1="74.00" y1="384" x2="74.00" y2="598" stroke="#111827" stroke-dasharray="4 4" opacity="0.45"/>
+<polyline fill="none" stroke="#76b7b2" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" points="74.00,573.23 133.20,567.24 192.40,575.20 251.60,569.51 310.80,574.59 370.00,569.91 429.20,567.24 488.40,563.89 547.60,569.91 606.80,571.25 666.00,567.91"/>
+<circle cx="74.00" cy="573.23" r="3.2" fill="#ffffff" stroke="#76b7b2" stroke-width="1.6"><title>root: chord roots vs Aria epoch 0: 0.116</title></circle>
+<circle cx="133.20" cy="567.24" r="3.2" fill="#ffffff" stroke="#76b7b2" stroke-width="1.6"><title>root: chord roots vs Aria epoch 1: 0.144</title></circle>
+<circle cx="192.40" cy="575.20" r="3.2" fill="#ffffff" stroke="#76b7b2" stroke-width="1.6"><title>root: chord roots vs Aria epoch 2: 0.107</title></circle>
+<circle cx="251.60" cy="569.51" r="3.2" fill="#ffffff" stroke="#76b7b2" stroke-width="1.6"><title>root: chord roots vs Aria epoch 3: 0.133</title></circle>
+<circle cx="310.80" cy="574.59" r="3.2" fill="#ffffff" stroke="#76b7b2" stroke-width="1.6"><title>root: chord roots vs Aria epoch 4: 0.109</title></circle>
+<circle cx="370.00" cy="569.91" r="3.2" fill="#ffffff" stroke="#76b7b2" stroke-width="1.6"><title>root: chord roots vs Aria epoch 5: 0.131</title></circle>
+<circle cx="429.20" cy="567.24" r="3.2" fill="#ffffff" stroke="#76b7b2" stroke-width="1.6"><title>root: chord roots vs Aria epoch 6: 0.144</title></circle>
+<circle cx="488.40" cy="563.89" r="3.2" fill="#ffffff" stroke="#76b7b2" stroke-width="1.6"><title>root: chord roots vs Aria epoch 7: 0.159</title></circle>
+<circle cx="547.60" cy="569.91" r="3.2" fill="#ffffff" stroke="#76b7b2" stroke-width="1.6"><title>root: chord roots vs Aria epoch 8: 0.131</title></circle>
+<circle cx="606.80" cy="571.25" r="3.2" fill="#ffffff" stroke="#76b7b2" stroke-width="1.6"><title>root: chord roots vs Aria epoch 9: 0.125</title></circle>
+<circle cx="666.00" cy="567.91" r="3.2" fill="#ffffff" stroke="#76b7b2" stroke-width="1.6"><title>root: chord roots vs Aria epoch 10: 0.141</title></circle>
+<polyline fill="none" stroke="#ff9da7" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" points="74.00,570.43 133.20,576.60 192.40,574.53 251.60,563.46 310.80,564.56 370.00,559.88 429.20,552.52 488.40,549.85 547.60,556.54 606.80,548.51 666.00,552.52"/>
+<circle cx="74.00" cy="570.43" r="3.2" fill="#ffffff" stroke="#ff9da7" stroke-width="1.6"><title>bass: pitch classes vs Aria epoch 0: 0.129</title></circle>
+<circle cx="133.20" cy="576.60" r="3.2" fill="#ffffff" stroke="#ff9da7" stroke-width="1.6"><title>bass: pitch classes vs Aria epoch 1: 0.100</title></circle>
+<circle cx="192.40" cy="574.53" r="3.2" fill="#ffffff" stroke="#ff9da7" stroke-width="1.6"><title>bass: pitch classes vs Aria epoch 2: 0.110</title></circle>
+<circle cx="251.60" cy="563.46" r="3.2" fill="#ffffff" stroke="#ff9da7" stroke-width="1.6"><title>bass: pitch classes vs Aria epoch 3: 0.161</title></circle>
+<circle cx="310.80" cy="564.56" r="3.2" fill="#ffffff" stroke="#ff9da7" stroke-width="1.6"><title>bass: pitch classes vs Aria epoch 4: 0.156</title></circle>
+<circle cx="370.00" cy="559.88" r="3.2" fill="#ffffff" stroke="#ff9da7" stroke-width="1.6"><title>bass: pitch classes vs Aria epoch 5: 0.178</title></circle>
+<circle cx="429.20" cy="552.52" r="3.2" fill="#ffffff" stroke="#ff9da7" stroke-width="1.6"><title>bass: pitch classes vs Aria epoch 6: 0.212</title></circle>
+<circle cx="488.40" cy="549.85" r="3.2" fill="#ffffff" stroke="#ff9da7" stroke-width="1.6"><title>bass: pitch classes vs Aria epoch 7: 0.225</title></circle>
+<circle cx="547.60" cy="556.54" r="3.2" fill="#ffffff" stroke="#ff9da7" stroke-width="1.6"><title>bass: pitch classes vs Aria epoch 8: 0.194</title></circle>
+<circle cx="606.80" cy="548.51" r="3.2" fill="#ffffff" stroke="#ff9da7" stroke-width="1.6"><title>bass: pitch classes vs Aria epoch 9: 0.231</title></circle>
+<circle cx="666.00" cy="552.52" r="3.2" fill="#ffffff" stroke="#ff9da7" stroke-width="1.6"><title>bass: pitch classes vs Aria epoch 10: 0.212</title></circle>
+<polyline fill="none" stroke="#af7aa1" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" points="74.00,587.30 133.20,592.65 192.40,587.30 251.60,580.17 310.80,587.30 370.00,587.30 429.20,571.25 488.40,560.55 547.60,576.60 606.80,576.60 666.00,576.60"/>
+<circle cx="74.00" cy="587.30" r="3.2" fill="#ffffff" stroke="#af7aa1" stroke-width="1.6"><title>cadence root: bars 8/16/24/32 epoch 0: 0.050</title></circle>
+<circle cx="133.20" cy="592.65" r="3.2" fill="#ffffff" stroke="#af7aa1" stroke-width="1.6"><title>cadence root: bars 8/16/24/32 epoch 1: 0.025</title></circle>
+<circle cx="192.40" cy="587.30" r="3.2" fill="#ffffff" stroke="#af7aa1" stroke-width="1.6"><title>cadence root: bars 8/16/24/32 epoch 2: 0.050</title></circle>
+<circle cx="251.60" cy="580.17" r="3.2" fill="#ffffff" stroke="#af7aa1" stroke-width="1.6"><title>cadence root: bars 8/16/24/32 epoch 3: 0.083</title></circle>
+<circle cx="310.80" cy="587.30" r="3.2" fill="#ffffff" stroke="#af7aa1" stroke-width="1.6"><title>cadence root: bars 8/16/24/32 epoch 4: 0.050</title></circle>
+<circle cx="370.00" cy="587.30" r="3.2" fill="#ffffff" stroke="#af7aa1" stroke-width="1.6"><title>cadence root: bars 8/16/24/32 epoch 5: 0.050</title></circle>
+<circle cx="429.20" cy="571.25" r="3.2" fill="#ffffff" stroke="#af7aa1" stroke-width="1.6"><title>cadence root: bars 8/16/24/32 epoch 6: 0.125</title></circle>
+<circle cx="488.40" cy="560.55" r="3.2" fill="#ffffff" stroke="#af7aa1" stroke-width="1.6"><title>cadence root: bars 8/16/24/32 epoch 7: 0.175</title></circle>
+<circle cx="547.60" cy="576.60" r="3.2" fill="#ffffff" stroke="#af7aa1" stroke-width="1.6"><title>cadence root: bars 8/16/24/32 epoch 8: 0.100</title></circle>
+<circle cx="606.80" cy="576.60" r="3.2" fill="#ffffff" stroke="#af7aa1" stroke-width="1.6"><title>cadence root: bars 8/16/24/32 epoch 9: 0.100</title></circle>
+<circle cx="666.00" cy="576.60" r="3.2" fill="#ffffff" stroke="#af7aa1" stroke-width="1.6"><title>cadence root: bars 8/16/24/32 epoch 10: 0.100</title></circle>
+<polyline fill="none" stroke="#8cd17d" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" points="74.00,560.55 133.20,560.55 192.40,576.60 251.60,542.72 310.80,517.75 370.00,533.80 429.20,517.75 488.40,512.40 547.60,512.40 606.80,539.15 666.00,507.05"/>
+<circle cx="74.00" cy="560.55" r="3.2" fill="#ffffff" stroke="#8cd17d" stroke-width="1.6"><title>cadence bass: bars 8/16/24/32 epoch 0: 0.175</title></circle>
+<circle cx="133.20" cy="560.55" r="3.2" fill="#ffffff" stroke="#8cd17d" stroke-width="1.6"><title>cadence bass: bars 8/16/24/32 epoch 1: 0.175</title></circle>
+<circle cx="192.40" cy="576.60" r="3.2" fill="#ffffff" stroke="#8cd17d" stroke-width="1.6"><title>cadence bass: bars 8/16/24/32 epoch 2: 0.100</title></circle>
+<circle cx="251.60" cy="542.72" r="3.2" fill="#ffffff" stroke="#8cd17d" stroke-width="1.6"><title>cadence bass: bars 8/16/24/32 epoch 3: 0.258</title></circle>
+<circle cx="310.80" cy="517.75" r="3.2" fill="#ffffff" stroke="#8cd17d" stroke-width="1.6"><title>cadence bass: bars 8/16/24/32 epoch 4: 0.375</title></circle>
+<circle cx="370.00" cy="533.80" r="3.2" fill="#ffffff" stroke="#8cd17d" stroke-width="1.6"><title>cadence bass: bars 8/16/24/32 epoch 5: 0.300</title></circle>
+<circle cx="429.20" cy="517.75" r="3.2" fill="#ffffff" stroke="#8cd17d" stroke-width="1.6"><title>cadence bass: bars 8/16/24/32 epoch 6: 0.375</title></circle>
+<circle cx="488.40" cy="512.40" r="3.2" fill="#ffffff" stroke="#8cd17d" stroke-width="1.6"><title>cadence bass: bars 8/16/24/32 epoch 7: 0.400</title></circle>
+<circle cx="547.60" cy="512.40" r="3.2" fill="#ffffff" stroke="#8cd17d" stroke-width="1.6"><title>cadence bass: bars 8/16/24/32 epoch 8: 0.400</title></circle>
+<circle cx="606.80" cy="539.15" r="3.2" fill="#ffffff" stroke="#8cd17d" stroke-width="1.6"><title>cadence bass: bars 8/16/24/32 epoch 9: 0.275</title></circle>
+<circle cx="666.00" cy="507.05" r="3.2" fill="#ffffff" stroke="#8cd17d" stroke-width="1.6"><title>cadence bass: bars 8/16/24/32 epoch 10: 0.425</title></circle>
+<text x="74.00" y="622" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="middle">0</text>
+<text x="133.20" y="622" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="middle">1</text>
+<text x="192.40" y="622" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="middle">2</text>
+<text x="251.60" y="622" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="middle">3</text>
+<text x="310.80" y="622" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="middle">4</text>
+<text x="370.00" y="622" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="middle">5</text>
+<text x="429.20" y="622" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="middle">6</text>
+<text x="488.40" y="622" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="middle">7</text>
+<text x="547.60" y="622" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="middle">8</text>
+<text x="606.80" y="622" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="middle">9</text>
+<text x="666.00" y="622" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="middle">10</text>
+<text x="370.00" y="682" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#20242c" text-anchor="middle">Epoch</text>
+<text x="18" y="343.00" transform="rotate(-90 18 343.00)" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#20242c" text-anchor="middle">Mean normalized value</text>
+<text x="82.00" y="588" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470">base</text>
+<text x="815" y="90" font-family="Arial, Helvetica, sans-serif" font-size="13" font-weight="700" fill="#20242c" text-anchor="middle">Components</text>
+<line x1="696" y1="110" x2="720" y2="110" stroke="#111827" stroke-width="2.5" stroke-linecap="round"/>
+<text x="730" y="114" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#20242c">validated bars / 32</text>
+<line x1="696" y1="132" x2="720" y2="132" stroke="#4e79a7" stroke-width="2.5" stroke-linecap="round"/>
+<text x="730" y="136" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#20242c">parse: valid ABC</text>
+<line x1="696" y1="154" x2="720" y2="154" stroke="#59a14f" stroke-width="2.5" stroke-linecap="round"/>
+<text x="730" y="158" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#20242c">stream tags: consistent</text>
+<line x1="696" y1="176" x2="720" y2="176" stroke="#9c755f" stroke-width="2.5" stroke-linecap="round"/>
+<text x="730" y="180" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#20242c">line closure: closed bars</text>
+<line x1="696" y1="198" x2="720" y2="198" stroke="#f28e2b" stroke-width="2.5" stroke-linecap="round"/>
+<text x="730" y="202" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#20242c">bar token: emits |</text>
+<line x1="696" y1="220" x2="720" y2="220" stroke="#e15759" stroke-width="2.5" stroke-linecap="round"/>
+<text x="730" y="224" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#20242c">meter alignment: fits meter</text>
+<line x1="696" y1="242" x2="720" y2="242" stroke="#b07aa1" stroke-width="2.5" stroke-linecap="round"/>
+<text x="730" y="246" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#20242c">meter duration: close to meter</text>
+<line x1="696" y1="264" x2="720" y2="264" stroke="#edc948" stroke-width="2.5" stroke-linecap="round"/>
+<text x="730" y="268" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#20242c">bar count: close to 32</text>
+<line x1="696" y1="286" x2="720" y2="286" stroke="#76b7b2" stroke-width="2.5" stroke-linecap="round"/>
+<text x="730" y="290" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#20242c">root: chord roots vs Aria</text>
+<line x1="696" y1="308" x2="720" y2="308" stroke="#ff9da7" stroke-width="2.5" stroke-linecap="round"/>
+<text x="730" y="312" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#20242c">bass: pitch classes vs Aria</text>
+<line x1="696" y1="330" x2="720" y2="330" stroke="#af7aa1" stroke-width="2.5" stroke-linecap="round"/>
+<text x="730" y="334" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#20242c">cadence root: bars 8/16/24/32</text>
+<line x1="696" y1="352" x2="720" y2="352" stroke="#8cd17d" stroke-width="2.5" stroke-linecap="round"/>
+<text x="730" y="356" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#20242c">cadence bass: bars 8/16/24/32</text>
 </svg>

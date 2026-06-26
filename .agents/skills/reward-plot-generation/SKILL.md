@@ -27,8 +27,8 @@ epoch `0`.
 ## Normalization
 
 Do not min-max normalize across epochs. Reward components are already
-normalized in `[0, 1]` as emitted by `grpo/rewards.py`. The validated-bars
-panel is plotted on its native `0..32` bar scale.
+normalized in `[0, 1]` as emitted by `grpo/rewards.py`. Plot validated bars as
+`validated_bars / 32` so it shares the same scale and appears in the legend.
 
 For each epoch and each component:
 
@@ -40,13 +40,14 @@ The plot intentionally excludes `total_reward` because it is a weighted sum of
 heterogeneous components and can be dominated by easy structural signals. Use
 component curves for interpretation.
 
-The top panel shows `validated_bars` directly so scorer changes that affect bar
-validation are visible without having to infer them from `bar_count_reward`.
+The structure panel includes `validated_bars / 32` so scorer changes that affect
+bar validation are visible without having to infer them from `bar_count_reward`.
 
 ## Components
 
 Structure / format panel:
 
+- `validated_bars / 32`: validated musical bars normalized by the 32-bar target
 - `parse_reward`: Music21 can parse the ABC
 - `countdown_reward`: stream tags are internally consistent
 - `line_closure_reward`: generated stream lines close as bars

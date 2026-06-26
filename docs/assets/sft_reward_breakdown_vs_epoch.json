@@ -13,6 +13,7 @@
     "cadence_root_reward": 0.05,
     "cadence_bass_reward": 0.175,
     "validated_bars": 13.6,
+    "validated_bar_fraction": 0.425,
     "total_reward": 3.6774314052651094
   },
   {
@@ -29,6 +30,7 @@
     "cadence_root_reward": 0.025,
     "cadence_bass_reward": 0.175,
     "validated_bars": 5.0,
+    "validated_bar_fraction": 0.15625,
     "total_reward": 1.8050574644535715
   },
   {
@@ -45,6 +47,7 @@
     "cadence_root_reward": 0.05,
     "cadence_bass_reward": 0.1,
     "validated_bars": 3.1,
+    "validated_bar_fraction": 0.096875,
     "total_reward": 1.4511920701497
   },
   {
@@ -61,6 +64,7 @@
     "cadence_root_reward": 0.08333333333333333,
     "cadence_bass_reward": 0.2583333333333333,
     "validated_bars": 13.0,
+    "validated_bar_fraction": 0.40625,
     "total_reward": 3.3051024022304065
   },
   {
@@ -77,6 +81,7 @@
     "cadence_root_reward": 0.05,
     "cadence_bass_reward": 0.375,
     "validated_bars": 14.3,
+    "validated_bar_fraction": 0.446875,
     "total_reward": 3.4780930095368663
   },
   {
@@ -93,6 +98,7 @@
     "cadence_root_reward": 0.05,
     "cadence_bass_reward": 0.3,
     "validated_bars": 11.5,
+    "validated_bar_fraction": 0.359375,
     "total_reward": 2.9755541738137214
   },
   {
@@ -109,6 +115,7 @@
     "cadence_root_reward": 0.125,
     "cadence_bass_reward": 0.375,
     "validated_bars": 15.4,
+    "validated_bar_fraction": 0.48125,
     "total_reward": 3.730641747443859
   },
   {
@@ -125,6 +132,7 @@
     "cadence_root_reward": 0.175,
     "cadence_bass_reward": 0.4,
     "validated_bars": 11.0,
+    "validated_bar_fraction": 0.34375,
     "total_reward": 3.14588860102795
   },
   {
@@ -141,6 +149,7 @@
     "cadence_root_reward": 0.1,
     "cadence_bass_reward": 0.4,
     "validated_bars": 9.6,
+    "validated_bar_fraction": 0.3,
     "total_reward": 2.8872937531245744
   },
   {
@@ -157,6 +166,7 @@
     "cadence_root_reward": 0.1,
     "cadence_bass_reward": 0.275,
     "validated_bars": 12.6,
+    "validated_bar_fraction": 0.39375,
     "total_reward": 3.495151594191136
   },
   {
@@ -173,6 +183,7 @@
     "cadence_root_reward": 0.1,
     "cadence_bass_reward": 0.425,
     "validated_bars": 11.7,
+    "validated_bar_fraction": 0.365625,
     "total_reward": 3.3999346454168027
   }
 ]
