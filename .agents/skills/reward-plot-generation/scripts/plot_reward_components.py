@@ -10,6 +10,7 @@ from pathlib import Path
 
 
 STRUCTURAL = [
+    ("validated_bar_fraction", "validated bars / 32"),
     ("parse_reward", "parse: valid ABC"),
     ("countdown_reward", "stream tags: consistent"),
     ("line_closure_reward", "line closure: closed bars"),
@@ -28,7 +29,7 @@ COMPONENTS = STRUCTURAL + HARMONIC
 
 
 COLORS = {
-    "validated_bars": "#111827",
+    "validated_bar_fraction": "#111827",
     "parse_reward": "#4e79a7",
     "countdown_reward": "#59a14f",
     "line_closure_reward": "#9c755f",
@@ -63,14 +64,24 @@ def mean(rows: list[dict], key: str) -> float:
     return statistics.mean(float(row[key]) for row in rows)
 
 
+def component_means(rows: list[dict]) -> dict[str, float]:
+    values = {
+        key: mean(rows, key)
+        for key, _ in COMPONENTS
+        if key != "validated_bar_fraction"
+    }
+    values["validated_bars"] = mean(rows, "validated_bars")
+    values["validated_bar_fraction"] = values["validated_bars"] / 32.0
+    return values
+
+
 def collect_points(baseline_rewards: Path, sft_scores_dir: Path) -> list[dict]:
     points: list[dict] = []
     rows0 = load_baseline(baseline_rewards)
     points.append(
         {
             "epoch": 0,
-            **{key: mean(rows0, key) for key, _ in COMPONENTS},
-            "validated_bars": mean(rows0, "validated_bars"),
+            **component_means(rows0),
             "total_reward": mean(rows0, "total_reward"),
         }
     )
@@ -82,8 +93,7 @@ def collect_points(baseline_rewards: Path, sft_scores_dir: Path) -> list[dict]:
         points.append(
             {
                 "epoch": int(match.group(1)),
-                **{key: mean(rows, key) for key, _ in COMPONENTS},
-                "validated_bars": mean(rows, "validated_bars"),
+                **component_means(rows),
                 "total_reward": mean(rows, "total_reward"),
             }
         )
@@ -92,14 +102,13 @@ def collect_points(baseline_rewards: Path, sft_scores_dir: Path) -> list[dict]:
 
 
 def render_svg(points: list[dict]) -> str:
-    width, height = 940, 860
-    ml, mr, mt, mb = 74, 274, 92, 58
+    width, height = 940, 700
+    ml, mr, mt, mb = 74, 274, 88, 58
     plot_w = width - ml - mr
-    panel_h = 176
-    gap = 68
-    p0_top = mt
-    p1_top = mt + panel_h + gap
-    p2_top = mt + 2 * (panel_h + gap)
+    panel_h = 214
+    gap = 82
+    p1_top = mt
+    p2_top = mt + panel_h + gap
     axis_color = "#252a33"
     grid_color = "#d9dee7"
     text_color = "#20242c"
@@ -112,9 +121,6 @@ def render_svg(points: list[dict]) -> str:
 
     def y(value: float, top: float) -> float:
         return top + (1.0 - value) * panel_h
-
-    def y_bars(value: float, top: float) -> float:
-        return top + (1.0 - max(0.0, min(32.0, value)) / 32.0) * panel_h
 
     def polyline(key: str, top: float) -> str:
         return " ".join(
@@ -167,62 +173,6 @@ def render_svg(points: list[dict]) -> str:
                     f"</circle>"
                 )
 
-    def add_validated_bars_panel(parts: list[str], top: float) -> None:
-        parts.append(
-            f'<text x="{ml}" y="{top-16}" font-family="Arial, Helvetica, sans-serif" '
-            f'font-size="15" font-weight="700" fill="{text_color}">'
-            "Validated musical bars</text>"
-        )
-        for tick in [0, 8, 16, 24, 32]:
-            yy = y_bars(tick, top)
-            parts.append(
-                f'<line x1="{ml}" y1="{yy:.2f}" x2="{ml+plot_w}" y2="{yy:.2f}" '
-                f'stroke="{grid_color}" stroke-width="1"/>'
-            )
-            parts.append(
-                f'<text x="{ml-12}" y="{yy+4:.2f}" font-family="Arial, Helvetica, sans-serif" '
-                f'font-size="12" fill="{muted}" text-anchor="end">{tick}</text>'
-            )
-        for point in points:
-            xx = x(point["epoch"])
-            parts.append(
-                f'<line x1="{xx:.2f}" y1="{top}" x2="{xx:.2f}" y2="{top+panel_h}" '
-                f'stroke="{grid_color}" stroke-width="1" opacity="0.45"/>'
-            )
-        parts.append(
-            f'<line x1="{ml}" y1="{top+panel_h}" x2="{ml+plot_w}" y2="{top+panel_h}" '
-            f'stroke="{axis_color}" stroke-width="1.4"/>'
-        )
-        parts.append(
-            f'<line x1="{ml}" y1="{top}" x2="{ml}" y2="{top+panel_h}" '
-            f'stroke="{axis_color}" stroke-width="1.4"/>'
-        )
-        parts.append(
-            f'<line x1="{x(0):.2f}" y1="{top}" x2="{x(0):.2f}" y2="{top+panel_h}" '
-            f'stroke="#111827" stroke-dasharray="4 4" opacity="0.45"/>'
-        )
-        points_attr = " ".join(
-            f"{x(point['epoch']):.2f},{y_bars(point['validated_bars'], top):.2f}" for point in points
-        )
-        parts.append(
-            f'<polyline fill="none" stroke="{COLORS["validated_bars"]}" stroke-width="3.0" '
-            f'stroke-linejoin="round" stroke-linecap="round" points="{points_attr}"/>'
-        )
-        for point in points:
-            parts.append(
-                f'<circle cx="{x(point["epoch"]):.2f}" cy="{y_bars(point["validated_bars"], top):.2f}" '
-                f'r="3.8" fill="#ffffff" stroke="{COLORS["validated_bars"]}" stroke-width="1.8">'
-                f"<title>validated bars epoch {point['epoch']}: {point['validated_bars']:.2f} / 32</title>"
-                f"</circle>"
-            )
-        best = max(points, key=lambda point: point["validated_bars"])
-        parts.append(
-            f'<text x="{x(best["epoch"])+8:.2f}" y="{y_bars(best["validated_bars"], top)-10:.2f}" '
-            f'font-family="Arial, Helvetica, sans-serif" font-size="12" font-weight="700" '
-            f'fill="{COLORS["validated_bars"]}">best SFT: epoch {best["epoch"]}, '
-            f'{best["validated_bars"]:.1f} bars</text>'
-        )
-
     parts: list[str] = []
     parts.append(
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
@@ -233,8 +183,7 @@ def render_svg(points: list[dict]) -> str:
     )
     parts.append(
         '<desc id="desc">Two-panel line chart showing normalized structural and harmonic '
-        "reward components and a validated-bar panel. Epoch zero is the base model "
-        "with metadata-only prompting.</desc>"
+        "reward components. Epoch zero is the base model with metadata-only prompting.</desc>"
     )
     parts.append('<rect width="100%" height="100%" fill="#ffffff"/>')
     parts.append(
@@ -246,7 +195,6 @@ def render_svg(points: list[dict]) -> str:
         f'font-size="12" fill="{muted}">Means over 10 generated samples per epoch. '
         "Corrected stream-tag/bar validator; epoch 0 is the base model.</text>"
     )
-    add_validated_bars_panel(parts, p0_top)
     add_panel(parts, p1_top, "Structure and format rewards", STRUCTURAL)
     add_panel(parts, p2_top, "Harmony rewards", HARMONIC)
 
@@ -266,7 +214,7 @@ def render_svg(points: list[dict]) -> str:
         f'<text x="18" y="{(p1_top+p2_top+panel_h)/2:.2f}" '
         f'transform="rotate(-90 18 {(p1_top+p2_top+panel_h)/2:.2f})" '
         f'font-family="Arial, Helvetica, sans-serif" font-size="13" '
-        f'fill="{text_color}" text-anchor="middle">Mean component reward / bars</text>'
+        f'fill="{text_color}" text-anchor="middle">Mean normalized value</text>'
     )
     parts.append(
         f'<text x="{x(0)+8:.2f}" y="{p2_top+panel_h-10}" '
