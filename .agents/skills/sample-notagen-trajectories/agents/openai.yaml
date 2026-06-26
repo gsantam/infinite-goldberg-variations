@@ -1,0 +1,4 @@
+interface:
+  display_name: "Sample NotaGen Trajectories"
+  short_description: "Sample NotaGen continuations with cached patch-level inference."
+  default_prompt: "Sample NotaGen trajectories using cached rollout from a given checkpoint and prompt."

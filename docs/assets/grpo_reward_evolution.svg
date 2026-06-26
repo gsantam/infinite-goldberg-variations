@@ -1,0 +1,103 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="690" viewBox="0 0 980 690" role="img" aria-labelledby="title desc">
+<title id="title">GRPO training summary</title>
+<desc id="desc">Clean bucket summary of reward, validated bars, and zero-bar rate during GRPO.</desc>
+<rect width="100%" height="100%" fill="#ffffff"/>
+<text x="78" y="28" font-family="Arial, Helvetica, sans-serif" font-size="21" font-weight="700" fill="#20242c">GRPO training summary</text>
+<text x="78" y="50" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470">32-step buckets, 4 trajectories per step. Y-ranges are zoomed to show progression. Latest plotted bucket: 225-256.</text>
+<text x="78" y="70" font-family="Arial, Helvetica, sans-serif" font-size="15" font-weight="700" fill="#20242c">Reward</text>
+<line x1="78" y1="221.00" x2="802" y2="221.00" stroke="#e1e5ec" stroke-width="1"/>
+<text x="66" y="225.00" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="end">1.6</text>
+<line x1="78" y1="187.25" x2="802" y2="187.25" stroke="#e1e5ec" stroke-width="1"/>
+<text x="66" y="191.25" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="end">2.42</text>
+<line x1="78" y1="153.50" x2="802" y2="153.50" stroke="#e1e5ec" stroke-width="1"/>
+<text x="66" y="157.50" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="end">3.23</text>
+<line x1="78" y1="119.75" x2="802" y2="119.75" stroke="#e1e5ec" stroke-width="1"/>
+<text x="66" y="123.75" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="end">4.05</text>
+<line x1="78" y1="86.00" x2="802" y2="86.00" stroke="#e1e5ec" stroke-width="1"/>
+<text x="66" y="90.00" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="end">4.87</text>
+<line x1="78" y1="221" x2="802" y2="221" stroke="#252a33" stroke-width="1.4"/>
+<line x1="78" y1="86" x2="78" y2="221" stroke="#252a33" stroke-width="1.4"/>
+<polyline fill="none" stroke="#356f95" stroke-width="3.2" stroke-linejoin="round" stroke-linecap="round" points="78.00,200.30 181.43,195.25 284.86,203.75 388.29,203.27 491.71,205.16 595.14,188.20 698.57,206.23 802.00,198.37"><title>bucket mean reward</title></polyline>
+<polyline fill="none" stroke="#d67b2a" stroke-width="3.2" stroke-linejoin="round" stroke-linecap="round" points="78.00,121.91 181.43,121.22 284.86,128.83 388.29,130.09 491.71,127.25 595.14,100.77 698.57,140.47 802.00,110.10"><title>mean of per-step best reward</title></polyline>
+<text x="78" y="271" font-family="Arial, Helvetica, sans-serif" font-size="15" font-weight="700" fill="#20242c">Validated bars</text>
+<line x1="78" y1="422.00" x2="802" y2="422.00" stroke="#e1e5ec" stroke-width="1"/>
+<text x="66" y="426.00" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="end">1.97</text>
+<line x1="78" y1="388.25" x2="802" y2="388.25" stroke="#e1e5ec" stroke-width="1"/>
+<text x="66" y="392.25" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="end">5.63</text>
+<line x1="78" y1="354.50" x2="802" y2="354.50" stroke="#e1e5ec" stroke-width="1"/>
+<text x="66" y="358.50" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="end">9.29</text>
+<line x1="78" y1="320.75" x2="802" y2="320.75" stroke="#e1e5ec" stroke-width="1"/>
+<text x="66" y="324.75" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="end">12.9</text>
+<line x1="78" y1="287.00" x2="802" y2="287.00" stroke="#e1e5ec" stroke-width="1"/>
+<text x="66" y="291.00" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="end">16.6</text>
+<line x1="78" y1="422" x2="802" y2="422" stroke="#252a33" stroke-width="1.4"/>
+<line x1="78" y1="287" x2="78" y2="422" stroke="#252a33" stroke-width="1.4"/>
+<polyline fill="none" stroke="#b58a20" stroke-width="3.0" stroke-linejoin="round" stroke-linecap="round" points="78.00,401.03 181.43,395.99 284.86,404.28 388.29,404.78 491.71,404.49 595.14,389.50 698.57,407.23 802.00,400.31"><title>bucket mean validated bars</title></polyline>
+<polyline fill="none" stroke="#3f7f4f" stroke-width="3.2" stroke-linejoin="round" stroke-linecap="round" points="78.00,318.20 181.43,322.82 284.86,330.31 388.29,333.77 491.71,321.37 595.14,301.77 698.57,344.44 802.00,319.36"><title>mean of per-step max validated bars</title></polyline>
+<text x="78" y="472" font-family="Arial, Helvetica, sans-serif" font-size="15" font-weight="700" fill="#20242c">Zero-bar rate</text>
+<line x1="78" y1="623.00" x2="802" y2="623.00" stroke="#e1e5ec" stroke-width="1"/>
+<text x="66" y="627.00" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="end">0.58</text>
+<line x1="78" y1="589.25" x2="802" y2="589.25" stroke="#e1e5ec" stroke-width="1"/>
+<text x="66" y="593.25" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="end">0.61</text>
+<line x1="78" y1="555.50" x2="802" y2="555.50" stroke="#e1e5ec" stroke-width="1"/>
+<text x="66" y="559.50" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="end">0.64</text>
+<line x1="78" y1="521.75" x2="802" y2="521.75" stroke="#e1e5ec" stroke-width="1"/>
+<text x="66" y="525.75" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="end">0.68</text>
+<line x1="78" y1="488.00" x2="802" y2="488.00" stroke="#e1e5ec" stroke-width="1"/>
+<text x="66" y="492.00" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="end">0.71</text>
+<line x1="78" y1="623" x2="802" y2="623" stroke="#252a33" stroke-width="1.4"/>
+<line x1="78" y1="488" x2="78" y2="623" stroke="#252a33" stroke-width="1.4"/>
+<polyline fill="none" stroke="#c84e4e" stroke-width="3.2" stroke-linejoin="round" stroke-linecap="round" points="78.00,574.59 181.43,574.59 284.86,505.87 388.29,566.95 491.71,513.50 595.14,605.13 698.57,521.14 802.00,513.50"><title>zero-bar fraction</title></polyline>
+<circle cx="78.00" cy="200.30" r="3.4" fill="#ffffff" stroke="#356f95" stroke-width="1.8"><title>001-032 avg reward 2.101</title></circle>
+<circle cx="78.00" cy="121.91" r="3.4" fill="#ffffff" stroke="#d67b2a" stroke-width="1.8"><title>001-032 avg step-best 3.997</title></circle>
+<circle cx="78.00" cy="318.20" r="3.4" fill="#ffffff" stroke="#3f7f4f" stroke-width="1.8"><title>001-032 avg max bars 13.2</title></circle>
+<circle cx="78.00" cy="574.59" r="3.4" fill="#ffffff" stroke="#c84e4e" stroke-width="1.8"><title>001-032 zero-bar rate 0.625</title></circle>
+<circle cx="181.43" cy="195.25" r="3.4" fill="#ffffff" stroke="#356f95" stroke-width="1.8"><title>033-064 avg reward 2.223</title></circle>
+<circle cx="181.43" cy="121.22" r="3.4" fill="#ffffff" stroke="#d67b2a" stroke-width="1.8"><title>033-064 avg step-best 4.014</title></circle>
+<circle cx="181.43" cy="322.82" r="3.4" fill="#ffffff" stroke="#3f7f4f" stroke-width="1.8"><title>033-064 avg max bars 12.7</title></circle>
+<circle cx="181.43" cy="574.59" r="3.4" fill="#ffffff" stroke="#c84e4e" stroke-width="1.8"><title>033-064 zero-bar rate 0.625</title></circle>
+<circle cx="284.86" cy="203.75" r="3.4" fill="#ffffff" stroke="#356f95" stroke-width="1.8"><title>065-096 avg reward 2.018</title></circle>
+<circle cx="284.86" cy="128.83" r="3.4" fill="#ffffff" stroke="#d67b2a" stroke-width="1.8"><title>065-096 avg step-best 3.830</title></circle>
+<circle cx="284.86" cy="330.31" r="3.4" fill="#ffffff" stroke="#3f7f4f" stroke-width="1.8"><title>065-096 avg max bars 11.9</title></circle>
+<circle cx="284.86" cy="505.87" r="3.4" fill="#ffffff" stroke="#c84e4e" stroke-width="1.8"><title>065-096 zero-bar rate 0.695</title></circle>
+<circle cx="388.29" cy="203.27" r="3.4" fill="#ffffff" stroke="#356f95" stroke-width="1.8"><title>097-128 avg reward 2.029</title></circle>
+<circle cx="388.29" cy="130.09" r="3.4" fill="#ffffff" stroke="#d67b2a" stroke-width="1.8"><title>097-128 avg step-best 3.799</title></circle>
+<circle cx="388.29" cy="333.77" r="3.4" fill="#ffffff" stroke="#3f7f4f" stroke-width="1.8"><title>097-128 avg max bars 11.5</title></circle>
+<circle cx="388.29" cy="566.95" r="3.4" fill="#ffffff" stroke="#c84e4e" stroke-width="1.8"><title>097-128 zero-bar rate 0.633</title></circle>
+<circle cx="491.71" cy="205.16" r="3.4" fill="#ffffff" stroke="#356f95" stroke-width="1.8"><title>129-160 avg reward 1.983</title></circle>
+<circle cx="491.71" cy="127.25" r="3.4" fill="#ffffff" stroke="#d67b2a" stroke-width="1.8"><title>129-160 avg step-best 3.868</title></circle>
+<circle cx="491.71" cy="321.37" r="3.4" fill="#ffffff" stroke="#3f7f4f" stroke-width="1.8"><title>129-160 avg max bars 12.9</title></circle>
+<circle cx="491.71" cy="513.50" r="3.4" fill="#ffffff" stroke="#c84e4e" stroke-width="1.8"><title>129-160 zero-bar rate 0.688</title></circle>
+<circle cx="595.14" cy="188.20" r="3.4" fill="#ffffff" stroke="#356f95" stroke-width="1.8"><title>161-192 avg reward 2.394</title></circle>
+<circle cx="595.14" cy="100.77" r="3.4" fill="#ffffff" stroke="#d67b2a" stroke-width="1.8"><title>161-192 avg step-best 4.509</title></circle>
+<circle cx="595.14" cy="301.77" r="3.4" fill="#ffffff" stroke="#3f7f4f" stroke-width="1.8"><title>161-192 avg max bars 15.0</title></circle>
+<circle cx="595.14" cy="605.13" r="3.4" fill="#ffffff" stroke="#c84e4e" stroke-width="1.8"><title>161-192 zero-bar rate 0.594</title></circle>
+<circle cx="698.57" cy="206.23" r="3.4" fill="#ffffff" stroke="#356f95" stroke-width="1.8"><title>193-224 avg reward 1.957</title></circle>
+<circle cx="698.57" cy="140.47" r="3.4" fill="#ffffff" stroke="#d67b2a" stroke-width="1.8"><title>193-224 avg step-best 3.548</title></circle>
+<circle cx="698.57" cy="344.44" r="3.4" fill="#ffffff" stroke="#3f7f4f" stroke-width="1.8"><title>193-224 avg max bars 10.4</title></circle>
+<circle cx="698.57" cy="521.14" r="3.4" fill="#ffffff" stroke="#c84e4e" stroke-width="1.8"><title>193-224 zero-bar rate 0.680</title></circle>
+<circle cx="802.00" cy="198.37" r="3.4" fill="#ffffff" stroke="#356f95" stroke-width="1.8"><title>225-256 avg reward 2.148</title></circle>
+<circle cx="802.00" cy="110.10" r="3.4" fill="#ffffff" stroke="#d67b2a" stroke-width="1.8"><title>225-256 avg step-best 4.283</title></circle>
+<circle cx="802.00" cy="319.36" r="3.4" fill="#ffffff" stroke="#3f7f4f" stroke-width="1.8"><title>225-256 avg max bars 13.1</title></circle>
+<circle cx="802.00" cy="513.50" r="3.4" fill="#ffffff" stroke="#c84e4e" stroke-width="1.8"><title>225-256 zero-bar rate 0.688</title></circle>
+<text x="78.00" y="647" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#5c6470" text-anchor="middle">001-032</text>
+<text x="181.43" y="647" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#5c6470" text-anchor="middle">033-064</text>
+<text x="284.86" y="647" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#5c6470" text-anchor="middle">065-096</text>
+<text x="388.29" y="647" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#5c6470" text-anchor="middle">097-128</text>
+<text x="491.71" y="647" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#5c6470" text-anchor="middle">129-160</text>
+<text x="595.14" y="647" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#5c6470" text-anchor="middle">161-192</text>
+<text x="698.57" y="647" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#5c6470" text-anchor="middle">193-224</text>
+<text x="802.00" y="647" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#5c6470" text-anchor="middle">225-256</text>
+<text x="830" y="96" font-family="Arial, Helvetica, sans-serif" font-size="13" font-weight="700" fill="#20242c">Series</text>
+<line x1="830" y1="118" x2="854" y2="118" stroke="#356f95" stroke-width="3" stroke-linecap="round"/>
+<text x="862" y="122" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#20242c">mean reward</text>
+<line x1="830" y1="140" x2="854" y2="140" stroke="#d67b2a" stroke-width="3" stroke-linecap="round"/>
+<text x="862" y="144" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#20242c">step-best reward</text>
+<line x1="830" y1="162" x2="854" y2="162" stroke="#b58a20" stroke-width="3" stroke-linecap="round"/>
+<text x="862" y="166" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#20242c">mean bars</text>
+<line x1="830" y1="184" x2="854" y2="184" stroke="#3f7f4f" stroke-width="3" stroke-linecap="round"/>
+<text x="862" y="188" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#20242c">step max bars</text>
+<line x1="830" y1="206" x2="854" y2="206" stroke="#c84e4e" stroke-width="3" stroke-linecap="round"/>
+<text x="862" y="210" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#20242c">zero-bar rate</text>
+<text x="440.00" y="674" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#20242c" text-anchor="middle">GRPO step bucket</text>
+</svg>

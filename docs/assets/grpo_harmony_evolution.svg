@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="640" viewBox="0 0 1000 640" role="img" aria-labelledby="title desc">
+<title id="title">GRPO harmony reward evolution</title>
+<desc id="desc">Harmony reward contribution and raw harmony component means averaged by GRPO step bucket.</desc>
+<rect width="100%" height="100%" fill="#ffffff"/>
+<text x="74" y="28" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="700" fill="#20242c">GRPO harmony reward evolution</text>
+<text x="74" y="50" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470">Top panel is the bar-gated weighted harmony contribution. Bottom panel shows raw normalized harmony components.</text>
+<text x="74" y="66" font-family="Arial, Helvetica, sans-serif" font-size="15" font-weight="700" fill="#20242c">Weighted harmony contribution</text>
+<line x1="74" y1="272.00" x2="750" y2="272.00" stroke="#d9dee7" stroke-width="1"/>
+<text x="62" y="276.00" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="end">0</text>
+<line x1="74" y1="229.78" x2="750" y2="229.78" stroke="#d9dee7" stroke-width="1"/>
+<text x="62" y="233.78" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="end">1</text>
+<line x1="74" y1="187.56" x2="750" y2="187.56" stroke="#d9dee7" stroke-width="1"/>
+<text x="62" y="191.56" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="end">2</text>
+<line x1="74" y1="145.33" x2="750" y2="145.33" stroke="#d9dee7" stroke-width="1"/>
+<text x="62" y="149.33" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="end">3</text>
+<line x1="74" y1="103.11" x2="750" y2="103.11" stroke="#d9dee7" stroke-width="1"/>
+<text x="62" y="107.11" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="end">4</text>
+<line x1="74" y1="272" x2="750" y2="272" stroke="#252a33" stroke-width="1.4"/>
+<line x1="74" y1="82" x2="74" y2="272" stroke="#252a33" stroke-width="1.4"/>
+<polyline fill="none" stroke="#1f4e79" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" points="74.00,258.54 170.57,254.94 267.14,259.07 363.71,259.11 460.29,261.49 556.86,252.97 653.43,260.63 750.00,255.61"><title>bucket mean harmony contribution</title></polyline>
+<polyline fill="none" stroke="#f28e2b" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round" points="74.00,147.31 170.57,105.01 267.14,117.62 363.71,122.16 460.29,156.30 556.86,107.23 653.43,128.35 750.00,92.64"><title>bucket max harmony contribution</title></polyline>
+<text x="74" y="328" font-family="Arial, Helvetica, sans-serif" font-size="15" font-weight="700" fill="#20242c">Raw harmony component means</text>
+<line x1="74" y1="534.00" x2="750" y2="534.00" stroke="#d9dee7" stroke-width="1"/>
+<text x="62" y="538.00" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="end">0</text>
+<line x1="74" y1="486.50" x2="750" y2="486.50" stroke="#d9dee7" stroke-width="1"/>
+<text x="62" y="490.50" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="end">0.25</text>
+<line x1="74" y1="439.00" x2="750" y2="439.00" stroke="#d9dee7" stroke-width="1"/>
+<text x="62" y="443.00" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="end">0.5</text>
+<line x1="74" y1="391.50" x2="750" y2="391.50" stroke="#d9dee7" stroke-width="1"/>
+<text x="62" y="395.50" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="end">0.75</text>
+<line x1="74" y1="344.00" x2="750" y2="344.00" stroke="#d9dee7" stroke-width="1"/>
+<text x="62" y="348.00" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="end">1</text>
+<line x1="74" y1="534" x2="750" y2="534" stroke="#252a33" stroke-width="1.4"/>
+<line x1="74" y1="344" x2="74" y2="534" stroke="#252a33" stroke-width="1.4"/>
+<polyline fill="none" stroke="#76b7b2" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" points="74.00,506.81 170.57,506.95 267.14,508.35 363.71,507.61 460.29,507.28 556.86,508.02 653.43,506.26 750.00,507.42"><title>root</title></polyline>
+<polyline fill="none" stroke="#ff9da7" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" points="74.00,496.74 170.57,497.35 267.14,496.47 363.71,497.12 460.29,496.57 556.86,498.28 653.43,498.75 750.00,496.84"><title>bass pc</title></polyline>
+<polyline fill="none" stroke="#af7aa1" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" points="74.00,507.28 170.57,508.77 267.14,512.48 363.71,511.36 460.29,509.14 556.86,512.48 653.43,506.17 750.00,508.77"><title>cadence root</title></polyline>
+<polyline fill="none" stroke="#8cd17d" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" points="74.00,461.27 170.57,459.78 267.14,459.78 363.71,464.61 460.29,462.38 556.86,463.86 653.43,464.98 750.00,460.89"><title>cadence bass</title></polyline>
+<text x="74.00" y="558" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#5c6470" text-anchor="middle">001-032</text>
+<text x="170.57" y="558" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#5c6470" text-anchor="middle">033-064</text>
+<text x="267.14" y="558" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#5c6470" text-anchor="middle">065-096</text>
+<text x="363.71" y="558" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#5c6470" text-anchor="middle">097-128</text>
+<text x="460.29" y="558" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#5c6470" text-anchor="middle">129-160</text>
+<text x="556.86" y="558" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#5c6470" text-anchor="middle">161-192</text>
+<text x="653.43" y="558" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#5c6470" text-anchor="middle">193-224</text>
+<text x="750.00" y="558" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#5c6470" text-anchor="middle">225-256</text>
+<text x="412.00" y="624" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#20242c" text-anchor="middle">GRPO step bucket</text>
+<text x="780" y="84" font-family="Arial, Helvetica, sans-serif" font-size="13" font-weight="700" fill="#20242c">Harmony</text>
+<line x1="780" y1="104" x2="804" y2="104" stroke="#1f4e79" stroke-width="2.5" stroke-linecap="round"/>
+<text x="814" y="108" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#20242c">mean contribution</text>
+<line x1="780" y1="126" x2="804" y2="126" stroke="#f28e2b" stroke-width="2.5" stroke-linecap="round"/>
+<text x="814" y="130" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#20242c">max contribution</text>
+<line x1="780" y1="148" x2="804" y2="148" stroke="#76b7b2" stroke-width="2.5" stroke-linecap="round"/>
+<text x="814" y="152" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#20242c">root</text>
+<line x1="780" y1="170" x2="804" y2="170" stroke="#ff9da7" stroke-width="2.5" stroke-linecap="round"/>
+<text x="814" y="174" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#20242c">bass pc</text>
+<line x1="780" y1="192" x2="804" y2="192" stroke="#af7aa1" stroke-width="2.5" stroke-linecap="round"/>
+<text x="814" y="196" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#20242c">cadence root</text>
+<line x1="780" y1="214" x2="804" y2="214" stroke="#8cd17d" stroke-width="2.5" stroke-linecap="round"/>
+<text x="814" y="218" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#20242c">cadence bass</text>
+</svg>
