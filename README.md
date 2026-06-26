@@ -21,7 +21,8 @@ shape. But inside those constraints, each variation has its own texture, rhythm,
 and character.
 
 You can listen to the Aria here:
-[aria-bwv-988-two-voices.m4a](https://raw.githubusercontent.com/gsantam/infinite-goldberg-variations/main/docs/audio/aria-bwv-988-two-voices.m4a).
+
+https://github.com/user-attachments/assets/7947d0ac-930b-46ed-a809-8db848f93aa4
 
 ## Beyond semantic similarity
 
@@ -96,13 +97,16 @@ At this point, and for epochs 8 - 9 we can already generate some relatively
 decent melodies, that for sure sound baroque and Bach but also are similar to
 some of the variations, or at least one can have reminiscences of the theme.
 This one is similar to the fifth variation:
-[notagen_large_rerun_correct_prefix_seed0.m4a](https://raw.githubusercontent.com/gsantam/infinite-goldberg-variations/main/docs/audio/notagen_large_rerun_correct_prefix_seed0.m4a).
+
+https://github.com/user-attachments/assets/22d78800-5551-4971-a8d0-d8c975bb2e17
 
 For comparison, this is the real fifth variation:
-[variation-05-bwv-988.m4a](https://raw.githubusercontent.com/gsantam/infinite-goldberg-variations/main/docs/audio/variation-05-bwv-988.m4a).
+
+https://github.com/user-attachments/assets/29946a8d-e342-4575-a675-bc035fc256e2
 
 And this one is a bit more dreamy and free:
-[epoch09_sample08_seed9_continuation.m4a](https://raw.githubusercontent.com/gsantam/infinite-goldberg-variations/main/docs/audio/epoch09_sample08_seed9_continuation.m4a).
+
+https://github.com/user-attachments/assets/d4572752-1bc0-4638-8545-94993a001005
 
 Both of them are still very unrefined versions, with harmonic problems, where
 the initial counterpoint ends up becoming very messy and without a very clear
@@ -146,14 +150,17 @@ Qualitatively, the melodies produced after RL also seem to have a much more
 coherent large-scale structure. For example, this fixed render from step 171 has
 a clear two-part form, and each part splits again into two subparts, which is
 close to the phrase layout of the Aria:
-[grpo_step_171_sample_01_fixed_bar4.m4a](https://raw.githubusercontent.com/gsantam/infinite-goldberg-variations/main/docs/audio/grpo_step_171_sample_01_fixed_bar4.m4a).
+
+https://github.com/user-attachments/assets/8827cbc2-4294-4f98-96df-ebacd547c2c3
 
 Another good example is this high-reward render from step 54:
-[grpo_step_054_sample_00_reward_8.6605.m4a](https://raw.githubusercontent.com/gsantam/infinite-goldberg-variations/main/docs/audio/grpo_step_054_sample_00_reward_8.6605.m4a).
+
+https://github.com/user-attachments/assets/dde4d5ef-8dff-4f98-ae0f-a74301af2501
 
 A more imperfect one, with some mistakes but where the Aria theme is very easy
 to identify and stands out, is this mid-range render from step 253:
-[grpo_step_253_sample_00_reward_5.0870.m4a](https://raw.githubusercontent.com/gsantam/infinite-goldberg-variations/main/docs/audio/grpo_step_253_sample_00_reward_5.0870.m4a).
+
+https://github.com/user-attachments/assets/e2d51828-a2b7-48b1-b7a6-64602dedbc60
 
 Making NotaGen work with GRPO is already a challenge because its decoding is
 hierarchical: patch-level generation, token-level generation, and replayed
