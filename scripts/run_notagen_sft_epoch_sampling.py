@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import random
 import subprocess
 import sys
 import time
@@ -58,7 +59,8 @@ def sample_cached_trajectories(
     *,
     project_dir: Path,
     weights: Path,
-    prefix: Path,
+    prefix: Path | None,
+    prefix_specs: list[dict] | None,
     out_dir: Path,
     samples_per_epoch: int,
     max_generation_attempts: int,
@@ -72,15 +74,29 @@ def sample_cached_trajectories(
     epoch: int,
 ) -> tuple[list[Path], list[dict], list[dict]]:
     build_model, count_stream_lines, sample_completion_cached, set_seed = load_cached_sampler(project_dir)
-    prompt = prefix.read_text(encoding="utf-8")
     model, model_shape = build_model(weights, precision=precision)
     candidates: list[Path] = []
     generation_failures: list[dict] = []
     sample_metadata: list[dict] = []
+    rng = random.Random(epoch)
+    shuffled_prefix_specs = prefix_specs[:] if prefix_specs else []
+    rng.shuffle(shuffled_prefix_specs)
 
     for attempt_seed in range(max_generation_attempts):
         sample_idx = len(candidates)
-        output = out_dir / f"epoch{epoch:02d}_sample{sample_idx:02d}_seed{attempt_seed}.abc"
+        if shuffled_prefix_specs:
+            prefix_spec = shuffled_prefix_specs[attempt_seed % len(shuffled_prefix_specs)]
+            prefix_path = Path(prefix_spec["prefix"])
+            if not prefix_path.is_absolute():
+                prefix_path = project_dir / prefix_path
+            prefix_name = prefix_path.stem
+        else:
+            if prefix is None:
+                raise ValueError("prefix is required when prefix_specs is not provided")
+            prefix_path = prefix
+            prefix_name = prefix_path.stem
+        prompt = prefix_path.read_text(encoding="utf-8")
+        output = out_dir / f"epoch{epoch:02d}_sample{sample_idx:02d}_{prefix_name}_seed{attempt_seed}.abc"
         try:
             set_seed(attempt_seed)
             t0 = time.perf_counter()
@@ -108,6 +124,8 @@ def sample_cached_trajectories(
         metadata = {
             "seed": attempt_seed,
             "path": str(output),
+            "prefix_path": str(prefix_path),
+            "prefix_name": prefix_name,
             "generated_patches": len(generated_patches),
             "chars": len(full_text),
             "stream_lines": stream_lines,
@@ -136,7 +154,8 @@ def sample_cached_trajectories(
 def score_rewards(
     *,
     project_dir: Path,
-    prefix: Path,
+    prefix: Path | None,
+    candidate_prefixes: dict[str, Path],
     reward_target_json: Path,
     candidates: list[Path],
     out_path: Path,
@@ -145,11 +164,14 @@ def score_rewards(
         sys.path.insert(0, str(project_dir))
     from grpo.rewards import GoldbergRewardConfig, load_structural_target, score_prompt_completion_pair  # type: ignore
 
-    prompt = prefix.read_text(encoding="utf-8")
     target = load_structural_target(reward_target_json)
     config = GoldbergRewardConfig()
     rows = []
     for candidate in candidates:
+        prefix_path = candidate_prefixes.get(str(candidate), prefix)
+        if prefix_path is None:
+            raise ValueError(f"missing prefix for {candidate}")
+        prompt = prefix_path.read_text(encoding="utf-8")
         text = candidate.read_text(encoding="utf-8")
         completion = text[len(prompt) :] if text.startswith(prompt) else text
         breakdown = score_prompt_completion_pair(
@@ -178,7 +200,10 @@ def main() -> None:
     parser.add_argument("--pretrained", type=Path, default=Path("/home/jl_fs/music-generation/models/weights_notagen_pretrain-finetune_p_size_16_p_length_1024_p_layers_c_layers_6_20_h_size_1280_lr_1e-05_batch_1.pth"))
     parser.add_argument("--train-jsonl", type=Path, default=Path("/home/jl_fs/music-generation/infinite-goldberg-variations/data/processed/notagen/goldberg_aria_conditioned/augmented_train.jsonl"))
     parser.add_argument("--eval-jsonl", type=Path, default=Path("/home/jl_fs/music-generation/infinite-goldberg-variations/data/processed/notagen/goldberg_aria_conditioned/augmented_eval.jsonl"))
+    parser.add_argument("--train-prefix-mask-root", type=Path, default=None)
+    parser.add_argument("--train-prefix-mask-source-root", type=Path, default=None)
     parser.add_argument("--prefix", type=Path, default=Path("/home/jl_fs/music-generation/infinite-goldberg-variations/data/processed/notagen/aria_plus_variation01_setup_G.abc"))
+    parser.add_argument("--prefix-manifest", type=Path, default=None)
     parser.add_argument("--aria-reference", type=Path, default=Path("/home/jl_fs/music-generation/infinite-goldberg-variations/data/processed/notagen/aria_prefix_G_streamed.abc"))
     parser.add_argument("--clamp2-dir", type=Path, default=Path("/home/jl_fs/music-generation/NotaGen/clamp2"))
     parser.add_argument("--output-dir", type=Path, default=Path("/home/jl_fs/music-generation/outputs/large_sft10_epoch_sampling_clamp2"))
@@ -208,9 +233,23 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    for required in [args.notagen_dir, args.project_dir, args.pretrained, args.train_jsonl, args.eval_jsonl, args.prefix, args.aria_reference, args.clamp2_dir, args.reward_target_json]:
+    required_paths = [args.notagen_dir, args.project_dir, args.pretrained, args.train_jsonl, args.eval_jsonl, args.aria_reference, args.clamp2_dir, args.reward_target_json]
+    if args.train_prefix_mask_root is not None:
+        required_paths.append(args.train_prefix_mask_root)
+    if args.train_prefix_mask_source_root is not None:
+        required_paths.append(args.train_prefix_mask_source_root)
+    if args.prefix_manifest is None:
+        required_paths.append(args.prefix)
+    else:
+        required_paths.append(args.prefix_manifest)
+    for required in required_paths:
         if not required.exists():
             raise FileNotFoundError(required)
+    prefix_specs = None
+    if args.prefix_manifest is not None:
+        prefix_specs = [json.loads(line) for line in args.prefix_manifest.read_text(encoding="utf-8").splitlines() if line.strip()]
+        if not prefix_specs:
+            raise ValueError(f"empty prefix manifest: {args.prefix_manifest}")
     variation_refs = sorted(args.project_dir.glob(args.variation_reference_glob))
     if not variation_refs:
         raise FileNotFoundError(f"no variation references matched {args.variation_reference_glob!r} under {args.project_dir}")
@@ -261,6 +300,10 @@ def main() -> None:
                 "NOTAGEN_LOAD_FROM_CHECKPOINT": "true" if epoch > 1 else "false",
             }
         )
+        if args.train_prefix_mask_root is not None:
+            env["NOTAGEN_PREFIX_MASK_ROOT"] = str(args.train_prefix_mask_root)
+        if args.train_prefix_mask_source_root is not None:
+            env["NOTAGEN_PREFIX_MASK_SOURCE_ROOT"] = str(args.train_prefix_mask_source_root)
 
         run([str(args.venv_python), "train-gen.py"], cwd=args.notagen_dir / "finetune", env=env, log=train_stdout)
         losses = parse_loss_log(loss_log)
@@ -271,7 +314,8 @@ def main() -> None:
         candidates, generation_failures, sample_metadata = sample_cached_trajectories(
             project_dir=args.project_dir,
             weights=rolling_checkpoint,
-            prefix=args.prefix,
+            prefix=args.prefix if args.prefix_manifest is None else None,
+            prefix_specs=prefix_specs,
             out_dir=epoch_samples_dir,
             samples_per_epoch=args.samples_per_epoch,
             max_generation_attempts=args.max_generation_attempts,
@@ -326,9 +370,11 @@ def main() -> None:
         )
 
         rewards_jsonl = scores_dir / f"epoch{epoch:02d}_rewards.jsonl"
+        candidate_prefixes = {row["path"]: Path(row["prefix_path"]) for row in sample_metadata if "prefix_path" in row}
         reward_rows = score_rewards(
             project_dir=args.project_dir,
-            prefix=args.prefix,
+            prefix=args.prefix if args.prefix_manifest is None else None,
+            candidate_prefixes=candidate_prefixes,
             reward_target_json=args.reward_target_json,
             candidates=candidates,
             out_path=rewards_jsonl,

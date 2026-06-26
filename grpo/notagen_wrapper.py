@@ -5,13 +5,20 @@ from dataclasses import dataclass
 import importlib.util
 from pathlib import Path
 import random
-import re
 import sys
 import time
 
 import numpy as np
 import torch
 from transformers import GPT2Config
+
+from grpo.stream_tags import (
+    count_stream_lines as _count_stream_lines,
+    latest_stream_line as _latest_stream_line,
+    latest_stream_line_closed,
+    stream_target_reached,
+    trim_to_stream_lines as _trim_to_stream_lines,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 NOTAGEN_ROOT = PROJECT_ROOT.parent / "NotaGen"
@@ -132,24 +139,19 @@ def autocast_context(device: torch.device, precision: str):
     return nullcontext()
 
 
-def latest_countdown(abc_text: str) -> tuple[int, int] | None:
-    matches = re.findall(r"\[r:(\d+)/(\d+)\]", abc_text)
-    if not matches:
+def latest_stream_tag(abc_text: str) -> tuple[int, int] | None:
+    line = _latest_stream_line(abc_text)
+    if line is None:
         return None
-    i, j = matches[-1]
-    return int(i), int(j)
+    return line.tag.index, line.tag.marker
 
 
-def latest_stream_line_closed(abc_text: str) -> bool:
-    lines = [line for line in abc_text.splitlines() if line.startswith("[r:")]
-    if not lines:
-        return False
-    last = lines[-1].rstrip()
-    return last.endswith("|") or last.endswith(":|") or last.endswith("||")
+def latest_countdown(abc_text: str) -> tuple[int, int] | None:
+    return latest_stream_tag(abc_text)
 
 
 def count_stream_lines(abc_text: str) -> int:
-    return sum(1 for line in abc_text.splitlines() if line.startswith("[r:"))
+    return _count_stream_lines(abc_text)
 
 
 def split_metadata_and_tunebody_lines(abc_text: str) -> tuple[list[str], list[str]]:
@@ -165,15 +167,7 @@ def split_metadata_and_tunebody_lines(abc_text: str) -> tuple[list[str], list[st
 
 
 def trim_to_stream_lines(abc_text: str, target_lines: int) -> str:
-    out_lines: list[str] = []
-    count = 0
-    for line in abc_text.splitlines(keepends=True):
-        out_lines.append(line)
-        if line.startswith("[r:"):
-            count += 1
-            if count >= target_lines:
-                break
-    return "".join(out_lines)
+    return _trim_to_stream_lines(abc_text, target_lines)
 
 
 def normalize_patch_for_context(patch: list[int], eos_token_id: int, special_token_id: int) -> list[int]:
@@ -249,20 +243,16 @@ def sample_completion(
                         temperature=temperature,
                     )
                 current_text = "".join(byte_list)
-                countdown = latest_countdown(current_text)
                 eos_only = candidate_patch[0] == patchilizer.bos_token_id and candidate_patch[1] == patchilizer.eos_token_id
                 if eos_only:
-                    allow_eos = False
-                    if countdown is not None:
-                        _, remaining = countdown
-                        allow_eos = remaining == 0 and latest_stream_line_closed(current_text)
+                    allow_eos = stream_target_reached(current_text, target_stream_lines)
                     if not allow_eos:
                         continue
                 predicted_patch = candidate_patch
                 break
 
             if predicted_patch is None:
-                raise RuntimeError("decoder produced only early EOS candidates before countdown completion")
+                raise RuntimeError("decoder produced only early EOS candidates before target stream line completion")
 
             if predicted_patch[0] == patchilizer.bos_token_id and predicted_patch[1] == patchilizer.eos_token_id:
                 break
