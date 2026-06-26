@@ -1,11 +1,10 @@
 # Infinite Goldberg Variations
 
-Bach's [*Goldberg Variations*](https://open.spotify.com/album/1aCpHSQE5ghxibsQ5gkBe0?si=8XK24O7ZTUShSqC-5yzbNQ) have fascinated classical music aficionados and professionals:
-they have something hypnotic and even a bit obsessive, but they are also tender
-and lightful, built around a melody that keeps coming and going. I have
-come back to them many times during my life, and they still amaze me, so I
-thought that, as a (maybe a bit macabre) music generation exercise, and in a kind of play similar to
-the ones suggested in [*Godel, Escher,
+Bach's [*Goldberg Variations*](https://open.spotify.com/album/1aCpHSQE5ghxibsQ5gkBe0?si=8XK24O7ZTUShSqC-5yzbNQ)
+are a useful object for music generation because they are both tightly
+constrained and very varied. I have come back to them many times, so I thought
+that, as a music generation exercise, and in a kind of play similar to the ones
+suggested in [*Godel, Escher,
 Bach*](https://en.wikipedia.org/wiki/G%C3%B6del,_Escher,_Bach), it would be fun
 to try to see how other, maybe infinite, variations would sound.
 
