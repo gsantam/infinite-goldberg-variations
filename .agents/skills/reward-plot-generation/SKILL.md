@@ -18,8 +18,8 @@ Default inputs are:
 
 - baseline epoch 0 rewards:
   `data/processed/notagen/base_large_metadata_only_cached10_20260626/metadata_only_rewards.jsonl`
-- SFT epoch rewards:
-  `data/processed/notagen/large_sft10_cached10_rewards_20260626_094754/scores/epoch*_rewards.jsonl`
+- corrected SFT epoch rewards:
+  `data/processed/notagen/reward_exports/large_sft10_cached10_rewards_refactored_20260626/epoch*_rewards.jsonl`
 
 Each SFT epoch file contains 10 sampled trajectories. The baseline file is treated as
 epoch `0`.
@@ -44,7 +44,7 @@ component curves for interpretation.
 Structure / format panel:
 
 - `parse_reward`: Music21 can parse the ABC
-- `countdown_reward`: remaining-bar countdown decreases correctly
+- `countdown_reward`: stream tags are internally consistent
 - `line_closure_reward`: generated stream lines close as bars
 - `bar_token_reward`: generated lines emit bar tokens
 - `meter_alignment_reward`: bars align with the declared meter
