@@ -22,7 +22,7 @@ and character.
 
 You can listen to the Aria here:
 
-https://github.com/user-attachments/assets/7947d0ac-930b-46ed-a809-8db848f93aa4
+https://github.com/user-attachments/assets/fa3557df-cc84-4e95-8cbd-53407603f8d6
 
 ## Beyond semantic similarity
 
@@ -98,15 +98,15 @@ decent melodies, that for sure sound baroque and Bach but also are similar to
 some of the variations, or at least one can have reminiscences of the theme.
 This one is similar to the fifth variation:
 
-https://github.com/user-attachments/assets/22d78800-5551-4971-a8d0-d8c975bb2e17
+https://github.com/user-attachments/assets/1c8b07e3-0f19-4afa-a38d-0aac39d53ce6
 
 For comparison, this is the real fifth variation:
 
-https://github.com/user-attachments/assets/29946a8d-e342-4575-a675-bc035fc256e2
+https://github.com/user-attachments/assets/0deb5544-7d33-4a89-ab0f-9d2363995b88
 
 And this one is a bit more dreamy and free:
 
-https://github.com/user-attachments/assets/d4572752-1bc0-4638-8545-94993a001005
+https://github.com/user-attachments/assets/eb4a3cf9-9998-4410-9401-e3708356828f
 
 Both of them are still very unrefined versions, with harmonic problems, where
 the initial counterpoint ends up becoming very messy and without a very clear
@@ -151,16 +151,16 @@ coherent large-scale structure. For example, this fixed render from step 171 has
 a clear two-part form, and each part splits again into two subparts, which is
 close to the phrase layout of the Aria:
 
-https://github.com/user-attachments/assets/8827cbc2-4294-4f98-96df-ebacd547c2c3
+https://github.com/user-attachments/assets/56f300b6-9181-48f5-94d3-d57fa0cb6746
 
 Another good example is this high-reward render from step 54:
 
-https://github.com/user-attachments/assets/dde4d5ef-8dff-4f98-ae0f-a74301af2501
+https://github.com/user-attachments/assets/87f1db78-1f7f-4797-9659-eb4514aa9d66
 
 A more imperfect one, with some mistakes but where the Aria theme is very easy
 to identify and stands out, is this mid-range render from step 253:
 
-https://github.com/user-attachments/assets/e2d51828-a2b7-48b1-b7a6-64602dedbc60
+https://github.com/user-attachments/assets/def7095a-93e8-4cf1-8791-d05a1c3d880d
 
 Making NotaGen work with GRPO is already a challenge because its decoding is
 hierarchical: patch-level generation, token-level generation, and replayed
