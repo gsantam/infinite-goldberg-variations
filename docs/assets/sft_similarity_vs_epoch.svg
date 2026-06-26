@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="860" height="500" viewBox="0 0 860 500" role="img" aria-labelledby="title desc">
+<title id="title">CLaMP2 similarity from metadata-only baseline through SFT epochs</title>
+<desc id="desc">Line chart comparing generated samples against the Aria and the average variation embedding. Epoch zero is the base model with metadata-only prompting.</desc>
+<rect width="100%" height="100%" fill="#ffffff"/>
+<text x="78" y="28" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="700" fill="#20242c">CLaMP2 similarity during SFT</text>
+<text x="78" y="48" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470">Epoch 0 is the base NotaGen-large model prompted only with metadata; epochs 1-10 are Aria-conditioned SFT.</text>
+<line x1="78" y1="422.00" x2="826" y2="422.00" stroke="#d9dee7" stroke-width="1"/>
+<text x="66" y="426.00" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="end">0.2</text>
+<line x1="78" y1="376.00" x2="826" y2="376.00" stroke="#d9dee7" stroke-width="1"/>
+<text x="66" y="380.00" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="end">0.3</text>
+<line x1="78" y1="330.00" x2="826" y2="330.00" stroke="#d9dee7" stroke-width="1"/>
+<text x="66" y="334.00" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="end">0.4</text>
+<line x1="78" y1="284.00" x2="826" y2="284.00" stroke="#d9dee7" stroke-width="1"/>
+<text x="66" y="288.00" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="end">0.5</text>
+<line x1="78" y1="238.00" x2="826" y2="238.00" stroke="#d9dee7" stroke-width="1"/>
+<text x="66" y="242.00" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="end">0.6</text>
+<line x1="78" y1="192.00" x2="826" y2="192.00" stroke="#d9dee7" stroke-width="1"/>
+<text x="66" y="196.00" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="end">0.7</text>
+<line x1="78" y1="146.00" x2="826" y2="146.00" stroke="#d9dee7" stroke-width="1"/>
+<text x="66" y="150.00" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="end">0.8</text>
+<line x1="78" y1="100.00" x2="826" y2="100.00" stroke="#d9dee7" stroke-width="1"/>
+<text x="66" y="104.00" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="end">0.9</text>
+<line x1="78" y1="54.00" x2="826" y2="54.00" stroke="#d9dee7" stroke-width="1"/>
+<text x="66" y="58.00" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="end">1.0</text>
+<line x1="78.00" y1="54" x2="78.00" y2="422" stroke="#d9dee7" stroke-width="1" opacity="0.55"/>
+<text x="78.00" y="446" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="middle">0</text>
+<line x1="152.80" y1="54" x2="152.80" y2="422" stroke="#d9dee7" stroke-width="1" opacity="0.55"/>
+<text x="152.80" y="446" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="middle">1</text>
+<line x1="227.60" y1="54" x2="227.60" y2="422" stroke="#d9dee7" stroke-width="1" opacity="0.55"/>
+<text x="227.60" y="446" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="middle">2</text>
+<line x1="302.40" y1="54" x2="302.40" y2="422" stroke="#d9dee7" stroke-width="1" opacity="0.55"/>
+<text x="302.40" y="446" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="middle">3</text>
+<line x1="377.20" y1="54" x2="377.20" y2="422" stroke="#d9dee7" stroke-width="1" opacity="0.55"/>
+<text x="377.20" y="446" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="middle">4</text>
+<line x1="452.00" y1="54" x2="452.00" y2="422" stroke="#d9dee7" stroke-width="1" opacity="0.55"/>
+<text x="452.00" y="446" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="middle">5</text>
+<line x1="526.80" y1="54" x2="526.80" y2="422" stroke="#d9dee7" stroke-width="1" opacity="0.55"/>
+<text x="526.80" y="446" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="middle">6</text>
+<line x1="601.60" y1="54" x2="601.60" y2="422" stroke="#d9dee7" stroke-width="1" opacity="0.55"/>
+<text x="601.60" y="446" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="middle">7</text>
+<line x1="676.40" y1="54" x2="676.40" y2="422" stroke="#d9dee7" stroke-width="1" opacity="0.55"/>
+<text x="676.40" y="446" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="middle">8</text>
+<line x1="751.20" y1="54" x2="751.20" y2="422" stroke="#d9dee7" stroke-width="1" opacity="0.55"/>
+<text x="751.20" y="446" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="middle">9</text>
+<line x1="826.00" y1="54" x2="826.00" y2="422" stroke="#d9dee7" stroke-width="1" opacity="0.55"/>
+<text x="826.00" y="446" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470" text-anchor="middle">10</text>
+<line x1="78" y1="422" x2="826" y2="422" stroke="#252a33" stroke-width="1.5"/>
+<line x1="78" y1="54" x2="78" y2="422" stroke="#252a33" stroke-width="1.5"/>
+<text x="452.00" y="476" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#20242c" text-anchor="middle">Epoch</text>
+<text x="18" y="238.00" transform="rotate(-90 18 238.00)" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#20242c" text-anchor="middle">Cosine similarity</text>
+<polyline fill="none" stroke="#d62728" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" points="78.00,362.12 152.80,117.49 227.60,100.59 302.40,100.58 377.20,102.72 452.00,101.78 526.80,98.64 601.60,95.42 676.40,93.50 751.20,96.42 826.00,90.69"/>
+<polyline fill="none" stroke="#1f77b4" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" points="78.00,320.51 152.80,163.24 227.60,169.92 302.40,170.05 377.20,174.86 452.00,168.76 526.80,170.68 601.60,171.18 676.40,173.20 751.20,173.28 826.00,182.63"/>
+<circle cx="78.00" cy="362.12" r="4.2" fill="#ffffff" stroke="#d62728" stroke-width="2"><title>Average variations epoch 0: 0.330</title></circle>
+<circle cx="78.00" cy="320.51" r="4.2" fill="#ffffff" stroke="#1f77b4" stroke-width="2"><title>Aria epoch 0: 0.421</title></circle>
+<circle cx="152.80" cy="117.49" r="4.2" fill="#ffffff" stroke="#d62728" stroke-width="2"><title>Average variations epoch 1: 0.862</title></circle>
+<circle cx="152.80" cy="163.24" r="4.2" fill="#ffffff" stroke="#1f77b4" stroke-width="2"><title>Aria epoch 1: 0.763</title></circle>
+<circle cx="227.60" cy="100.59" r="4.2" fill="#ffffff" stroke="#d62728" stroke-width="2"><title>Average variations epoch 2: 0.899</title></circle>
+<circle cx="227.60" cy="169.92" r="4.2" fill="#ffffff" stroke="#1f77b4" stroke-width="2"><title>Aria epoch 2: 0.748</title></circle>
+<circle cx="302.40" cy="100.58" r="4.2" fill="#ffffff" stroke="#d62728" stroke-width="2"><title>Average variations epoch 3: 0.899</title></circle>
+<circle cx="302.40" cy="170.05" r="4.2" fill="#ffffff" stroke="#1f77b4" stroke-width="2"><title>Aria epoch 3: 0.748</title></circle>
+<circle cx="377.20" cy="102.72" r="4.2" fill="#ffffff" stroke="#d62728" stroke-width="2"><title>Average variations epoch 4: 0.894</title></circle>
+<circle cx="377.20" cy="174.86" r="4.2" fill="#ffffff" stroke="#1f77b4" stroke-width="2"><title>Aria epoch 4: 0.737</title></circle>
+<circle cx="452.00" cy="101.78" r="4.2" fill="#ffffff" stroke="#d62728" stroke-width="2"><title>Average variations epoch 5: 0.896</title></circle>
+<circle cx="452.00" cy="168.76" r="4.2" fill="#ffffff" stroke="#1f77b4" stroke-width="2"><title>Aria epoch 5: 0.751</title></circle>
+<circle cx="526.80" cy="98.64" r="4.2" fill="#ffffff" stroke="#d62728" stroke-width="2"><title>Average variations epoch 6: 0.903</title></circle>
+<circle cx="526.80" cy="170.68" r="4.2" fill="#ffffff" stroke="#1f77b4" stroke-width="2"><title>Aria epoch 6: 0.746</title></circle>
+<circle cx="601.60" cy="95.42" r="4.2" fill="#ffffff" stroke="#d62728" stroke-width="2"><title>Average variations epoch 7: 0.910</title></circle>
+<circle cx="601.60" cy="171.18" r="4.2" fill="#ffffff" stroke="#1f77b4" stroke-width="2"><title>Aria epoch 7: 0.745</title></circle>
+<circle cx="676.40" cy="93.50" r="4.2" fill="#ffffff" stroke="#d62728" stroke-width="2"><title>Average variations epoch 8: 0.914</title></circle>
+<circle cx="676.40" cy="173.20" r="4.2" fill="#ffffff" stroke="#1f77b4" stroke-width="2"><title>Aria epoch 8: 0.741</title></circle>
+<circle cx="751.20" cy="96.42" r="4.2" fill="#ffffff" stroke="#d62728" stroke-width="2"><title>Average variations epoch 9: 0.908</title></circle>
+<circle cx="751.20" cy="173.28" r="4.2" fill="#ffffff" stroke="#1f77b4" stroke-width="2"><title>Aria epoch 9: 0.741</title></circle>
+<circle cx="826.00" cy="90.69" r="4.2" fill="#ffffff" stroke="#d62728" stroke-width="2"><title>Average variations epoch 10: 0.920</title></circle>
+<circle cx="826.00" cy="182.63" r="4.2" fill="#ffffff" stroke="#1f77b4" stroke-width="2"><title>Aria epoch 10: 0.720</title></circle>
+<rect x="544" y="46" width="268" height="62" rx="6" fill="#ffffff" stroke="#d5dae3"/>
+<line x1="556" y1="66" x2="584" y2="66" stroke="#1f77b4" stroke-width="3" stroke-linecap="round"/>
+<text x="594" y="70" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#20242c">vs Aria</text>
+<line x1="556" y1="90" x2="584" y2="90" stroke="#d62728" stroke-width="3" stroke-linecap="round"/>
+<text x="594" y="94" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#20242c">vs average variations</text>
+<line x1="78.00" y1="54" x2="78.00" y2="422" stroke="#111827" stroke-dasharray="4 4" opacity="0.45"/>
+<text x="86.00" y="412" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="#5c6470">base</text>
+</svg>

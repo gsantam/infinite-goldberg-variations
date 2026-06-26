@@ -1,6 +1,8 @@
 torch>=2.3
 transformers>=4.41
 accelerate>=0.30
+trl>=0.20
+datasets>=2.19
 huggingface_hub>=0.23
 safetensors>=0.4
 music21>=9.1
