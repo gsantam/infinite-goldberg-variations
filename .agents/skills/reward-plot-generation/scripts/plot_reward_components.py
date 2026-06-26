@@ -11,7 +11,7 @@ from pathlib import Path
 
 STRUCTURAL = [
     ("parse_reward", "parse: valid ABC"),
-    ("countdown_reward", "countdown: bars decrease"),
+    ("countdown_reward", "stream tags: consistent"),
     ("line_closure_reward", "line closure: closed bars"),
     ("bar_token_reward", "bar token: emits |"),
     ("meter_alignment_reward", "meter alignment: fits meter"),
@@ -245,7 +245,7 @@ def main() -> int:
         "--sft-scores-dir",
         type=Path,
         default=Path(
-            "data/processed/notagen/large_sft10_cached10_rewards_20260626_094754/scores"
+            "data/processed/notagen/reward_exports/large_sft10_cached10_rewards_refactored_20260626"
         ),
     )
     parser.add_argument(
