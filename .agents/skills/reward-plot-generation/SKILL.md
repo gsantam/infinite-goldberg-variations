@@ -26,8 +26,9 @@ epoch `0`.
 
 ## Normalization
 
-Do not min-max normalize across epochs. Each plotted component is already a
-normalized reward in `[0, 1]` as emitted by `grpo/rewards.py`.
+Do not min-max normalize across epochs. Reward components are already
+normalized in `[0, 1]` as emitted by `grpo/rewards.py`. The validated-bars
+panel is plotted on its native `0..32` bar scale.
 
 For each epoch and each component:
 
@@ -38,6 +39,9 @@ plotted_value = mean(component_reward over sampled trajectories)
 The plot intentionally excludes `total_reward` because it is a weighted sum of
 heterogeneous components and can be dominated by easy structural signals. Use
 component curves for interpretation.
+
+The top panel shows `validated_bars` directly so scorer changes that affect bar
+validation are visible without having to infer them from `bar_count_reward`.
 
 ## Components
 
