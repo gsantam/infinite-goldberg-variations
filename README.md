@@ -1,10 +1,11 @@
 # Infinite Goldberg Variations
 
-Bach's [*Goldberg Variations*](https://open.spotify.com/album/1aCpHSQE5ghxibsQ5gkBe0?si=8XK24O7ZTUShSqC-5yzbNQ)
-are a useful object for music generation because they are both tightly
-constrained and very varied. I have come back to them many times, so I thought
-that, as a music generation exercise, and in a kind of play similar to the ones
-suggested in [*Godel, Escher,
+Bach's [*Goldberg Variations*](https://open.spotify.com/album/1aCpHSQE5ghxibsQ5gkBe0?si=8XK24O7ZTUShSqC-5yzbNQ) have fascinated listeners and musicians for a long time:
+they have something hypnotic and even a bit obsessive, but they are also
+delicate and playful, built around a melody that keeps coming and going. I have
+come back to them many times during my life, and they still amaze me, so I
+thought that, as a music generation exercise, and in a kind of play similar to
+the ones suggested in [*Godel, Escher,
 Bach*](https://en.wikipedia.org/wiki/G%C3%B6del,_Escher,_Bach), it would be fun
 to try to see how other, maybe infinite, variations would sound.
 
@@ -62,6 +63,13 @@ fine-tuning: the prompt contains the conditioning keywords `%Baroque`, `%Bach,
 Johann Sebastian`, and `%Keyboard`, as well as the Aria, while each real
 variation is used as the target continuation. This is very consistent with the
 concept of a variation.
+
+There is an important caveat here: NotaGen's full pre-training corpus and the
+internal part of its fine-tuning data are not released, so I cannot completely
+rule out that BWV 988 was already seen by the base model. The public
+fine-tuning sources I checked do not seem to contain the Goldberg Variations as
+sheet data, but some large MIDI sources do contain them, so I treat this as a
+possible contamination risk rather than a settled point.
 
 Since the amount of training data is small, I keep a very low learning rate
 (`1e-6`) and use a k-fold-style cross-validation setup, keeping roughly 10-20% of the
