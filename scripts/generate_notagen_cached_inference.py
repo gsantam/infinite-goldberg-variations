@@ -17,12 +17,12 @@ from grpo.notagen_wrapper import (
     Patchilizer,
     build_model,
     count_stream_lines,
-    latest_countdown,
     latest_stream_line_closed,
     set_seed,
     split_metadata_and_tunebody_lines,
     trim_to_stream_lines,
 )
+from grpo.stream_tags import stream_target_reached
 
 
 def sample_completion_cached(
@@ -69,24 +69,20 @@ def sample_completion_cached(
                 temperature=temperature,
             )
             current_text = "".join(byte_list)
-            countdown = latest_countdown(current_text)
             eos_only = (
                 len(candidate_patch) >= 2
                 and candidate_patch[0] == patchilizer.bos_token_id
                 and candidate_patch[1] == patchilizer.eos_token_id
             )
             if eos_only:
-                allow_eos = False
-                if countdown is not None:
-                    _, remaining = countdown
-                    allow_eos = remaining == 0 and latest_stream_line_closed(current_text)
+                allow_eos = stream_target_reached(current_text, target_total_stream_lines)
                 if not allow_eos:
                     continue
             predicted_patch = candidate_patch
             break
 
         if predicted_patch is None:
-            raise RuntimeError("decoder produced only early EOS candidates before countdown completion")
+            raise RuntimeError("decoder produced only early EOS candidates before target stream line completion")
 
         if (
             len(predicted_patch) >= 2

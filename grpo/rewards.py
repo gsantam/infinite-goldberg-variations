@@ -14,6 +14,14 @@ import tempfile
 from music21 import converter
 from music21.pitch import Pitch
 
+from grpo.stream_tags import (
+    StreamLine,
+    StreamTag,
+    extract_stream_lines,
+    stream_line_closed,
+    stream_tag_sequence_reward,
+)
+
 
 CADENCE_BARS = {8, 16, 24, 32}
 NOTE_TO_PC = {
@@ -121,10 +129,14 @@ class CandidateBarFeatures:
 @dataclass
 class StreamLineFeatures:
     index: int
-    remaining: int
+    tag_marker: int
     body: str
     has_bar_token: bool
     closed: bool
+
+    @property
+    def remaining(self) -> int:
+        return self.tag_marker
 
 
 @dataclass
@@ -198,23 +210,15 @@ def _bar_token_count(text: str) -> int:
 
 def _extract_stream_line_features(text: str) -> list[StreamLineFeatures]:
     features: list[StreamLineFeatures] = []
-    for raw_line in text.splitlines():
-        line = raw_line.strip()
-        match = re.match(r"^\[r:(\d+)/(\d+)\](.*)$", line)
-        if not match:
-            continue
-        idx = int(match.group(1))
-        remaining = int(match.group(2))
-        body = match.group(3)
-        stripped_body = body.rstrip()
-        closed = stripped_body.endswith("|") or stripped_body.endswith("|]") or stripped_body.endswith(":|")
+    for line in extract_stream_lines(text):
+        body = line.body
         features.append(
             StreamLineFeatures(
-                index=idx,
-                remaining=remaining,
+                index=line.tag.index,
+                tag_marker=line.tag.marker,
                 body=body,
                 has_bar_token="|" in body,
-                closed=closed,
+                closed=stream_line_closed(line),
             )
         )
     return features
@@ -297,11 +301,28 @@ def _voice_segment_duration(segment: str, base_length: Fraction) -> Fraction:
     cleaned = re.sub(r'"[^"\n]*"', " ", segment)
     cleaned = re.sub(r"![^!\n]*!", " ", cleaned)
     cleaned = re.sub(r"\[[A-Za-z]:[^\]]*\]", " ", cleaned)
-    cleaned = re.sub(r"[(){}<>~$PMHSTuvw]", " ", cleaned)
+    cleaned = re.sub(r"\{[^}]*\}", " ", cleaned)
+    cleaned = re.sub(r"[{}<>~$PMHSTuvw]", " ", cleaned)
     total = Fraction(0, 1)
-    token_pattern = re.compile(r"(\[[^\]]+\]|[_=^]*[A-Ga-gxz][,']*)(\d+(?:/\d*)?|/\d+|/)?")
+    token_pattern = re.compile(r"(\(\d+)|(\[[^\]]+\]|[_=^]*[A-Ga-gxz][,']*)(\d+(?:/\d*)?|/\d+|/)?")
+    tuplet_notes_left = 0
+    tuplet_ratio = Fraction(1, 1)
     for match in token_pattern.finditer(cleaned):
-        total += base_length * _parse_length_multiplier(match.group(2))
+        tuplet_marker = match.group(1)
+        if tuplet_marker:
+            tuplet_count = int(tuplet_marker[1:])
+            if tuplet_count > 0:
+                # ABC shorthand: (3abc means three notes in the time of two.
+                tuplet_notes_left = tuplet_count
+                tuplet_ratio = Fraction(2, tuplet_count) if tuplet_count == 3 else Fraction(1, 1)
+            continue
+        multiplier = _parse_length_multiplier(match.group(3))
+        if tuplet_notes_left > 0:
+            multiplier *= tuplet_ratio
+            tuplet_notes_left -= 1
+            if tuplet_notes_left == 0:
+                tuplet_ratio = Fraction(1, 1)
+        total += base_length * multiplier
     return total
 
 
@@ -415,7 +436,12 @@ def _validated_bar_metrics(stream_lines: list[StreamLineFeatures], header: Heade
             if duration == segment_meter:
                 aligned += 1
                 aligned_voice_bars += 1
-        if populated > 0 and aligned == populated:
+        # Real Goldberg targets often mix a meter-aligned primary voice with
+        # shorter accompaniment fragments or longer sustained lower voices in
+        # the same streamed line. Count the line as a validated bar when at
+        # least one populated voice cleanly spans the active meter, while the
+        # separate meter_alignment_reward still measures the per-voice quality.
+        if populated > 0 and aligned > 0:
             validated_bars += 1
         if populated > 0:
             total_stream_bars += 1
@@ -522,24 +548,16 @@ def _infer_root_from_pitch_classes(pitch_classes: set[str]) -> str | None:
 def _countdown_reward(stream_lines: list[StreamLineFeatures]) -> float:
     if not stream_lines:
         return 0.0
-    score = 0.0
-    checks = 0
-
-    first = stream_lines[0]
-    checks += 1
-    if first.index == 0:
-        score += 1.0
-
-    for prev, curr in zip(stream_lines, stream_lines[1:]):
-        checks += 1
-        if curr.index == prev.index + 1 and curr.remaining == prev.remaining - 1:
-            score += 1.0
-
-    checks += 1
-    if stream_lines[-1].remaining == 0:
-        score += 1.0
-
-    return score / checks
+    return stream_tag_sequence_reward(
+        [
+            StreamLine(
+                tag=StreamTag(index=line.index, marker=line.tag_marker),
+                body=line.body,
+                raw=f"[r:{line.index}/{line.tag_marker}]{line.body}",
+            )
+            for line in stream_lines
+        ]
+    )
 
 
 def _line_closure_reward(stream_lines: list[StreamLineFeatures]) -> float:

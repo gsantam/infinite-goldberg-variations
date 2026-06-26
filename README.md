@@ -92,11 +92,28 @@ the Aria in the prompt.
 
 ![CLaMP2 similarity across SFT epochs](docs/assets/sft_similarity_vs_epoch.svg)
 
-SFT seems to be worsening some of the meter metrics. This is probably because
-the model is mixing up the tempo indication of the prompted Aria with the
-variation continuation, so maybe there is a quick fix. However, the harmony
-metrics remain quite stable, and some of them, such as cadence bass, improve
-with more epochs.
+After fixing the stream-tag and bar-validation reward logic, the countdown /
+stream-line component is now basically healthy. The remaining structural
+problem is real: generated samples still validate far fewer bars than the real
+variations, and meter alignment remains weak. In the 10-sample-per-epoch run,
+epoch 6 has the best mean structural reward, with `15.4` validated bars on
+average.
+
+| epoch | total reward | validated bars | bar count | meter align | duration | countdown |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 1.8051 | 5.00 | 0.1562 | 0.1182 | 0.3668 | 0.9758 |
+| 2 | 1.4512 | 3.10 | 0.0969 | 0.0349 | 0.3174 | 1.0000 |
+| 3 | 3.3051 | 13.00 | 0.4062 | 0.2691 | 0.4740 | 1.0000 |
+| 4 | 3.4781 | 14.30 | 0.4469 | 0.2073 | 0.4339 | 1.0000 |
+| 5 | 2.9756 | 11.50 | 0.3594 | 0.1516 | 0.4293 | 1.0000 |
+| 6 | 3.7306 | 15.40 | 0.4813 | 0.2892 | 0.5867 | 1.0000 |
+| 7 | 3.1459 | 11.00 | 0.3438 | 0.1665 | 0.4619 | 1.0000 |
+| 8 | 2.8873 | 9.60 | 0.3000 | 0.1668 | 0.5023 | 1.0000 |
+| 9 | 3.4952 | 12.60 | 0.3937 | 0.2307 | 0.4602 | 1.0000 |
+| 10 | 3.3999 | 11.70 | 0.3656 | 0.1847 | 0.4481 | 1.0000 |
+
+The full recalculated reward breakdown is in
+`data/processed/notagen/reward_exports/large_sft10_cached10_rewards_refactored_20260626/all_rewards.jsonl`.
 
 ![Reward component means across SFT epochs](docs/assets/sft_reward_breakdown_vs_epoch.svg)
 

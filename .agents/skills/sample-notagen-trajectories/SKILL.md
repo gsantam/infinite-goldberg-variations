@@ -54,13 +54,38 @@ Use `--group-size` for the number of trajectories. `--no-step` prevents optimize
 
 ## Prompt Rules
 
-Use the canonical Goldberg continuation prompt unless the user explicitly asks otherwise:
+For the current header-conditioned Goldberg experiments, prefer a per-variation
+header prefix so ABC structural state is in the prompt and the generated
+completion starts at the first music line:
+
+```text
+data/processed/notagen/goldberg_metadata_only_split2/header_prefixes/G/variation-05_G.abc
+```
+
+These prefix files are generated with:
+
+```bash
+python scripts/extract_notagen_header_prefixes.py \
+  --source-dir data/processed/notagen/goldberg_metadata_only_split2/augmented \
+  --prefix-dir data/processed/notagen/goldberg_metadata_only_split2/header_prefixes \
+  --continuation-dir data/processed/notagen/goldberg_metadata_only_split2/header_continuations \
+  --manifest data/processed/notagen/goldberg_metadata_only_split2/header_prefix_manifest.jsonl
+```
+
+They contain metadata plus `%%score`, `L:`, `Q:`, `M:`, `K:`, and voice
+declarations. The paired continuation files start at the first `[V:...]` music
+line. This avoids asking the model to generate meter/default-length state as
+part of the continuation.
+
+Use the canonical Aria continuation prompt only when explicitly comparing
+against the older aria-conditioned setup:
 
 ```text
 data/processed/notagen/goldberg_grpo_prompt_aria_continuation_300.jsonl
 ```
 
-This prompt includes the Aria plus the variation voice setup. Avoid older variation-labeled prompt files for fixed-prompt sampling.
+This prompt includes the Aria plus the variation voice setup. Avoid older
+variation-labeled prompt files for fixed-prompt sampling.
 
 ## Rollout Details
 

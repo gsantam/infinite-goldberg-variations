@@ -7,6 +7,7 @@ from grpo.rewards import (
     StructuralBarTarget,
     StructuralTarget,
     _bar_count_reward,
+    _countdown_reward,
     _extract_header_context,
     _extract_stream_line_features,
     _parse_length_multiplier,
@@ -67,6 +68,18 @@ class GoldbergRewardTests(unittest.TestCase):
         self.assertEqual(metrics.meter_alignment_reward, 1.0)
         self.assertEqual(metrics.meter_duration_closeness_reward, 1.0)
         self.assertEqual(metrics.bar_meter_consistency_reward, 1.0)
+
+    def test_countdown_reward_accepts_notagen_index_total_tags(self):
+        text = "\n".join(
+            [
+                "M:3/4",
+                "L:1/8",
+                "[r:1/2][V:1]C2D2E2|",
+                "[r:2/2][V:1]E2D2C2|",
+            ]
+        )
+
+        self.assertEqual(_countdown_reward(_extract_stream_line_features(text)), 1.0)
 
     def test_meter_validation_rejects_duration_that_mismatches_active_meter(self):
         text = "\n".join(

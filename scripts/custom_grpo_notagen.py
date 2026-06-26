@@ -4,7 +4,6 @@ import argparse
 from contextlib import nullcontext
 import json
 import random
-import re
 import sys
 import time
 from dataclasses import asdict, dataclass
@@ -28,6 +27,13 @@ if str(RL_DIR) not in sys.path:
 from grpo import GoldbergRewardConfig, compute_group_advantages, load_structural_target  # noqa: E402
 from grpo.notagen_cached_generation import CachedNotaGenPatchGenerator  # noqa: E402
 from grpo.rewards import score_prompt_completion_pair  # noqa: E402
+from grpo.stream_tags import (
+    count_stream_lines as _count_stream_lines,
+    latest_stream_line as _latest_stream_line,
+    latest_stream_line_closed as _latest_stream_line_closed,
+    stream_target_reached,
+    trim_to_stream_lines as _trim_to_stream_lines,
+)  # noqa: E402
 from utils import NotaGenLMHeadModel, Patchilizer  # noqa: E402
 
 
@@ -372,15 +378,18 @@ def sanitize_abc(abc_text: str) -> str:
 
 
 def count_stream_lines(abc_text: str) -> int:
-    return sum(1 for line in sanitize_abc(abc_text).splitlines() if line.startswith("[r:"))
+    return _count_stream_lines(sanitize_abc(abc_text))
+
+
+def latest_stream_tag(abc_text: str) -> tuple[int, int] | None:
+    line = _latest_stream_line(sanitize_abc(abc_text))
+    if line is None:
+        return None
+    return line.tag.index, line.tag.marker
 
 
 def latest_countdown(abc_text: str) -> tuple[int, int] | None:
-    matches = re.findall(r"\[r:(\d+)/(\d+)\]", sanitize_abc(abc_text))
-    if not matches:
-        return None
-    i, j = matches[-1]
-    return int(i), int(j)
+    return latest_stream_tag(abc_text)
 
 
 def latest_stream_line(abc_text: str) -> str | None:
@@ -389,25 +398,13 @@ def latest_stream_line(abc_text: str) -> str | None:
 
 
 def latest_stream_line_closed(abc_text: str) -> bool:
-    last_line = latest_stream_line(abc_text)
-    if last_line is None:
-        return False
-    stripped = last_line.rstrip()
-    return stripped.endswith("|") or stripped.endswith("|]")
+    return _latest_stream_line_closed(sanitize_abc(abc_text))
 
 
 def trim_to_stream_lines(abc_text: str, target_stream_lines: int) -> str:
     abc_text = sanitize_abc(abc_text)
     metadata_lines, tunebody_lines = split_metadata_and_tunebody(abc_text)
-    kept_body: list[str] = []
-    seen = 0
-    for line in tunebody_lines:
-        if line.startswith("[r:"):
-            if seen >= target_stream_lines:
-                break
-            seen += 1
-        kept_body.append(line)
-    return "".join(metadata_lines + kept_body)
+    return "".join(metadata_lines) + _trim_to_stream_lines("".join(tunebody_lines), target_stream_lines)
 
 
 def normalize_patch_for_context(patch: list[int], eos_token_id: int, special_token_id: int) -> list[int]:
@@ -475,24 +472,20 @@ def sample_completion(
                             temperature=temperature,
                         )
                 current_text = "".join(byte_list)
-                countdown = latest_countdown(current_text)
                 eos_only = (
                     len(candidate_patch) >= 2
                     and candidate_patch[0] == patchilizer.bos_token_id
                     and candidate_patch[1] == patchilizer.eos_token_id
                 )
                 if eos_only:
-                    allow_eos = False
-                    if countdown is not None:
-                        _, remaining = countdown
-                        allow_eos = remaining == 0 and latest_stream_line_closed(current_text)
+                    allow_eos = stream_target_reached(sanitize_abc(current_text), target_stream_lines)
                     if not allow_eos:
                         continue
                 predicted_patch = candidate_patch
                 break
 
             if predicted_patch is None:
-                raise RuntimeError("decoder produced only early EOS candidates before countdown completion")
+                raise RuntimeError("decoder produced only early EOS candidates before target stream line completion")
 
             if (
                 len(predicted_patch) >= 2
