@@ -244,6 +244,104 @@ def _rebuild_body_with_missing_rests(
     return "".join(ordered_parts)
 
 
+TERMINAL_TIE_RE = re.compile(
+    r"((?:\[[^\]]+\]|[_=^]*[A-Ga-g][,']*)(?:\d+(?:/\d*)?|/\d+|/)?)-"
+    r"(?=(:\|\d+|\|\d+|\|:|::|:\||\|\]|\|\||\||:)?\s*$)"
+)
+
+
+def _segment_has_terminal_tie(segment: str) -> bool:
+    return TERMINAL_TIE_RE.search(segment) is not None
+
+
+def _strip_terminal_tie(segment: str) -> str:
+    return TERMINAL_TIE_RE.sub(r"\1", segment)
+
+
+def _segment_starts_with_note_or_chord(segment: str) -> bool:
+    cleaned = segment.lstrip()
+    while True:
+        previous = cleaned
+        cleaned = re.sub(r"^\$+", "", cleaned).lstrip()
+        cleaned = re.sub(r'^"[^"\n]*"', "", cleaned).lstrip()
+        cleaned = re.sub(r"^![^!\n]*!", "", cleaned).lstrip()
+        cleaned = re.sub(r"^\[[A-Za-z]:[^\]]*\]", "", cleaned).lstrip()
+        cleaned = re.sub(r"^[({]*", "", cleaned).lstrip()
+        cleaned = re.sub(r"^\(\d+(?::\d+)?(?::\d+)?", "", cleaned).lstrip()
+        if cleaned == previous:
+            break
+    return re.match(r"^(?:\[[^\]]+\]|[_=^]*[A-Ga-g][,']*)", cleaned) is not None
+
+
+def strip_dangling_terminal_ties(text: str) -> str:
+    """Remove terminal ties that lead into rests or missing continuation.
+
+    The pass is intentionally conservative: it only touches ties at the end of
+    a voice segment. If the next segment for the same voice starts with a note
+    or chord, the tie is left alone.
+    """
+
+    parsed_lines: list[dict | None] = []
+    flat_segments: list[tuple[int, int, int, str]] = []
+    for raw_line in text.splitlines(keepends=True):
+        line_body = raw_line[:-1] if raw_line.endswith("\n") else raw_line
+        newline = "\n" if raw_line.endswith("\n") else ""
+        parsed = _split_optional_stream_tag(line_body)
+        if parsed is None:
+            parsed_lines.append(None)
+            continue
+
+        prefix, body = parsed
+        segments = _split_voice_segments(body)
+        line_index = len(parsed_lines)
+        parsed_lines.append(
+            {
+                "prefix": prefix,
+                "segments": [[voice, segment] for voice, segment in segments],
+                "newline": newline,
+                "raw": raw_line,
+            }
+        )
+        for segment_index, (voice, segment) in enumerate(segments):
+            if voice is not None:
+                flat_segments.append((line_index, segment_index, voice, segment))
+
+    changed = False
+    for flat_index, (line_index, segment_index, voice, segment) in enumerate(flat_segments):
+        if not _segment_has_terminal_tie(segment):
+            continue
+
+        next_segment = None
+        for _next_line_index, _next_segment_index, next_voice, candidate in flat_segments[flat_index + 1 :]:
+            if next_voice == voice:
+                next_segment = candidate
+                break
+
+        if next_segment is not None and _segment_starts_with_note_or_chord(next_segment):
+            continue
+
+        parsed_line = parsed_lines[line_index]
+        if parsed_line is None:
+            continue
+        parsed_line["segments"][segment_index][1] = _strip_terminal_tie(segment)
+        changed = True
+
+    if not changed:
+        return text
+
+    output_lines = []
+    for raw_line, parsed_line in zip(text.splitlines(keepends=True), parsed_lines, strict=True):
+        if parsed_line is None:
+            output_lines.append(raw_line)
+            continue
+        body = "".join(
+            segment if voice is None else f"[V:{voice}]{segment}"
+            for voice, segment in parsed_line["segments"]
+        )
+        output_lines.append(f"{parsed_line['prefix']}{body}{parsed_line['newline']}")
+    return "".join(output_lines)
+
+
 def expand_notagen_rest_omitted_voice_segments(text: str) -> str:
     """Add rest-only voice segments that NotaGen preprocessing omits.
 
@@ -315,4 +413,5 @@ def preprocess_notagen_abc(text: str) -> str:
 
     text = strip_unsupported_abc_instructions(text)
     text = expand_notagen_rest_omitted_voice_segments(text)
+    text = strip_dangling_terminal_ties(text)
     return text

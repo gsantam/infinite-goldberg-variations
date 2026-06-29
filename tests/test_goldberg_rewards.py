@@ -5,6 +5,7 @@ import unittest
 from grpo.notagen_abc_preprocess import (
     expand_notagen_rest_omitted_voice_segments,
     preprocess_notagen_abc,
+    strip_dangling_terminal_ties,
 )
 from grpo.rewards import (
     GoldbergRewardConfig,
@@ -248,6 +249,39 @@ class GoldbergRewardTests(unittest.TestCase):
         self.assertNotIn("!courtesy!", preprocessed)
         self.assertNotIn("!trill(!", preprocessed)
         self.assertIn("[V:2]x6|", preprocessed)
+
+    def test_strip_dangling_terminal_ties_removes_tie_into_rest(self):
+        text = "\n".join(
+            [
+                "%%score ( 1 )",
+                "M:3/4",
+                "L:1/8",
+                "V:1 treble",
+                "[V:1]C2D2E2-|",
+                "[V:1]x6|",
+            ]
+        )
+
+        preprocessed = strip_dangling_terminal_ties(text)
+
+        self.assertIn("[V:1]C2D2E2|", preprocessed)
+        self.assertNotIn("E2-|", preprocessed)
+
+    def test_strip_dangling_terminal_ties_preserves_tie_into_note(self):
+        text = "\n".join(
+            [
+                "%%score ( 1 )",
+                "M:3/4",
+                "L:1/8",
+                "V:1 treble",
+                "[V:1]C2D2E2-|",
+                "[V:1]E2D2C2|",
+            ]
+        )
+
+        preprocessed = strip_dangling_terminal_ties(text)
+
+        self.assertIn("E2-|", preprocessed)
 
     def test_validated_bars_dominate_zero_bar_harmonic_guess(self):
         config = GoldbergRewardConfig()
