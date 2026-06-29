@@ -14,7 +14,6 @@ import tempfile
 from music21 import converter
 from music21.pitch import Pitch
 
-from grpo.notagen_abc_postprocess import expand_notagen_rest_omitted_voice_segments
 from grpo.stream_tags import (
     StreamLine,
     StreamTag,
@@ -843,7 +842,6 @@ def score_candidate_file(
 
 def _ensure_renderable_abc(text: str) -> str:
     text = text if text.endswith("\n") else text + "\n"
-    text = expand_notagen_rest_omitted_voice_segments(text)
     header_prefix = []
     if not re.search(r"(?m)^X:", text):
         header_prefix.append("X:1")

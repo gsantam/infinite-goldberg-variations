@@ -2,7 +2,10 @@ from fractions import Fraction
 import time
 import unittest
 
-from grpo.notagen_abc_postprocess import expand_notagen_rest_omitted_voice_segments
+from grpo.notagen_abc_preprocess import (
+    expand_notagen_rest_omitted_voice_segments,
+    preprocess_notagen_abc,
+)
 from grpo.rewards import (
     GoldbergRewardConfig,
     StructuralBarTarget,
@@ -227,6 +230,24 @@ class GoldbergRewardTests(unittest.TestCase):
         expanded = expand_notagen_rest_omitted_voice_segments(text)
 
         self.assertIn("[V:2]x6:|2", expanded)
+
+    def test_preprocess_notagen_abc_strips_unsupported_instructions(self):
+        text = "\n".join(
+            [
+                "%%score ( 1 2 )",
+                "M:3/4",
+                "L:1/8",
+                "V:1 treble",
+                "V:2 treble",
+                "[V:1]C2!courtesy!D2!trill(!E2|",
+            ]
+        )
+
+        preprocessed = preprocess_notagen_abc(text)
+
+        self.assertNotIn("!courtesy!", preprocessed)
+        self.assertNotIn("!trill(!", preprocessed)
+        self.assertIn("[V:2]x6|", preprocessed)
 
     def test_validated_bars_dominate_zero_bar_harmonic_guess(self):
         config = GoldbergRewardConfig()
