@@ -2,6 +2,7 @@ from fractions import Fraction
 import time
 import unittest
 
+from grpo.notagen_abc_postprocess import expand_notagen_rest_omitted_voice_segments
 from grpo.rewards import (
     GoldbergRewardConfig,
     StructuralBarTarget,
@@ -12,7 +13,6 @@ from grpo.rewards import (
     _extract_stream_line_features,
     _abc_grammar_metrics,
     _parse_length_multiplier,
-    expand_notagen_rest_omitted_voice_segments,
     score_candidate_text,
     _total_reward,
     _validated_bar_metrics,

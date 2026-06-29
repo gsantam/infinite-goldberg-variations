@@ -14,6 +14,7 @@ import tempfile
 from music21 import converter
 from music21.pitch import Pitch
 
+from grpo.notagen_abc_postprocess import expand_notagen_rest_omitted_voice_segments
 from grpo.stream_tags import (
     StreamLine,
     StreamTag,
@@ -295,116 +296,6 @@ def _extract_header_context(text: str) -> HeaderContext:
         score_voices=score_voices,
         has_score=has_score,
     )
-
-
-def _target_header_voices(header: HeaderContext) -> set[int]:
-    if header.has_score and header.score_voices:
-        return set(header.score_voices)
-    return set(header.voice_lengths)
-
-
-def _rest_token_for_duration(duration: Fraction, base_length: Fraction) -> str:
-    if duration <= 0 or base_length <= 0:
-        return "x"
-    units = duration / base_length
-    if units.denominator == 1:
-        return "x" if units.numerator == 1 else f"x{units.numerator}"
-    return f"x{units.numerator}/{units.denominator}"
-
-
-def _body_meter(body: str, current_meter: Fraction) -> tuple[Fraction, Fraction]:
-    active_meter = current_meter
-    first_meter = current_meter
-    saw_meter = False
-    for match in re.finditer(r"\[M:([^\]]+)\]", body):
-        active_meter = _parse_fraction_token(match.group(1), active_meter)
-        if not saw_meter:
-            first_meter = active_meter
-            saw_meter = True
-    return first_meter, active_meter
-
-
-def _split_optional_stream_tag(line: str) -> tuple[str, str] | None:
-    stream_match = re.match(r"^(\[r:\d+/\d+\])(.*)$", line.strip())
-    if stream_match is not None:
-        return stream_match.group(1), stream_match.group(2)
-    if "[V:" in line and _segment_has_barline(line):
-        return "", line.strip()
-    return None
-
-
-def _segment_closing_barline(segment: str) -> str:
-    stripped = segment.rstrip()
-    for token in ("::", ":|", "|]", "||", "|", ":"):
-        if stripped.endswith(token):
-            return token
-    return "|"
-
-
-def _segment_has_barline(segment: str) -> bool:
-    stripped = segment.rstrip()
-    return "|" in stripped or stripped.endswith(":")
-
-
-def _line_closing_barline(body: str) -> str:
-    for _voice, segment in reversed(_split_voice_segments(body)):
-        if _segment_has_barline(segment):
-            return _segment_closing_barline(segment)
-    return "|"
-
-
-def expand_notagen_rest_omitted_voice_segments(text: str) -> str:
-    """Add rest-only voice segments that NotaGen preprocessing omits.
-
-    NotaGen trains on a compact augmented representation where voices with a
-    full-bar rest are absent from that stream line. ABC renderers such as
-    abc2midi are stricter about declared voices spanning the tune, so this
-    helper reconstructs only missing all-rest segments at render/eval time.
-    """
-
-    header = _extract_header_context(text)
-    expected_voices = _target_header_voices(header)
-    if not expected_voices:
-        return text
-
-    active_meter = header.meter
-    output_lines: list[str] = []
-    changed = False
-    for raw_line in text.splitlines(keepends=True):
-        line_body = raw_line[:-1] if raw_line.endswith("\n") else raw_line
-        newline = "\n" if raw_line.endswith("\n") else ""
-        parsed = _split_optional_stream_tag(line_body)
-        if parsed is None:
-            output_lines.append(raw_line)
-            continue
-
-        prefix, body = parsed
-        line_meter, active_meter = _body_meter(body, active_meter)
-        if not _segment_has_barline(body):
-            output_lines.append(raw_line)
-            continue
-
-        used_voices = {
-            voice
-            for voice, segment in _split_voice_segments(body)
-            if voice is not None and _segment_has_barline(segment)
-        }
-        missing_voices = sorted(expected_voices - used_voices)
-        if not used_voices or not missing_voices:
-            output_lines.append(raw_line)
-            continue
-
-        barline = _line_closing_barline(body)
-        additions = []
-        for voice in missing_voices:
-            base_length = header.voice_lengths.get(voice, header.default_length)
-            additions.append(f"[V:{voice}]{_rest_token_for_duration(line_meter, base_length)}{barline}")
-        output_lines.append(f"{prefix}{body}{''.join(additions)}{newline}")
-        changed = True
-
-    if not changed:
-        return text
-    return "".join(output_lines)
 
 
 def _split_voice_segments(body: str) -> list[tuple[int | None, str]]:
