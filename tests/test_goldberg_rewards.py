@@ -10,7 +10,9 @@ from grpo.rewards import (
     _countdown_reward,
     _extract_header_context,
     _extract_stream_line_features,
+    _abc_grammar_metrics,
     _parse_length_multiplier,
+    expand_notagen_rest_omitted_voice_segments,
     score_candidate_text,
     _total_reward,
     _validated_bar_metrics,
@@ -65,9 +67,11 @@ class GoldbergRewardTests(unittest.TestCase):
 
         self.assertEqual(header.meter, Fraction(3, 4))
         self.assertEqual(metrics.validated_bars, 3)
+        self.assertEqual(metrics.strict_validated_bars, 3)
         self.assertEqual(metrics.meter_alignment_reward, 1.0)
         self.assertEqual(metrics.meter_duration_closeness_reward, 1.0)
         self.assertEqual(metrics.bar_meter_consistency_reward, 1.0)
+        self.assertEqual(metrics.strict_bar_meter_consistency_reward, 1.0)
 
     def test_countdown_reward_accepts_notagen_index_total_tags(self):
         text = "\n".join(
@@ -97,9 +101,99 @@ class GoldbergRewardTests(unittest.TestCase):
         )
 
         self.assertEqual(metrics.validated_bars, 1)
+        self.assertEqual(metrics.strict_validated_bars, 1)
         self.assertEqual(metrics.meter_alignment_reward, 0.5)
         self.assertEqual(metrics.meter_duration_closeness_reward, 0.75)
         self.assertEqual(metrics.bar_meter_consistency_reward, 0.5)
+        self.assertEqual(metrics.strict_bar_meter_consistency_reward, 0.5)
+
+    def test_strict_meter_validation_requires_all_populated_voices(self):
+        text = "\n".join(
+            [
+                "M:3/4",
+                "L:1/8",
+                "[r:0/0][V:1]C2D2E2|[V:2]x4|",
+            ]
+        )
+
+        metrics = _validated_bar_metrics(
+            _extract_stream_line_features(text),
+            _extract_header_context(text),
+        )
+
+        self.assertEqual(metrics.validated_bars, 1)
+        self.assertEqual(metrics.strict_validated_bars, 0)
+        self.assertEqual(metrics.bar_meter_consistency_reward, 1.0)
+        self.assertEqual(metrics.strict_bar_meter_consistency_reward, 0.0)
+
+    def test_grammar_metrics_reject_undeclared_and_unscored_voices(self):
+        text = "\n".join(
+            [
+                "%%score ( 1 )",
+                "M:3/4",
+                "L:1/8",
+                "V:1 treble",
+                "[r:0/0][V:1]C2D2E2|[V:4]x6|",
+            ]
+        )
+
+        metrics = _abc_grammar_metrics(
+            _extract_stream_line_features(text),
+            _extract_header_context(text),
+        )
+
+        self.assertEqual(metrics.voice_declaration_reward, 0.5)
+        self.assertEqual(metrics.score_voice_reward, 0.5)
+
+    def test_grammar_metrics_penalize_unmatched_repeat_endings(self):
+        text = "\n".join(
+            [
+                "M:3/4",
+                "L:1/8",
+                "[r:0/0][V:1]C2D2E2|1",
+            ]
+        )
+
+        metrics = _abc_grammar_metrics(
+            _extract_stream_line_features(text),
+            _extract_header_context(text),
+        )
+
+        self.assertLess(metrics.repeat_syntax_reward, 1.0)
+
+    def test_expand_notagen_rest_omitted_voice_segments_adds_missing_declared_voices(self):
+        text = "\n".join(
+            [
+                "%%score ( 1 2 ) ( 4 )",
+                "M:3/4",
+                "L:1/8",
+                "V:1 treble",
+                "V:2 treble",
+                "V:4 bass",
+                "[r:0/0][V:1]C2D2E2|[V:4]G,6|",
+            ]
+        )
+
+        expanded = expand_notagen_rest_omitted_voice_segments(text)
+
+        self.assertIn("[V:2]x6|", expanded)
+        self.assertIn("[r:0/0][V:1]C2D2E2|[V:4]G,6|[V:2]x6|", expanded)
+
+    def test_expand_notagen_rest_omitted_voice_segments_uses_inline_meter(self):
+        text = "\n".join(
+            [
+                "%%score ( 1 2 )",
+                "M:3/4",
+                "L:1/8",
+                "V:1 treble",
+                "V:2 treble",
+                "[r:0/0][V:1][M:2/2]C8D8|",
+            ]
+        )
+
+        expanded = expand_notagen_rest_omitted_voice_segments(text)
+
+        self.assertIn("[V:2]x8|", expanded)
 
     def test_validated_bars_dominate_zero_bar_harmonic_guess(self):
         config = GoldbergRewardConfig()
@@ -114,7 +208,11 @@ class GoldbergRewardTests(unittest.TestCase):
             bar_token_reward=1.0,
             meter_alignment_reward=0.0,
             meter_duration_closeness_reward=0.0,
+            bar_meter_consistency_reward=0.0,
             bar_count_reward=_bar_count_reward(0, 32),
+            voice_declaration_reward=1.0,
+            score_voice_reward=1.0,
+            repeat_syntax_reward=1.0,
             root_similarity_reward=1.0,
             bass_pitch_class_reward=1.0,
             cadence_root_reward=1.0,
@@ -131,7 +229,11 @@ class GoldbergRewardTests(unittest.TestCase):
             bar_token_reward=1.0,
             meter_alignment_reward=0.1,
             meter_duration_closeness_reward=0.2,
+            bar_meter_consistency_reward=0.1,
             bar_count_reward=_bar_count_reward(4, 32),
+            voice_declaration_reward=1.0,
+            score_voice_reward=1.0,
+            repeat_syntax_reward=1.0,
             root_similarity_reward=0.0,
             bass_pitch_class_reward=0.0,
             cadence_root_reward=0.0,
@@ -152,7 +254,11 @@ class GoldbergRewardTests(unittest.TestCase):
             bar_token_reward=1.0,
             meter_alignment_reward=1.0,
             meter_duration_closeness_reward=1.0,
+            bar_meter_consistency_reward=1.0,
             bar_count_reward=_bar_count_reward(32, 32),
+            voice_declaration_reward=1.0,
+            score_voice_reward=1.0,
+            repeat_syntax_reward=1.0,
             root_similarity_reward=0.0,
             bass_pitch_class_reward=0.0,
             cadence_root_reward=0.0,
@@ -168,7 +274,11 @@ class GoldbergRewardTests(unittest.TestCase):
             bar_token_reward=1.0,
             meter_alignment_reward=1.0,
             meter_duration_closeness_reward=1.0,
+            bar_meter_consistency_reward=1.0,
             bar_count_reward=_bar_count_reward(32, 32),
+            voice_declaration_reward=1.0,
+            score_voice_reward=1.0,
+            repeat_syntax_reward=1.0,
             root_similarity_reward=0.5,
             bass_pitch_class_reward=0.5,
             cadence_root_reward=0.5,
