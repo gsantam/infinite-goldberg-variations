@@ -82,7 +82,11 @@ class GoldbergRewardConfig:
     bar_token_weight: float = 0.10
     meter_alignment_weight: float = 0.75
     meter_duration_closeness_weight: float = 0.75
+    bar_meter_consistency_weight: float = 0.75
     bar_count_weight: float = 3.0
+    voice_declaration_weight: float = 1.0
+    score_voice_weight: float = 0.5
+    repeat_syntax_weight: float = 0.0
     root_weight: float = 2.0
     bass_pc_weight: float = 2.0
     cadence_root_weight: float = 3.0
@@ -99,7 +103,9 @@ class RewardBreakdown:
     parse_valid: bool
     observed_stream_lines: int
     observed_bars: int
+    primary_validated_bars: int
     validated_bars: int
+    strict_validated_bars: int
     parse_reward: float
     countdown_reward: float
     line_closure_reward: float
@@ -107,7 +113,11 @@ class RewardBreakdown:
     meter_alignment_reward: float
     meter_duration_closeness_reward: float
     bar_meter_consistency_reward: float
+    strict_bar_meter_consistency_reward: float
     bar_count_reward: float
+    voice_declaration_reward: float
+    score_voice_reward: float
+    repeat_syntax_reward: float
     root_similarity_reward: float
     bass_pitch_class_reward: float
     cadence_root_reward: float
@@ -144,6 +154,8 @@ class HeaderContext:
     meter: Fraction
     default_length: Fraction
     voice_lengths: dict[int, Fraction]
+    score_voices: set[int]
+    has_score: bool
 
 
 @dataclass(frozen=True)
@@ -151,7 +163,16 @@ class MeterValidationMetrics:
     meter_alignment_reward: float
     meter_duration_closeness_reward: float
     validated_bars: int
+    strict_validated_bars: int
     bar_meter_consistency_reward: float
+    strict_bar_meter_consistency_reward: float
+
+
+@dataclass(frozen=True)
+class AbcGrammarMetrics:
+    voice_declaration_reward: float
+    score_voice_reward: float
+    repeat_syntax_reward: float
 
 
 def load_structural_target(path: str | Path) -> StructuralTarget:
@@ -246,22 +267,144 @@ def _extract_header_context(text: str) -> HeaderContext:
     default_length = Fraction(1, 8)
     current_voice: int | None = None
     voice_lengths: dict[int, Fraction] = {}
+    score_voices: set[int] = set()
+    has_score = False
     for raw_line in text.splitlines():
         line = raw_line.strip()
         if line.startswith("[r:"):
             break
+        if line.startswith("%%score"):
+            has_score = True
+            score_voices.update(int(item) for item in re.findall(r"\d+", line))
         if line.startswith("M:"):
             meter = _parse_fraction_token(line[2:], meter)
         elif line.startswith("L:"):
-            default_length = _parse_fraction_token(line[2:], default_length)
             if current_voice is not None:
-                voice_lengths[current_voice] = default_length
+                voice_lengths[current_voice] = _parse_fraction_token(line[2:], default_length)
+            else:
+                default_length = _parse_fraction_token(line[2:], default_length)
         elif line.startswith("V:"):
             match = re.match(r"^V:(\d+)", line)
             if match:
                 current_voice = int(match.group(1))
                 voice_lengths.setdefault(current_voice, default_length)
-    return HeaderContext(meter=meter, default_length=default_length, voice_lengths=voice_lengths)
+    return HeaderContext(
+        meter=meter,
+        default_length=default_length,
+        voice_lengths=voice_lengths,
+        score_voices=score_voices,
+        has_score=has_score,
+    )
+
+
+def _target_header_voices(header: HeaderContext) -> set[int]:
+    if header.has_score and header.score_voices:
+        return set(header.score_voices)
+    return set(header.voice_lengths)
+
+
+def _rest_token_for_duration(duration: Fraction, base_length: Fraction) -> str:
+    if duration <= 0 or base_length <= 0:
+        return "x"
+    units = duration / base_length
+    if units.denominator == 1:
+        return "x" if units.numerator == 1 else f"x{units.numerator}"
+    return f"x{units.numerator}/{units.denominator}"
+
+
+def _body_meter(body: str, current_meter: Fraction) -> tuple[Fraction, Fraction]:
+    active_meter = current_meter
+    first_meter = current_meter
+    saw_meter = False
+    for match in re.finditer(r"\[M:([^\]]+)\]", body):
+        active_meter = _parse_fraction_token(match.group(1), active_meter)
+        if not saw_meter:
+            first_meter = active_meter
+            saw_meter = True
+    return first_meter, active_meter
+
+
+def _split_optional_stream_tag(line: str) -> tuple[str, str] | None:
+    stream_match = re.match(r"^(\[r:\d+/\d+\])(.*)$", line.strip())
+    if stream_match is not None:
+        return stream_match.group(1), stream_match.group(2)
+    if "[V:" in line and _segment_has_barline(line):
+        return "", line.strip()
+    return None
+
+
+def _segment_closing_barline(segment: str) -> str:
+    stripped = segment.rstrip()
+    for token in ("::", ":|", "|]", "||", "|", ":"):
+        if stripped.endswith(token):
+            return token
+    return "|"
+
+
+def _segment_has_barline(segment: str) -> bool:
+    stripped = segment.rstrip()
+    return "|" in stripped or stripped.endswith(":")
+
+
+def _line_closing_barline(body: str) -> str:
+    for _voice, segment in reversed(_split_voice_segments(body)):
+        if _segment_has_barline(segment):
+            return _segment_closing_barline(segment)
+    return "|"
+
+
+def expand_notagen_rest_omitted_voice_segments(text: str) -> str:
+    """Add rest-only voice segments that NotaGen preprocessing omits.
+
+    NotaGen trains on a compact augmented representation where voices with a
+    full-bar rest are absent from that stream line. ABC renderers such as
+    abc2midi are stricter about declared voices spanning the tune, so this
+    helper reconstructs only missing all-rest segments at render/eval time.
+    """
+
+    header = _extract_header_context(text)
+    expected_voices = _target_header_voices(header)
+    if not expected_voices:
+        return text
+
+    active_meter = header.meter
+    output_lines: list[str] = []
+    changed = False
+    for raw_line in text.splitlines(keepends=True):
+        line_body = raw_line[:-1] if raw_line.endswith("\n") else raw_line
+        newline = "\n" if raw_line.endswith("\n") else ""
+        parsed = _split_optional_stream_tag(line_body)
+        if parsed is None:
+            output_lines.append(raw_line)
+            continue
+
+        prefix, body = parsed
+        line_meter, active_meter = _body_meter(body, active_meter)
+        if not _segment_has_barline(body):
+            output_lines.append(raw_line)
+            continue
+
+        used_voices = {
+            voice
+            for voice, segment in _split_voice_segments(body)
+            if voice is not None and _segment_has_barline(segment)
+        }
+        missing_voices = sorted(expected_voices - used_voices)
+        if not used_voices or not missing_voices:
+            output_lines.append(raw_line)
+            continue
+
+        barline = _line_closing_barline(body)
+        additions = []
+        for voice in missing_voices:
+            base_length = header.voice_lengths.get(voice, header.default_length)
+            additions.append(f"[V:{voice}]{_rest_token_for_duration(line_meter, base_length)}{barline}")
+        output_lines.append(f"{prefix}{body}{''.join(additions)}{newline}")
+        changed = True
+
+    if not changed:
+        return text
+    return "".join(output_lines)
 
 
 def _split_voice_segments(body: str) -> list[tuple[int | None, str]]:
@@ -416,6 +559,7 @@ def _validated_bar_metrics(stream_lines: list[StreamLineFeatures], header: Heade
     duration_closeness_sum = 0.0
     total_stream_bars = 0
     validated_bars = 0
+    strict_validated_bars = 0
     active_meter = header.meter
 
     for stream_line in stream_lines:
@@ -443,17 +587,73 @@ def _validated_bar_metrics(stream_lines: list[StreamLineFeatures], header: Heade
         # separate meter_alignment_reward still measures the per-voice quality.
         if populated > 0 and aligned > 0:
             validated_bars += 1
+        if populated > 0 and aligned == populated:
+            strict_validated_bars += 1
         if populated > 0:
             total_stream_bars += 1
 
     meter_alignment_reward = _safe_fraction(aligned_voice_bars, total_voice_bars)
     meter_duration_closeness_reward = duration_closeness_sum / total_voice_bars if total_voice_bars > 0 else 0.0
     bar_meter_consistency_reward = _safe_fraction(validated_bars, total_stream_bars)
+    strict_bar_meter_consistency_reward = _safe_fraction(strict_validated_bars, total_stream_bars)
     return MeterValidationMetrics(
         meter_alignment_reward=meter_alignment_reward,
         meter_duration_closeness_reward=meter_duration_closeness_reward,
         validated_bars=validated_bars,
+        strict_validated_bars=strict_validated_bars,
         bar_meter_consistency_reward=bar_meter_consistency_reward,
+        strict_bar_meter_consistency_reward=strict_bar_meter_consistency_reward,
+    )
+
+
+def _abc_grammar_metrics(stream_lines: list[StreamLineFeatures], header: HeaderContext) -> AbcGrammarMetrics:
+    used_voices = {
+        voice
+        for line in stream_lines
+        for voice, _segment in _split_voice_segments(line.body)
+        if voice is not None
+    }
+    declared_voices = set(header.voice_lengths)
+
+    if used_voices:
+        voice_declaration_reward = _safe_fraction(len(used_voices & declared_voices), len(used_voices))
+        score_voice_reward = (
+            _safe_fraction(len(used_voices & header.score_voices), len(used_voices)) if header.has_score else 1.0
+        )
+    else:
+        voice_declaration_reward = 1.0
+        score_voice_reward = 1.0
+
+    repeat_errors = 0
+    open_repeats = 0
+    repeat_text = "\n".join(line.body for line in stream_lines)
+    repeat_text = re.sub(r'"[^"\n]*"', " ", repeat_text)
+    repeat_text = re.sub(r"![^!\n]*!", " ", repeat_text)
+    for match in re.finditer(r":\|\d+|\|\d+|\[\d+|\|:|:\||::", repeat_text):
+        token = match.group(0)
+        if token == "|:":
+            open_repeats += 1
+        elif token == "::":
+            if open_repeats <= 0:
+                repeat_errors += 1
+            else:
+                open_repeats -= 1
+            open_repeats += 1
+        elif token.startswith(":|"):
+            if open_repeats <= 0:
+                repeat_errors += 1
+            else:
+                open_repeats -= 1
+        elif token.startswith("|") or token.startswith("["):
+            if open_repeats <= 0:
+                repeat_errors += 1
+
+    repeat_errors += open_repeats
+    repeat_syntax_reward = 1.0 / (1.0 + repeat_errors)
+    return AbcGrammarMetrics(
+        voice_declaration_reward=voice_declaration_reward,
+        score_voice_reward=score_voice_reward,
+        repeat_syntax_reward=repeat_syntax_reward,
     )
 
 
@@ -596,7 +796,11 @@ def _total_reward(
     bar_token_reward: float,
     meter_alignment_reward: float,
     meter_duration_closeness_reward: float,
+    bar_meter_consistency_reward: float,
     bar_count_reward: float,
+    voice_declaration_reward: float,
+    score_voice_reward: float,
+    repeat_syntax_reward: float,
     root_similarity_reward: float,
     bass_pitch_class_reward: float,
     cadence_root_reward: float,
@@ -614,7 +818,11 @@ def _total_reward(
         + config.bar_token_weight * bar_token_reward
         + config.meter_alignment_weight * meter_alignment_reward
         + config.meter_duration_closeness_weight * meter_duration_closeness_reward
+        + config.bar_meter_consistency_weight * bar_meter_consistency_reward
         + config.bar_count_weight * bar_count_reward
+        + config.voice_declaration_weight * voice_declaration_reward
+        + config.score_voice_weight * score_voice_reward
+        + config.repeat_syntax_weight * repeat_syntax_reward
         + harmonic_progress
         * (
             config.root_weight * root_similarity_reward
@@ -643,8 +851,10 @@ def score_candidate_file(
 
     observed_stream_lines = len(stream_lines)
     meter_metrics = _validated_bar_metrics(stream_lines, header)
+    grammar_metrics = _abc_grammar_metrics(stream_lines, header)
     meter_alignment_reward = meter_metrics.meter_alignment_reward
-    validated_bars = meter_metrics.validated_bars
+    primary_validated_bars = meter_metrics.validated_bars
+    validated_bars = primary_validated_bars
     observed_bars = validated_bars
     parse_reward = 1.0 if parse_valid else 0.0
     countdown_reward = _countdown_reward(stream_lines)
@@ -701,7 +911,11 @@ def score_candidate_file(
         bar_token_reward=bar_token_reward,
         meter_alignment_reward=meter_alignment_reward,
         meter_duration_closeness_reward=meter_metrics.meter_duration_closeness_reward,
+        bar_meter_consistency_reward=meter_metrics.bar_meter_consistency_reward,
         bar_count_reward=bar_count_reward,
+        voice_declaration_reward=grammar_metrics.voice_declaration_reward,
+        score_voice_reward=grammar_metrics.score_voice_reward,
+        repeat_syntax_reward=grammar_metrics.repeat_syntax_reward,
         root_similarity_reward=root_similarity_reward,
         bass_pitch_class_reward=bass_pitch_class_reward,
         cadence_root_reward=cadence_root_reward,
@@ -713,7 +927,9 @@ def score_candidate_file(
         parse_valid=parse_valid,
         observed_stream_lines=observed_stream_lines,
         observed_bars=observed_bars,
+        primary_validated_bars=primary_validated_bars,
         validated_bars=validated_bars,
+        strict_validated_bars=meter_metrics.strict_validated_bars,
         parse_reward=parse_reward,
         countdown_reward=countdown_reward,
         line_closure_reward=line_closure_reward,
@@ -721,7 +937,11 @@ def score_candidate_file(
         meter_alignment_reward=meter_alignment_reward,
         meter_duration_closeness_reward=meter_metrics.meter_duration_closeness_reward,
         bar_meter_consistency_reward=meter_metrics.bar_meter_consistency_reward,
+        strict_bar_meter_consistency_reward=meter_metrics.strict_bar_meter_consistency_reward,
         bar_count_reward=bar_count_reward,
+        voice_declaration_reward=grammar_metrics.voice_declaration_reward,
+        score_voice_reward=grammar_metrics.score_voice_reward,
+        repeat_syntax_reward=grammar_metrics.repeat_syntax_reward,
         root_similarity_reward=root_similarity_reward,
         bass_pitch_class_reward=bass_pitch_class_reward,
         cadence_root_reward=cadence_root_reward,
@@ -732,6 +952,7 @@ def score_candidate_file(
 
 def _ensure_renderable_abc(text: str) -> str:
     text = text if text.endswith("\n") else text + "\n"
+    text = expand_notagen_rest_omitted_voice_segments(text)
     header_prefix = []
     if not re.search(r"(?m)^X:", text):
         header_prefix.append("X:1")
@@ -762,8 +983,10 @@ def score_candidate_text(
 
     observed_stream_lines = len(stream_lines)
     meter_metrics = _validated_bar_metrics(stream_lines, header)
+    grammar_metrics = _abc_grammar_metrics(stream_lines, header)
     meter_alignment_reward = meter_metrics.meter_alignment_reward
-    validated_bars = meter_metrics.validated_bars
+    primary_validated_bars = meter_metrics.validated_bars
+    validated_bars = primary_validated_bars
     observed_bars = validated_bars
     parse_reward = 1.0 if parse_valid else 0.0
     countdown_reward = _countdown_reward(stream_lines)
@@ -820,7 +1043,11 @@ def score_candidate_text(
         bar_token_reward=bar_token_reward,
         meter_alignment_reward=meter_alignment_reward,
         meter_duration_closeness_reward=meter_metrics.meter_duration_closeness_reward,
+        bar_meter_consistency_reward=meter_metrics.bar_meter_consistency_reward,
         bar_count_reward=bar_count_reward,
+        voice_declaration_reward=grammar_metrics.voice_declaration_reward,
+        score_voice_reward=grammar_metrics.score_voice_reward,
+        repeat_syntax_reward=grammar_metrics.repeat_syntax_reward,
         root_similarity_reward=root_similarity_reward,
         bass_pitch_class_reward=bass_pitch_class_reward,
         cadence_root_reward=cadence_root_reward,
@@ -832,7 +1059,9 @@ def score_candidate_text(
         parse_valid=parse_valid,
         observed_stream_lines=observed_stream_lines,
         observed_bars=observed_bars,
+        primary_validated_bars=primary_validated_bars,
         validated_bars=validated_bars,
+        strict_validated_bars=meter_metrics.strict_validated_bars,
         parse_reward=parse_reward,
         countdown_reward=countdown_reward,
         line_closure_reward=line_closure_reward,
@@ -840,7 +1069,11 @@ def score_candidate_text(
         meter_alignment_reward=meter_alignment_reward,
         meter_duration_closeness_reward=meter_metrics.meter_duration_closeness_reward,
         bar_meter_consistency_reward=meter_metrics.bar_meter_consistency_reward,
+        strict_bar_meter_consistency_reward=meter_metrics.strict_bar_meter_consistency_reward,
         bar_count_reward=bar_count_reward,
+        voice_declaration_reward=grammar_metrics.voice_declaration_reward,
+        score_voice_reward=grammar_metrics.score_voice_reward,
+        repeat_syntax_reward=grammar_metrics.repeat_syntax_reward,
         root_similarity_reward=root_similarity_reward,
         bass_pitch_class_reward=bass_pitch_class_reward,
         cadence_root_reward=cadence_root_reward,
