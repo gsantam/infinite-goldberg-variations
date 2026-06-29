@@ -177,7 +177,7 @@ class GoldbergRewardTests(unittest.TestCase):
         expanded = expand_notagen_rest_omitted_voice_segments(text)
 
         self.assertIn("[V:2]x6|", expanded)
-        self.assertIn("[r:0/0][V:1]C2D2E2|[V:4]G,6|[V:2]x6|", expanded)
+        self.assertIn("[r:0/0][V:1]C2D2E2|[V:2]x6|[V:4]G,6|", expanded)
 
     def test_expand_notagen_rest_omitted_voice_segments_uses_inline_meter(self):
         text = "\n".join(
@@ -187,13 +187,46 @@ class GoldbergRewardTests(unittest.TestCase):
                 "L:1/8",
                 "V:1 treble",
                 "V:2 treble",
-                "[r:0/0][V:1][M:2/2]C8D8|",
+                "[r:0/0][V:1][M:2/2]C4D4|",
             ]
         )
 
         expanded = expand_notagen_rest_omitted_voice_segments(text)
 
         self.assertIn("[V:2]x8|", expanded)
+
+    def test_expand_notagen_rest_omitted_voice_segments_uses_partial_bar_duration(self):
+        text = "\n".join(
+            [
+                "%%score ( 1 2 )",
+                "M:2/2",
+                "L:1/8",
+                "V:1 treble",
+                "V:2 treble",
+                "[V:1]C|",
+            ]
+        )
+
+        expanded = expand_notagen_rest_omitted_voice_segments(text)
+
+        self.assertIn("[V:2]x|", expanded)
+        self.assertNotIn("[V:2]x16|", expanded)
+
+    def test_expand_notagen_rest_omitted_voice_segments_preserves_numbered_repeat_endings(self):
+        text = "\n".join(
+            [
+                "%%score ( 1 2 )",
+                "M:3/4",
+                "L:1/8",
+                "V:1 treble",
+                "V:2 treble",
+                "[V:1]C2D2E2:|2",
+            ]
+        )
+
+        expanded = expand_notagen_rest_omitted_voice_segments(text)
+
+        self.assertIn("[V:2]x6:|2", expanded)
 
     def test_validated_bars_dominate_zero_bar_harmonic_guess(self):
         config = GoldbergRewardConfig()

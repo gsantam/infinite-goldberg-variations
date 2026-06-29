@@ -81,6 +81,52 @@ def _rest_token_for_duration(duration: Fraction, base_length: Fraction) -> str:
     return f"x{units.numerator}/{units.denominator}"
 
 
+def _parse_length_multiplier(token: str | None) -> Fraction:
+    if not token:
+        return Fraction(1, 1)
+    if token == "/":
+        return Fraction(1, 2)
+    if token.startswith("/"):
+        den = token[1:]
+        if not den:
+            return Fraction(1, 2)
+        return Fraction(1, int(den))
+    if "/" in token:
+        num, den = token.split("/", 1)
+        if not den:
+            return Fraction(int(num), 2)
+        return Fraction(int(num), int(den))
+    return Fraction(int(token), 1)
+
+
+def _voice_segment_duration(segment: str, base_length: Fraction) -> Fraction:
+    cleaned = re.sub(r'"[^"\n]*"', " ", segment)
+    cleaned = re.sub(r"![^!\n]*!", " ", cleaned)
+    cleaned = re.sub(r"\[[A-Za-z]:[^\]]*\]", " ", cleaned)
+    cleaned = re.sub(r"\{[^}]*\}", " ", cleaned)
+    cleaned = re.sub(r"[{}<>~$PMHSTuvw]", " ", cleaned)
+    total = Fraction(0, 1)
+    token_pattern = re.compile(r"(\(\d+)|(\[[^\]]+\]|[_=^]*[A-Ga-gxz][,']*)(\d+(?:/\d*)?|/\d+|/)?")
+    tuplet_notes_left = 0
+    tuplet_ratio = Fraction(1, 1)
+    for match in token_pattern.finditer(cleaned):
+        tuplet_marker = match.group(1)
+        if tuplet_marker:
+            tuplet_count = int(tuplet_marker[1:])
+            if tuplet_count > 0:
+                tuplet_notes_left = tuplet_count
+                tuplet_ratio = Fraction(2, tuplet_count) if tuplet_count == 3 else Fraction(1, 1)
+            continue
+        multiplier = _parse_length_multiplier(match.group(3))
+        if tuplet_notes_left > 0:
+            multiplier *= tuplet_ratio
+            tuplet_notes_left -= 1
+            if tuplet_notes_left == 0:
+                tuplet_ratio = Fraction(1, 1)
+        total += base_length * multiplier
+    return total
+
+
 def _body_meter(body: str, current_meter: Fraction) -> tuple[Fraction, Fraction]:
     active_meter = current_meter
     first_meter = current_meter
@@ -110,9 +156,14 @@ def _split_voice_segments(body: str) -> list[tuple[int | None, str]]:
 
 def _segment_closing_barline(segment: str) -> str:
     stripped = segment.rstrip()
-    for token in ("::", ":|", "|]", "||", "|", ":"):
-        if stripped.endswith(token):
-            return token
+    match = re.search(r"(:\|\d+|\|\d+|\|:|::|:\||\|\]|\|\||\||:)$", stripped)
+    if match:
+        return match.group(1)
+    # xml2abc occasionally serializes a numbered ending as a digit after a
+    # voice-local note without a plain barline in the rest of the segment.
+    match = re.search(r"(\d+)$", stripped)
+    if match and ":|" in stripped:
+        return f":|{match.group(1)}"
     return "|"
 
 
@@ -135,6 +186,48 @@ def _line_closing_barline(body: str) -> str:
         if _segment_has_barline(segment):
             return _segment_closing_barline(segment)
     return "|"
+
+
+def _line_rest_duration(
+    body: str,
+    header: AbcHeaderContext,
+    fallback_meter: Fraction,
+) -> Fraction:
+    durations = []
+    for voice, segment in _split_voice_segments(body):
+        if voice is None or not _segment_has_barline(segment):
+            continue
+        base_length = header.voice_lengths.get(voice, header.default_length)
+        duration = _voice_segment_duration(segment, base_length)
+        if duration > 0:
+            durations.append(duration)
+    if not durations:
+        return fallback_meter
+    return max(durations)
+
+
+def _rebuild_body_with_missing_rests(
+    body: str,
+    expected_voices: set[int],
+    missing_voices: set[int],
+    rest_by_voice: dict[int, str],
+) -> str:
+    by_voice: dict[int, list[str]] = {}
+    unvoiced: list[str] = []
+    for voice, segment in _split_voice_segments(body):
+        if voice is None:
+            unvoiced.append(segment)
+        else:
+            by_voice.setdefault(voice, []).append(segment)
+
+    ordered_parts = unvoiced[:]
+    voice_order = sorted(expected_voices | set(by_voice))
+    for voice in voice_order:
+        if voice in by_voice:
+            ordered_parts.extend(f"[V:{voice}]{segment}" for segment in by_voice[voice])
+        elif voice in missing_voices:
+            ordered_parts.append(f"[V:{voice}]{rest_by_voice[voice]}")
+    return "".join(ordered_parts)
 
 
 def expand_notagen_rest_omitted_voice_segments(text: str) -> str:
@@ -179,11 +272,18 @@ def expand_notagen_rest_omitted_voice_segments(text: str) -> str:
             continue
 
         barline = _line_closing_barline(body)
-        additions = []
+        rest_duration = _line_rest_duration(body, header, line_meter)
+        rest_by_voice = {}
         for voice in missing_voices:
             base_length = header.voice_lengths.get(voice, header.default_length)
-            additions.append(f"[V:{voice}]{_rest_token_for_duration(line_meter, base_length)}{barline}")
-        output_lines.append(f"{prefix}{body}{''.join(additions)}{newline}")
+            rest_by_voice[voice] = f"{_rest_token_for_duration(rest_duration, base_length)}{barline}"
+        expanded_body = _rebuild_body_with_missing_rests(
+            body=body,
+            expected_voices=expected_voices,
+            missing_voices=set(missing_voices),
+            rest_by_voice=rest_by_voice,
+        )
+        output_lines.append(f"{prefix}{expanded_body}{newline}")
         changed = True
 
     if not changed:
