@@ -14,6 +14,20 @@ class AbcHeaderContext:
     has_score: bool
 
 
+UNSUPPORTED_ABC_INSTRUCTIONS = (
+    "!courtesy!",
+    "!trill(!",
+)
+
+
+def strip_unsupported_abc_instructions(text: str) -> str:
+    """Remove ABC decorations we do not want the model or renderers to learn."""
+
+    for instruction in UNSUPPORTED_ABC_INSTRUCTIONS:
+        text = text.replace(instruction, "")
+    return text
+
+
 def _parse_fraction_token(token: str, fallback: Fraction) -> Fraction:
     token = token.strip()
     if not token:
@@ -289,3 +303,16 @@ def expand_notagen_rest_omitted_voice_segments(text: str) -> str:
     if not changed:
         return text
     return "".join(output_lines)
+
+
+def preprocess_notagen_abc(text: str) -> str:
+    """Apply explicit dataset-level preprocessing to NotaGen ABC.
+
+    This step is intentionally separate from reward scoring. Run it before SFT
+    or evaluation when we want the model, parser, and renderer to operate on
+    the same simplified representation.
+    """
+
+    text = strip_unsupported_abc_instructions(text)
+    text = expand_notagen_rest_omitted_voice_segments(text)
+    return text
