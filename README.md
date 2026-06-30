@@ -40,18 +40,13 @@ is not only whether a generated piece sounds like Bach in general, but whether
 it behaves like another variation of this particular Aria.
 
 I still have not been able to come up with a clean definition of this more
-intrinsic similarity. For now, I approximate it with concrete rule-based
-patterns: does the generated piece follow the same structure, does it have the
-same number of bars, does the harmony move in the same way, and does it preserve
-the relationship to the Aria?
-
-I also define rule-based similarity to the Aria through:
-
-- whether the generated piece has the expected number of bars
-- whether the emitted bars align with the declared meter
-- whether the inferred harmonic roots follow the Aria
-- whether the bass pitch classes follow the Aria
-- whether important cadence bars land on similar roots and bass notes
+intrinsic similarity. For now, I track it with a chroma-based comparison to the
+Aria and to the real variations. Each piece is converted into pitch-class
+features, normalized to a common key, and compared through global chroma
+histograms and chroma sequences aligned with dynamic time warping. I compute
+this for the full texture, the bass line, and the top voice, which gives a
+compact signal for whether the generated piece shares harmonic and melodic
+shape with the Goldberg material.
 
 ## Modelling
 
@@ -134,11 +129,9 @@ feels closer to this project than preference modelling, which has not worked
 especially well for music generation so far
 ([arXiv:2504.16839](https://arxiv.org/pdf/2504.16839)).
 
-The reward is a weighted sum of rule checks: ABC parse validity, countdown and
-line structure, bar emission, meter consistency, closeness to 32 bars, harmonic
-root similarity to the Aria, bass pitch-class similarity, and cadence root/bass
-matches. Harmony rewards are scaled by how much of the 32-bar structure was
-actually validated, so tiny fragments do not get full credit.
+The reward is a weighted sum of checks: ABC parse validity, countdown and line
+structure, bar emission, meter consistency, closeness to the target NotaGen
+structure length, and chroma similarity to the Aria/Goldberg material.
 
 The current run uses NotaGen-large with a frozen reference model for KL, LoRA
 (`r=8`, `alpha=16`, dropout `0.05`), 4 trajectories per prompt, 32 target
