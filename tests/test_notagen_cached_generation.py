@@ -11,6 +11,7 @@ try:
         CachedNotaGenPatchGenerator,
         normalize_patch_for_context,
     )
+    from grpo.notagen_cached_generation_batch import _accept_patches_batch, _BatchContext
     from grpo.notagen_wrapper import NotaGenLMHeadModel
 except ModuleNotFoundError as exc:
     np = None
@@ -95,6 +96,51 @@ class CachedNotaGenPatchGeneratorTests(unittest.TestCase):
 
         self.assertEqual(cached, uncached)
         self.assertEqual(len(cached), PATCH_SIZE - 7)
+
+    def test_batched_accept_matches_sequential_accept(self):
+        torch.manual_seed(2)
+        model = _tiny_notagen()
+        flat_ids = [3 + (i % 80) for i in range(PATCH_SIZE * 3 + 5)]
+        patches = [[11 + ((row * 7 + i) % 50) for i in range(PATCH_SIZE - 5)] for row in range(3)]
+
+        sequential_generators = []
+        batched_contexts = []
+        for seed in range(3):
+            sequential = CachedNotaGenPatchGenerator(model)
+            sequential.reset(flat_ids)
+            sequential_generators.append(sequential)
+
+            batched = CachedNotaGenPatchGenerator(model)
+            batched.reset(flat_ids)
+            batched_contexts.append(
+                _BatchContext(
+                    generator=batched,
+                    rng=np.random.default_rng(seed),
+                    prompt_stream_lines=1,
+                    target_total_stream_lines=32,
+                    byte_list=[],
+                    generated_patches=[],
+                    start_time=0.0,
+                    cut_index=None,
+                    resets=1,
+                )
+            )
+
+        for generator, patch in zip(sequential_generators, patches, strict=True):
+            generator.accept_patch(patch)
+        _accept_patches_batch(list(zip(batched_contexts, patches, strict=True)), precision="fp32")
+
+        for sequential, batched in zip(sequential_generators, batched_contexts, strict=True):
+            self.assertEqual(sequential.state.flat_ids, batched.generator.state.flat_ids)
+            self.assertEqual(sequential.state.cached_patch_count, batched.generator.state.cached_patch_count)
+            self.assertEqual(sequential.state.partial_ids, batched.generator.state.partial_ids)
+            self.assertTrue(
+                torch.allclose(
+                    sequential.state.last_patch_hidden,
+                    batched.generator.state.last_patch_hidden,
+                    atol=1e-5,
+                )
+            )
 
 
 if __name__ == "__main__":
