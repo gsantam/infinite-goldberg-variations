@@ -1229,86 +1229,44 @@ def run_smoke(
         prompt_flat = [item for sublist in patchilizer.encode_generate(rollout_prompt) for item in sublist]
         replay_count = len(group_samples)
 
-        if args.batch_logprob_replay and not args.no_step:
-            batch_replay_start = time.perf_counter()
+        batched_ref_logprobs_batch: list[torch.Tensor | None] | None = None
+        if args.batch_logprob_replay and args.beta != 0.0:
+            reference_replay_start = time.perf_counter()
             generated_batch = [sample.generated_patches for sample in group_samples]
-            ref_logprobs_batch: list[torch.Tensor | None]
-            if args.beta != 0.0:
-                ref_precision = args.precision if next(ref_model.parameters()).device.type == "cuda" else "fp32"
-                with torch.no_grad():
-                    ref_logprobs_batch = [
-                        tensor.detach().cpu().float()
-                        for tensor in batched_trajectory_logprobs(
-                            ref_model,
-                            prompt_flat,
-                            generated_batch,
-                            ref_precision,
-                            replay_context_patches=args.replay_context_patches,
-                            target_chunk_patches=args.score_chunk_patches,
-                            replay_batch_size=args.logprob_replay_batch_size,
-                        )
-                    ]
-            else:
-                ref_logprobs_batch = [None for _ in group_samples]
+            ref_precision = args.precision if next(ref_model.parameters()).device.type == "cuda" else "fp32"
+            with torch.no_grad():
+                batched_ref_logprobs_batch = [
+                    tensor.detach().cpu().float()
+                    for tensor in batched_trajectory_logprobs(
+                        ref_model,
+                        prompt_flat,
+                        generated_batch,
+                        ref_precision,
+                        replay_context_patches=args.replay_context_patches,
+                        target_chunk_patches=args.score_chunk_patches,
+                        replay_batch_size=args.logprob_replay_batch_size,
+                    )
+                ]
+            timings["batched_reference_logprob_s"] = time.perf_counter() - reference_replay_start
 
-            policy_logprobs_batch = batched_trajectory_logprobs(
-                policy_model,
-                prompt_flat,
-                generated_batch,
-                args.precision,
-                replay_context_patches=args.replay_context_patches,
-                target_chunk_patches=args.score_chunk_patches,
-                replay_batch_size=args.logprob_replay_batch_size,
-            )
-            losses: list[torch.Tensor] = []
-            for sample, advantage, policy_logprobs, ref_logprobs in zip(
-                group_samples,
-                advantages,
-                policy_logprobs_batch,
-                ref_logprobs_batch,
-                strict=True,
-            ):
-                if policy_logprobs.numel() == 0:
-                    continue
-                policy_logprobs = policy_logprobs.float()
-                sample.reward_breakdown["scored_tokens"] = int(policy_logprobs.numel())
-                adv = torch.tensor(advantage, device=device, dtype=policy_logprobs.dtype)
-                if ref_logprobs is not None:
-                    if ref_logprobs.numel() != policy_logprobs.numel():
-                        raise RuntimeError(
-                            f"reference logprob count mismatch: got {ref_logprobs.numel()}, "
-                            f"expected {policy_logprobs.numel()}"
-                        )
-                    ref_logprobs = ref_logprobs.to(policy_logprobs.device).float()
-                    kl_sum = grpo_kl_term(policy_logprobs, ref_logprobs).sum()
-                else:
-                    kl_sum = torch.zeros((), device=policy_logprobs.device, dtype=policy_logprobs.dtype)
-                loss = (-(adv * policy_logprobs.sum()) + args.beta * kl_sum) / policy_logprobs.numel()
-                sample.reward_breakdown["kl_reference_active"] = bool(ref_logprobs is not None)
-                sample.reward_breakdown["kl_beta"] = float(args.beta)
-                sample.reward_breakdown["kl_sum"] = float(kl_sum.detach().cpu())
-                sample.reward_breakdown["kl_mean"] = float((kl_sum / policy_logprobs.numel()).detach().cpu())
-                sample_loss_values.append(float(loss.detach().cpu()))
-                losses.append(loss)
-            if losses:
-                (torch.stack(losses).mean()).backward()
-            timings["batched_logprob_backward_inner_s"] = time.perf_counter() - batch_replay_start
-        else:
-            for sample, advantage in zip(group_samples, advantages):
-                if args.no_step:
-                    with torch.no_grad():
-                        policy_logprob_list = trajectory_logprobs(
-                            policy_model,
-                            prompt_flat,
-                            sample.generated_patches,
-                            args.precision,
-                            replay_context_patches=args.replay_context_patches,
-                        )
-                        if not policy_logprob_list:
-                            continue
-                        policy_logprobs = torch.stack(policy_logprob_list)
-                        sample.reward_breakdown["scored_tokens"] = int(policy_logprobs.numel())
-                        if args.beta != 0.0:
+        for sample_idx, (sample, advantage) in enumerate(zip(group_samples, advantages, strict=True)):
+            if args.no_step:
+                with torch.no_grad():
+                    policy_logprob_list = trajectory_logprobs(
+                        policy_model,
+                        prompt_flat,
+                        sample.generated_patches,
+                        args.precision,
+                        replay_context_patches=args.replay_context_patches,
+                    )
+                    if not policy_logprob_list:
+                        continue
+                    policy_logprobs = torch.stack(policy_logprob_list)
+                    sample.reward_breakdown["scored_tokens"] = int(policy_logprobs.numel())
+                    if args.beta != 0.0:
+                        if batched_ref_logprobs_batch is not None:
+                            ref_logprobs = batched_ref_logprobs_batch[sample_idx]
+                        else:
                             ref_precision = args.precision if next(ref_model.parameters()).device.type == "cuda" else "fp32"
                             ref_logprobs = torch.stack(
                                 trajectory_logprobs(
@@ -1319,23 +1277,26 @@ def run_smoke(
                                     replay_context_patches=args.replay_context_patches,
                                 )
                             )
-                        else:
-                            ref_logprobs = None
-                elif args.score_chunk_patches > 0:
-                    total_tokens = trajectory_logprob_forward_count(
-                        policy_model,
-                        prompt_flat,
-                        sample.generated_patches,
-                        args.precision,
-                        replay_context_patches=args.replay_context_patches,
-                        target_chunk_patches=args.score_chunk_patches,
-                    )
-                    if total_tokens <= 0:
-                        continue
-                    sample.reward_breakdown["scored_tokens"] = total_tokens
-                    adv = torch.tensor(advantage, device=device, dtype=torch.float32)
-                    ref_logprobs = None
-                    if args.beta != 0.0:
+                    else:
+                        ref_logprobs = None
+            elif args.score_chunk_patches > 0:
+                total_tokens = trajectory_logprob_forward_count(
+                    policy_model,
+                    prompt_flat,
+                    sample.generated_patches,
+                    args.precision,
+                    replay_context_patches=args.replay_context_patches,
+                    target_chunk_patches=args.score_chunk_patches,
+                )
+                if total_tokens <= 0:
+                    continue
+                sample.reward_breakdown["scored_tokens"] = total_tokens
+                adv = torch.tensor(advantage, device=device, dtype=torch.float32)
+                ref_logprobs = None
+                if args.beta != 0.0:
+                    if batched_ref_logprobs_batch is not None:
+                        ref_logprobs = batched_ref_logprobs_batch[sample_idx]
+                    else:
                         ref_precision = args.precision if next(ref_model.parameters()).device.type == "cuda" else "fp32"
                         with torch.no_grad():
                             ref_chunks = list(
@@ -1351,59 +1312,62 @@ def run_smoke(
                         if not ref_chunks:
                             continue
                         ref_logprobs = torch.cat([chunk.detach().cpu().float() for chunk in ref_chunks])
-                        if ref_logprobs.numel() != total_tokens:
-                            raise RuntimeError(f"reference logprob count mismatch: got {ref_logprobs.numel()}, expected {total_tokens}")
+                    if ref_logprobs.numel() != total_tokens:
+                        raise RuntimeError(f"reference logprob count mismatch: got {ref_logprobs.numel()}, expected {total_tokens}")
 
-                    offset = 0
-                    sample_loss_value = 0.0
-                    sample_kl_sum = 0.0
-                    for policy_logprobs in trajectory_logprob_chunks(
-                        policy_model,
-                        prompt_flat,
-                        sample.generated_patches,
-                        args.precision,
-                        replay_context_patches=args.replay_context_patches,
-                        target_chunk_patches=args.score_chunk_patches,
-                    ):
-                        if policy_logprobs.numel() == 0:
-                            continue
-                        policy_logprobs = policy_logprobs.float()
-                        if ref_logprobs is not None:
-                            ref_chunk = ref_logprobs[offset : offset + policy_logprobs.numel()].to(policy_logprobs.device)
-                            kl_sum = grpo_kl_term(policy_logprobs, ref_chunk).sum()
-                            sample_kl_sum += float(kl_sum.detach().cpu())
-                        else:
-                            kl_sum = torch.zeros((), device=policy_logprobs.device, dtype=policy_logprobs.dtype)
-                        offset += policy_logprobs.numel()
-                        chunk_loss = (-(adv.to(policy_logprobs.dtype) * policy_logprobs.sum()) + args.beta * kl_sum) / total_tokens
-                        sample_loss_value += float(chunk_loss.detach().cpu())
-                        (chunk_loss / replay_count).backward()
-                        del policy_logprobs, kl_sum, chunk_loss
-
-                    if offset != total_tokens:
-                        raise RuntimeError(f"policy logprob count mismatch: got {offset}, expected {total_tokens}")
-                    sample.reward_breakdown["kl_reference_active"] = bool(ref_logprobs is not None)
-                    sample.reward_breakdown["kl_beta"] = float(args.beta)
-                    sample.reward_breakdown["kl_sum"] = sample_kl_sum
-                    sample.reward_breakdown["kl_mean"] = sample_kl_sum / total_tokens if total_tokens > 0 else 0.0
-                    sample_loss_values.append(sample_loss_value)
-                    del adv, ref_logprobs
-                    if device.type == "cuda":
-                        torch.cuda.empty_cache()
-                    continue
-                else:
-                    policy_logprob_list = trajectory_logprobs(
-                        policy_model,
-                        prompt_flat,
-                        sample.generated_patches,
-                        args.precision,
-                        replay_context_patches=args.replay_context_patches,
-                    )
-                    if not policy_logprob_list:
+                offset = 0
+                sample_loss_value = 0.0
+                sample_kl_sum = 0.0
+                for policy_logprobs in trajectory_logprob_chunks(
+                    policy_model,
+                    prompt_flat,
+                    sample.generated_patches,
+                    args.precision,
+                    replay_context_patches=args.replay_context_patches,
+                    target_chunk_patches=args.score_chunk_patches,
+                ):
+                    if policy_logprobs.numel() == 0:
                         continue
-                    policy_logprobs = torch.stack(policy_logprob_list)
-                    sample.reward_breakdown["scored_tokens"] = int(policy_logprobs.numel())
-                    if args.beta != 0.0:
+                    policy_logprobs = policy_logprobs.float()
+                    if ref_logprobs is not None:
+                        ref_chunk = ref_logprobs[offset : offset + policy_logprobs.numel()].to(policy_logprobs.device)
+                        kl_sum = grpo_kl_term(policy_logprobs, ref_chunk).sum()
+                        sample_kl_sum += float(kl_sum.detach().cpu())
+                    else:
+                        kl_sum = torch.zeros((), device=policy_logprobs.device, dtype=policy_logprobs.dtype)
+                    offset += policy_logprobs.numel()
+                    chunk_loss = (-(adv.to(policy_logprobs.dtype) * policy_logprobs.sum()) + args.beta * kl_sum) / total_tokens
+                    sample_loss_value += float(chunk_loss.detach().cpu())
+                    (chunk_loss / replay_count).backward()
+                    del policy_logprobs, kl_sum, chunk_loss
+
+                if offset != total_tokens:
+                    raise RuntimeError(f"policy logprob count mismatch: got {offset}, expected {total_tokens}")
+                sample.reward_breakdown["kl_reference_active"] = bool(ref_logprobs is not None)
+                sample.reward_breakdown["kl_beta"] = float(args.beta)
+                sample.reward_breakdown["kl_sum"] = sample_kl_sum
+                sample.reward_breakdown["kl_mean"] = sample_kl_sum / total_tokens if total_tokens > 0 else 0.0
+                sample_loss_values.append(sample_loss_value)
+                del adv, ref_logprobs
+                if device.type == "cuda":
+                    torch.cuda.empty_cache()
+                continue
+            else:
+                policy_logprob_list = trajectory_logprobs(
+                    policy_model,
+                    prompt_flat,
+                    sample.generated_patches,
+                    args.precision,
+                    replay_context_patches=args.replay_context_patches,
+                )
+                if not policy_logprob_list:
+                    continue
+                policy_logprobs = torch.stack(policy_logprob_list)
+                sample.reward_breakdown["scored_tokens"] = int(policy_logprobs.numel())
+                if args.beta != 0.0:
+                    if batched_ref_logprobs_batch is not None:
+                        ref_logprobs = batched_ref_logprobs_batch[sample_idx]
+                    else:
                         with torch.no_grad():
                             ref_precision = args.precision if next(ref_model.parameters()).device.type == "cuda" else "fp32"
                             ref_logprobs = torch.stack(
@@ -1415,28 +1379,33 @@ def run_smoke(
                                     replay_context_patches=args.replay_context_patches,
                                 )
                             )
-                    else:
-                        ref_logprobs = None
-
-                policy_logprobs = policy_logprobs.float()
-                if ref_logprobs is not None:
-                    ref_logprobs = ref_logprobs.to(policy_logprobs.device).float()
-                    kl = grpo_kl_term(policy_logprobs, ref_logprobs).mean()
                 else:
-                    kl = torch.zeros((), device=policy_logprobs.device, dtype=policy_logprobs.dtype)
-                sample.reward_breakdown["kl_reference_active"] = bool(ref_logprobs is not None)
-                sample.reward_breakdown["kl_beta"] = float(args.beta)
-                sample.reward_breakdown["kl_sum"] = float((kl * policy_logprobs.numel()).detach().cpu())
-                sample.reward_breakdown["kl_mean"] = float(kl.detach().cpu())
-                adv = torch.tensor(advantage, device=device, dtype=policy_logprobs.dtype)
-                loss = -(adv * policy_logprobs.mean()) + args.beta * kl
-                sample_loss_values.append(float(loss.detach().cpu()))
+                    ref_logprobs = None
 
-                if not args.no_step:
-                    # True sequential replay: keep only one trajectory graph alive at a time.
-                    (loss / replay_count).backward()
+            policy_logprobs = policy_logprobs.float()
+            if ref_logprobs is not None:
+                if ref_logprobs.numel() != policy_logprobs.numel():
+                    raise RuntimeError(
+                        f"reference logprob count mismatch: got {ref_logprobs.numel()}, "
+                        f"expected {policy_logprobs.numel()}"
+                    )
+                ref_logprobs = ref_logprobs.to(policy_logprobs.device).float()
+                kl = grpo_kl_term(policy_logprobs, ref_logprobs).mean()
+            else:
+                kl = torch.zeros((), device=policy_logprobs.device, dtype=policy_logprobs.dtype)
+            sample.reward_breakdown["kl_reference_active"] = bool(ref_logprobs is not None)
+            sample.reward_breakdown["kl_beta"] = float(args.beta)
+            sample.reward_breakdown["kl_sum"] = float((kl * policy_logprobs.numel()).detach().cpu())
+            sample.reward_breakdown["kl_mean"] = float(kl.detach().cpu())
+            adv = torch.tensor(advantage, device=device, dtype=policy_logprobs.dtype)
+            loss = -(adv * policy_logprobs.mean()) + args.beta * kl
+            sample_loss_values.append(float(loss.detach().cpu()))
 
-                del policy_logprob_list, policy_logprobs, ref_logprobs, kl, adv, loss
+            if not args.no_step:
+                # True sequential replay: keep only one trajectory graph alive at a time.
+                (loss / replay_count).backward()
+
+            del policy_logprob_list, policy_logprobs, ref_logprobs, kl, adv, loss
         timings["logprob_backward_s"] = time.perf_counter() - replay_start
 
         if not sample_loss_values:
@@ -1583,13 +1552,13 @@ def main() -> int:
     parser.add_argument(
         "--batch-logprob-replay",
         action="store_true",
-        help="Batch GRPO logprob replay across trajectories after the prompt-alignment prefix.",
+        help="Batch frozen-reference logprob replay across trajectories after the prompt-alignment prefix.",
     )
     parser.add_argument(
         "--logprob-replay-batch-size",
         type=int,
         default=0,
-        help="Maximum trajectories per batched logprob replay call. Use 0 for all active trajectories.",
+        help="Maximum trajectories per batched reference replay call. Use 0 for all active trajectories.",
     )
     parser.add_argument("--lora-r", type=int, default=0)
     parser.add_argument("--lora-alpha", type=float, default=16.0)
