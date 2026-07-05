@@ -26,8 +26,10 @@ if str(RL_DIR) not in sys.path:
 
 from grpo import GoldbergRewardConfig, compute_group_advantages, load_structural_target  # noqa: E402
 from grpo.notagen_cached_generation import CachedNotaGenPatchGenerator  # noqa: E402
-from grpo.rewards import score_prompt_completion_pair  # noqa: E402
-from grpo.stream_tags import (
+from grpo.notagen_cached_generation_batch import sample_completions_cached_batch  # noqa: E402
+from evaluation.rewards import score_prompt_completion_pair  # noqa: E402
+from evaluation.similarity_rewards import SimilarityReference, SimilarityRewardWeights, load_similarity_reference, score_similarity_reward  # noqa: E402
+from evaluation.stream_tags import (
     count_stream_lines as _count_stream_lines,
     latest_stream_line as _latest_stream_line,
     latest_stream_line_closed as _latest_stream_line_closed,
@@ -57,6 +59,10 @@ class RolloutSample:
     generated_patches: list[list[int]]
     reward: float
     reward_breakdown: dict
+
+
+def _rollout_seed(base_seed: int, step_idx: int, group_idx: int, retry_idx: int) -> int:
+    return base_seed + step_idx * 1000 + group_idx * 100 + retry_idx
 
 
 def infer_model_shape(weights_path: Path) -> ModelShape:
@@ -335,9 +341,17 @@ def load_prompt_rows(path: str | Path, limit: int | None = None) -> list[dict]:
             if not line:
                 continue
             rows.append(json.loads(line))
-    if limit is not None:
+    if limit is not None and limit > 0:
         rows = rows[:limit]
     return rows
+
+
+def prompt_row_name(row: dict, prompt_idx: int) -> str:
+    for key in ("name", "id", "source", "prefix", "continuation"):
+        value = row.get(key)
+        if value:
+            return str(value)
+    return f"prompt_{prompt_idx}"
 
 
 def split_metadata_and_tunebody(abc_text: str) -> tuple[list[str], list[str]]:
@@ -433,6 +447,7 @@ def sample_completion(
     top_p: float,
     target_stream_lines: int,
     max_chars: int,
+    max_generated_patches: int,
     timeout_s: int,
     precision: str,
     cached_rollout: bool = False,
@@ -516,6 +531,8 @@ def sample_completion(
             current_text = "".join(byte_list)
             if count_stream_lines(current_text) >= target_stream_lines and latest_stream_line_closed(current_text):
                 return trim_to_stream_lines(current_text, target_stream_lines), generated_patches
+            if max_generated_patches > 0 and len(generated_patches) >= max_generated_patches:
+                return sanitize_abc(current_text), generated_patches
             if len(byte_list) > max_chars:
                 return sanitize_abc(current_text), generated_patches
             if time.time() - start_time > timeout_s:
@@ -631,6 +648,185 @@ def char_patch_logprobs(
     logits = logits[:, :-1, :].float()
     token_logps = torch.gather(logits.log_softmax(-1), dim=-1, index=target_with_bos[:, 1:].unsqueeze(-1)).squeeze(-1)
     return token_logps[target_masks[:, 1:] == 1]
+
+
+def _pad_generated_patch(patch: list[int], special_token_id: int) -> list[int]:
+    if len(patch) > PATCH_SIZE:
+        raise RuntimeError(f"generated patch is longer than {PATCH_SIZE}: {len(patch)}")
+    return patch + [special_token_id] * (PATCH_SIZE - len(patch))
+
+
+def _split_flat_logprobs(flat_logprobs: torch.Tensor, token_counts: list[int]) -> list[torch.Tensor]:
+    out: list[torch.Tensor] = []
+    offset = 0
+    for count in token_counts:
+        out.append(flat_logprobs[offset : offset + count])
+        offset += count
+    if offset != flat_logprobs.numel():
+        raise RuntimeError(f"batched logprob split mismatch: consumed {offset}, got {flat_logprobs.numel()}")
+    return out
+
+
+def batched_tail_logprobs_chunk(
+    model: NotaGenLMHeadModel,
+    current_ids_batch: list[list[int]],
+    remaining_patches_batch: list[list[list[int]]],
+    chunk_start: int,
+    target_chunk_patches: int,
+    precision: str,
+    replay_context_patches: int | None = None,
+    replay_batch_size: int = 0,
+) -> dict[int, torch.Tensor]:
+    device = next(model.parameters()).device
+    special_token_id = model.special_token_id
+    active: list[tuple[int, int, int, int, list[int], list[list[int]]]] = []
+
+    for sample_idx, (current_ids, remaining_patches) in enumerate(zip(current_ids_batch, remaining_patches_batch, strict=True)):
+        if chunk_start >= len(remaining_patches):
+            continue
+        chunk_end = len(remaining_patches)
+        if target_chunk_patches > 0:
+            chunk_end = min(chunk_end, chunk_start + target_chunk_patches)
+
+        normalized_prefix = [
+            normalize_patch_for_context(
+                patch,
+                eos_token_id=model.eos_token_id,
+                special_token_id=special_token_id,
+            )
+            for patch in remaining_patches[:chunk_end]
+        ]
+        all_ids = current_ids[:]
+        for patch in normalized_prefix:
+            all_ids.extend(patch)
+        if len(all_ids) % PATCH_SIZE != 0:
+            raise RuntimeError("batched replay expected full-patch alignment before tail scoring")
+
+        total_patches = len(all_ids) // PATCH_SIZE
+        context_patch_count = len(current_ids) // PATCH_SIZE
+        start_patch = _replay_start_patch(total_patches, context_patch_count, replay_context_patches)
+        trimmed_ids = all_ids[start_patch * PATCH_SIZE :]
+        trimmed_patches = [
+            trimmed_ids[i : i + PATCH_SIZE]
+            for i in range(0, len(trimmed_ids), PATCH_SIZE)
+        ]
+        first_target_local = context_patch_count - start_patch
+        if first_target_local <= 0:
+            raise RuntimeError("batched replay window dropped all context before generated target patches")
+
+        encoded_start = first_target_local + chunk_start - 1
+        encoded_end = first_target_local + chunk_end - 1
+        active.append((sample_idx, encoded_start, encoded_end, chunk_end - chunk_start, trimmed_ids, trimmed_patches))
+
+    if not active:
+        return {}
+
+    batch_size = len(active) if replay_batch_size <= 0 else replay_batch_size
+    result: dict[int, torch.Tensor] = {}
+
+    for batch_start in range(0, len(active), batch_size):
+        active_batch = active[batch_start : batch_start + batch_size]
+        max_seq_patches = max(len(trimmed_patches) for *_unused, trimmed_patches in active_batch)
+        patch_rows: list[list[list[int]]] = []
+        encoded_targets: list[torch.Tensor] = []
+        target_rows: list[list[int]] = []
+        token_counts: list[int] = []
+        output_sample_indices: list[int] = []
+
+        for _sample_idx, _encoded_start, _encoded_end, _patch_count, _trimmed_ids, trimmed_patches in active_batch:
+            pad_patch_count = max_seq_patches - len(trimmed_patches)
+            patch_rows.append(trimmed_patches + [[special_token_id] * PATCH_SIZE for _ in range(pad_patch_count)])
+
+        patches_tensor = torch.tensor(patch_rows, device=device, dtype=torch.long)
+        with autocast_context(device, precision):
+            encoded_batch = model.patch_level_decoder(patches_tensor)["last_hidden_state"]
+
+        for active_idx, (sample_idx, encoded_start, encoded_end, patch_count, _trimmed_ids, _trimmed_patches) in enumerate(active_batch):
+            encoded_targets.append(encoded_batch[active_idx, encoded_start:encoded_end])
+            remaining_patches = remaining_patches_batch[sample_idx]
+            chunk_end = chunk_start + patch_count
+            sample_targets = remaining_patches[chunk_start:chunk_end]
+            for patch in sample_targets:
+                target_rows.append(_pad_generated_patch(patch, special_token_id))
+            token_counts.append(
+                sum(1 for patch in sample_targets for token in patch if token != special_token_id)
+            )
+            output_sample_indices.append(sample_idx)
+
+        encoded_target_tensor = torch.cat(encoded_targets, dim=0)
+        target_tensor = torch.tensor(target_rows, device=device, dtype=torch.long)
+        flat_logprobs = char_patch_logprobs(model, encoded_target_tensor, target_tensor, precision)
+        split_logprobs = _split_flat_logprobs(flat_logprobs, token_counts)
+        result.update(zip(output_sample_indices, split_logprobs, strict=True))
+
+    return result
+
+
+def batched_trajectory_logprobs(
+    model: NotaGenLMHeadModel,
+    flat_prompt_ids: list[int],
+    generated_patches_batch: list[list[list[int]]],
+    precision: str,
+    replay_context_patches: int | None = None,
+    target_chunk_patches: int = 0,
+    replay_batch_size: int = 0,
+) -> list[torch.Tensor]:
+    current_ids_batch = [list(flat_prompt_ids) for _ in generated_patches_batch]
+    remaining_batch: list[list[list[int]]] = []
+    prefix_logprobs: list[list[torch.Tensor]] = [[] for _ in generated_patches_batch]
+
+    for sample_idx, generated_patches in enumerate(generated_patches_batch):
+        current_ids = current_ids_batch[sample_idx]
+        start_idx = 0
+        while start_idx < len(generated_patches) and len(current_ids) % PATCH_SIZE != 0:
+            patch = generated_patches[start_idx]
+            logprob_list = patch_logprobs(
+                model,
+                current_ids,
+                [patch],
+                precision,
+                replay_context_patches=replay_context_patches,
+            )
+            if logprob_list:
+                prefix_logprobs[sample_idx].append(torch.stack(logprob_list))
+            current_ids.extend(
+                normalize_patch_for_context(
+                    patch,
+                    eos_token_id=model.eos_token_id,
+                    special_token_id=model.special_token_id,
+                )
+            )
+            start_idx += 1
+        current_ids_batch[sample_idx] = current_ids
+        remaining_batch.append(generated_patches[start_idx:])
+
+    outputs: list[list[torch.Tensor]] = [chunks[:] for chunks in prefix_logprobs]
+    max_remaining = max((len(remaining) for remaining in remaining_batch), default=0)
+    chunk_size = max_remaining if target_chunk_patches <= 0 else target_chunk_patches
+    if chunk_size > 0:
+        for chunk_start in range(0, max_remaining, chunk_size):
+            chunk_payload = batched_tail_logprobs_chunk(
+                model,
+                current_ids_batch,
+                remaining_batch,
+                chunk_start,
+                target_chunk_patches,
+                precision,
+                replay_context_patches=replay_context_patches,
+                replay_batch_size=replay_batch_size,
+            )
+            for sample_idx, logprobs in chunk_payload.items():
+                if logprobs.numel() > 0:
+                    outputs[sample_idx].append(logprobs)
+
+    result: list[torch.Tensor] = []
+    device = next(model.parameters()).device
+    for chunks in outputs:
+        if chunks:
+            result.append(torch.cat(chunks))
+        else:
+            result.append(torch.empty(0, device=device))
+    return result
 
 
 def tail_logprobs_chunk(
@@ -818,41 +1014,140 @@ def run_smoke(
     logs: list[dict] = []
     checkpoints: list[dict] = []
     trajectory_dumps: list[dict] = []
+    similarity_weights = SimilarityRewardWeights(
+        aria_chroma=args.aria_chroma_reward_weight,
+        aria_harmony=args.aria_harmony_reward_weight,
+    )
+    aria_similarity_ref: SimilarityReference | None = None
+    if similarity_weights.enabled:
+        aria_similarity_ref = load_similarity_reference(
+            args.aria_reference_abc,
+            load_chroma=similarity_weights.aria_chroma != 0.0,
+            load_harmony=similarity_weights.aria_harmony != 0.0,
+            bins=args.similarity_chroma_bins,
+        )
 
-    for local_step_idx, row in enumerate(prompts[: args.max_steps], start=1):
+    if not prompts:
+        raise ValueError("no prompt rows loaded")
+
+    for local_step_idx in range(1, args.max_steps + 1):
+        step_start = time.perf_counter()
+        timings: dict[str, float] = {}
         step_idx = args.step_offset + local_step_idx
+        prompt_idx = (step_idx - 1) % len(prompts)
+        row = prompts[prompt_idx]
+        prompt_name = prompt_row_name(row, prompt_idx)
         prompt = row["prompt"]
         group_samples: list[RolloutSample] = []
+        rollout_payloads: list[tuple[str, list[list[int]], dict]] = []
 
-        for group_idx in range(args.group_size):
-            sample_built = False
-            last_error: Exception | None = None
+        rollout_start = time.perf_counter()
+        if args.rollout_batch_size > 1:
+            if not args.cached_rollout:
+                raise RuntimeError("--rollout-batch-size > 1 requires --cached-rollout")
+            pending = list(range(args.group_size))
+            last_errors: dict[int, str] = {}
             for retry_idx in range(args.rollout_retries):
-                rollout_seed = args.seed + step_idx * 1000 + group_idx * 100 + retry_idx
-                set_seed(rollout_seed)
-                try:
-                    full_text, generated_patches = sample_completion(
+                next_pending: list[int] = []
+                for batch_start in range(0, len(pending), args.rollout_batch_size):
+                    batch_indices = pending[batch_start : batch_start + args.rollout_batch_size]
+                    batch_results = sample_completions_cached_batch(
                         model=policy_model,
                         model_shape=policy_shape,
-                        prompt=prompt,
+                        prompts=[prompt] * len(batch_indices),
+                        seeds=[
+                            _rollout_seed(args.seed, step_idx, group_idx, retry_idx)
+                            for group_idx in batch_indices
+                        ],
                         temperature=args.temperature,
                         top_k=args.top_k,
                         top_p=args.top_p,
                         target_stream_lines=args.target_stream_lines,
+                        target_new_stream_lines=False,
                         max_chars=args.max_chars,
+                        max_generated_patches=args.max_generated_patches,
                         timeout_s=args.timeout_s,
                         precision=args.precision,
-                        cached_rollout=args.cached_rollout,
                     )
-                    sample_built = True
+                    for group_idx, result in zip(batch_indices, batch_results, strict=True):
+                        if result.ok and result.full_text is not None and result.generated_patches is not None:
+                            rollout_payloads.append(
+                                (
+                                    result.full_text,
+                                    result.generated_patches,
+                                    {
+                                        "cached_rollout": True,
+                                        "batched_rollout": True,
+                                        "rollout_batch_size": args.rollout_batch_size,
+                                        "group_index": group_idx,
+                                        "rollout_seed": _rollout_seed(args.seed, step_idx, group_idx, retry_idx),
+                                        **(result.meta or {}),
+                                    },
+                                )
+                            )
+                        else:
+                            last_errors[group_idx] = result.error or "unknown batch rollout error"
+                            next_pending.append(group_idx)
+                if not next_pending:
+                    pending = []
                     break
-                except RuntimeError as exc:
-                    last_error = exc
-                    continue
+                pending = next_pending
+            if pending:
+                raise RuntimeError(f"failed to sample batched rollouts after retries: {last_errors}")
+        else:
+            for group_idx in range(args.group_size):
+                sample_built = False
+                last_error: Exception | None = None
+                for retry_idx in range(args.rollout_retries):
+                    rollout_seed = _rollout_seed(args.seed, step_idx, group_idx, retry_idx)
+                    set_seed(rollout_seed)
+                    try:
+                        full_text, generated_patches = sample_completion(
+                            model=policy_model,
+                            model_shape=policy_shape,
+                            prompt=prompt,
+                            temperature=args.temperature,
+                            top_k=args.top_k,
+                            top_p=args.top_p,
+                            target_stream_lines=args.target_stream_lines,
+                            max_chars=args.max_chars,
+                            max_generated_patches=args.max_generated_patches,
+                            timeout_s=args.timeout_s,
+                            precision=args.precision,
+                            cached_rollout=args.cached_rollout,
+                        )
+                        rollout_payloads.append(
+                            (
+                                full_text,
+                                generated_patches,
+                                {
+                                    "cached_rollout": bool(args.cached_rollout),
+                                    "batched_rollout": False,
+                                    "rollout_batch_size": 1,
+                                    "group_index": group_idx,
+                                    "rollout_seed": rollout_seed,
+                                },
+                            )
+                        )
+                        sample_built = True
+                        break
+                    except RuntimeError as exc:
+                        last_error = exc
+                        continue
 
-            if not sample_built:
-                raise RuntimeError(f"failed to sample rollout after retries: {last_error}")
+                if not sample_built:
+                    raise RuntimeError(f"failed to sample rollout after retries: {last_error}")
+
+        rollout_payloads = rollout_payloads[: args.group_size]
+        timings["rollout_s"] = time.perf_counter() - rollout_start
+        timings["rollout_per_sample_s"] = timings["rollout_s"] / max(1, len(rollout_payloads))
+
+        reward_start = time.perf_counter()
+        structural_reward_s = 0.0
+        similarity_reward_s = 0.0
+        for group_idx, (full_text, generated_patches, rollout_meta) in enumerate(rollout_payloads):
             completion = full_text[len(prompt):] if full_text.startswith(prompt) else full_text
+            structural_reward_start = time.perf_counter()
             breakdown = score_prompt_completion_pair(
                 prompt_text=prompt,
                 completion_text=completion,
@@ -860,10 +1155,44 @@ def run_smoke(
                 config=reward_config,
                 candidate_name=f"step{step_idx}_sample{group_idx}",
             )
+            structural_reward_s += time.perf_counter() - structural_reward_start
             reward_breakdown = breakdown.to_json()
+            structural_total_reward = breakdown.total_reward
+            similarity_reward_start = time.perf_counter()
+            similarity_payload = score_similarity_reward(
+                prompt_text=prompt,
+                completion_text=completion,
+                weights=similarity_weights,
+                aria=aria_similarity_ref,
+                variation=None,
+                bins=args.similarity_chroma_bins,
+                band_ratio=args.similarity_band_ratio,
+                timeout_s=args.similarity_timeout_s,
+            )
+            similarity_reward_s += time.perf_counter() - similarity_reward_start
+            raw_similarity_reward = float(similarity_payload.get("similarity_reward", 0.0))
+            clipped_similarity_reward = (
+                min(raw_similarity_reward, args.max_similarity_reward)
+                if args.max_similarity_reward > 0
+                else raw_similarity_reward
+            )
+            similarity_validity_gate = float(breakdown.parse_reward * breakdown.bar_count_reward)
+            effective_similarity_reward = clipped_similarity_reward * similarity_validity_gate
+            total_reward = structural_total_reward + effective_similarity_reward
+            reward_breakdown["structural_total_reward"] = structural_total_reward
+            reward_breakdown.update(similarity_payload)
+            reward_breakdown["raw_similarity_reward"] = raw_similarity_reward
+            reward_breakdown["clipped_similarity_reward"] = clipped_similarity_reward
+            reward_breakdown["max_similarity_reward"] = args.max_similarity_reward
+            reward_breakdown["similarity_validity_gate"] = similarity_validity_gate
+            reward_breakdown["effective_similarity_reward"] = effective_similarity_reward
+            reward_breakdown["similarity_reward"] = effective_similarity_reward
+            reward_breakdown["total_reward"] = total_reward
             reward_breakdown["generated_patches"] = len(generated_patches)
             reward_breakdown["generated_token_slots"] = generated_token_slots(generated_patches)
-            reward_breakdown["cached_rollout"] = bool(args.cached_rollout)
+            reward_breakdown["prompt_index"] = prompt_idx
+            reward_breakdown["prompt_name"] = prompt_name
+            reward_breakdown.update(rollout_meta)
             reward_breakdown["rollout_prefix_stream_lines"] = count_stream_lines(
                 build_rollout_prefix(prompt, args.target_stream_lines)
             )
@@ -873,18 +1202,25 @@ def run_smoke(
                     completion=completion,
                     full_text=full_text,
                     generated_patches=generated_patches,
-                    reward=breakdown.total_reward,
+                    reward=total_reward,
                     reward_breakdown=reward_breakdown,
                 )
             )
+        timings["reward_s"] = time.perf_counter() - reward_start
+        timings["structural_reward_s"] = structural_reward_s
+        timings["similarity_reward_s"] = similarity_reward_s
+        timings["reward_per_sample_s"] = timings["reward_s"] / max(1, len(group_samples))
 
+        advantage_start = time.perf_counter()
         advantages_payload = compute_group_advantages(
             [type("Tmp", (), {"candidate_path": f"s{i}", "total_reward": s.reward})() for i, s in enumerate(group_samples)]
         )
         advantages = [item["advantage"] for item in advantages_payload]
+        timings["advantage_s"] = time.perf_counter() - advantage_start
 
         # Keep policy scoring in eval mode. Gradients still flow to the LoRA
         # weights, but the initial policy/reference logprobs stay comparable.
+        replay_start = time.perf_counter()
         policy_model.eval()
         disable_dropout_modules(policy_model)
         optimizer.zero_grad(set_to_none=True)
@@ -893,9 +1229,169 @@ def run_smoke(
         prompt_flat = [item for sublist in patchilizer.encode_generate(rollout_prompt) for item in sublist]
         replay_count = len(group_samples)
 
-        for sample, advantage in zip(group_samples, advantages):
-            if args.no_step:
+        if args.batch_logprob_replay and not args.no_step:
+            batch_replay_start = time.perf_counter()
+            generated_batch = [sample.generated_patches for sample in group_samples]
+            ref_logprobs_batch: list[torch.Tensor | None]
+            if args.beta != 0.0:
+                ref_precision = args.precision if next(ref_model.parameters()).device.type == "cuda" else "fp32"
                 with torch.no_grad():
+                    ref_logprobs_batch = [
+                        tensor.detach().cpu().float()
+                        for tensor in batched_trajectory_logprobs(
+                            ref_model,
+                            prompt_flat,
+                            generated_batch,
+                            ref_precision,
+                            replay_context_patches=args.replay_context_patches,
+                            target_chunk_patches=args.score_chunk_patches,
+                            replay_batch_size=args.logprob_replay_batch_size,
+                        )
+                    ]
+            else:
+                ref_logprobs_batch = [None for _ in group_samples]
+
+            policy_logprobs_batch = batched_trajectory_logprobs(
+                policy_model,
+                prompt_flat,
+                generated_batch,
+                args.precision,
+                replay_context_patches=args.replay_context_patches,
+                target_chunk_patches=args.score_chunk_patches,
+                replay_batch_size=args.logprob_replay_batch_size,
+            )
+            losses: list[torch.Tensor] = []
+            for sample, advantage, policy_logprobs, ref_logprobs in zip(
+                group_samples,
+                advantages,
+                policy_logprobs_batch,
+                ref_logprobs_batch,
+                strict=True,
+            ):
+                if policy_logprobs.numel() == 0:
+                    continue
+                policy_logprobs = policy_logprobs.float()
+                sample.reward_breakdown["scored_tokens"] = int(policy_logprobs.numel())
+                adv = torch.tensor(advantage, device=device, dtype=policy_logprobs.dtype)
+                if ref_logprobs is not None:
+                    if ref_logprobs.numel() != policy_logprobs.numel():
+                        raise RuntimeError(
+                            f"reference logprob count mismatch: got {ref_logprobs.numel()}, "
+                            f"expected {policy_logprobs.numel()}"
+                        )
+                    ref_logprobs = ref_logprobs.to(policy_logprobs.device).float()
+                    kl_sum = grpo_kl_term(policy_logprobs, ref_logprobs).sum()
+                else:
+                    kl_sum = torch.zeros((), device=policy_logprobs.device, dtype=policy_logprobs.dtype)
+                loss = (-(adv * policy_logprobs.sum()) + args.beta * kl_sum) / policy_logprobs.numel()
+                sample.reward_breakdown["kl_reference_active"] = bool(ref_logprobs is not None)
+                sample.reward_breakdown["kl_beta"] = float(args.beta)
+                sample.reward_breakdown["kl_sum"] = float(kl_sum.detach().cpu())
+                sample.reward_breakdown["kl_mean"] = float((kl_sum / policy_logprobs.numel()).detach().cpu())
+                sample_loss_values.append(float(loss.detach().cpu()))
+                losses.append(loss)
+            if losses:
+                (torch.stack(losses).mean()).backward()
+            timings["batched_logprob_backward_inner_s"] = time.perf_counter() - batch_replay_start
+        else:
+            for sample, advantage in zip(group_samples, advantages):
+                if args.no_step:
+                    with torch.no_grad():
+                        policy_logprob_list = trajectory_logprobs(
+                            policy_model,
+                            prompt_flat,
+                            sample.generated_patches,
+                            args.precision,
+                            replay_context_patches=args.replay_context_patches,
+                        )
+                        if not policy_logprob_list:
+                            continue
+                        policy_logprobs = torch.stack(policy_logprob_list)
+                        sample.reward_breakdown["scored_tokens"] = int(policy_logprobs.numel())
+                        if args.beta != 0.0:
+                            ref_precision = args.precision if next(ref_model.parameters()).device.type == "cuda" else "fp32"
+                            ref_logprobs = torch.stack(
+                                trajectory_logprobs(
+                                    ref_model,
+                                    prompt_flat,
+                                    sample.generated_patches,
+                                    ref_precision,
+                                    replay_context_patches=args.replay_context_patches,
+                                )
+                            )
+                        else:
+                            ref_logprobs = None
+                elif args.score_chunk_patches > 0:
+                    total_tokens = trajectory_logprob_forward_count(
+                        policy_model,
+                        prompt_flat,
+                        sample.generated_patches,
+                        args.precision,
+                        replay_context_patches=args.replay_context_patches,
+                        target_chunk_patches=args.score_chunk_patches,
+                    )
+                    if total_tokens <= 0:
+                        continue
+                    sample.reward_breakdown["scored_tokens"] = total_tokens
+                    adv = torch.tensor(advantage, device=device, dtype=torch.float32)
+                    ref_logprobs = None
+                    if args.beta != 0.0:
+                        ref_precision = args.precision if next(ref_model.parameters()).device.type == "cuda" else "fp32"
+                        with torch.no_grad():
+                            ref_chunks = list(
+                                trajectory_logprob_chunks(
+                                    ref_model,
+                                    prompt_flat,
+                                    sample.generated_patches,
+                                    ref_precision,
+                                    replay_context_patches=args.replay_context_patches,
+                                    target_chunk_patches=args.score_chunk_patches,
+                                )
+                            )
+                        if not ref_chunks:
+                            continue
+                        ref_logprobs = torch.cat([chunk.detach().cpu().float() for chunk in ref_chunks])
+                        if ref_logprobs.numel() != total_tokens:
+                            raise RuntimeError(f"reference logprob count mismatch: got {ref_logprobs.numel()}, expected {total_tokens}")
+
+                    offset = 0
+                    sample_loss_value = 0.0
+                    sample_kl_sum = 0.0
+                    for policy_logprobs in trajectory_logprob_chunks(
+                        policy_model,
+                        prompt_flat,
+                        sample.generated_patches,
+                        args.precision,
+                        replay_context_patches=args.replay_context_patches,
+                        target_chunk_patches=args.score_chunk_patches,
+                    ):
+                        if policy_logprobs.numel() == 0:
+                            continue
+                        policy_logprobs = policy_logprobs.float()
+                        if ref_logprobs is not None:
+                            ref_chunk = ref_logprobs[offset : offset + policy_logprobs.numel()].to(policy_logprobs.device)
+                            kl_sum = grpo_kl_term(policy_logprobs, ref_chunk).sum()
+                            sample_kl_sum += float(kl_sum.detach().cpu())
+                        else:
+                            kl_sum = torch.zeros((), device=policy_logprobs.device, dtype=policy_logprobs.dtype)
+                        offset += policy_logprobs.numel()
+                        chunk_loss = (-(adv.to(policy_logprobs.dtype) * policy_logprobs.sum()) + args.beta * kl_sum) / total_tokens
+                        sample_loss_value += float(chunk_loss.detach().cpu())
+                        (chunk_loss / replay_count).backward()
+                        del policy_logprobs, kl_sum, chunk_loss
+
+                    if offset != total_tokens:
+                        raise RuntimeError(f"policy logprob count mismatch: got {offset}, expected {total_tokens}")
+                    sample.reward_breakdown["kl_reference_active"] = bool(ref_logprobs is not None)
+                    sample.reward_breakdown["kl_beta"] = float(args.beta)
+                    sample.reward_breakdown["kl_sum"] = sample_kl_sum
+                    sample.reward_breakdown["kl_mean"] = sample_kl_sum / total_tokens if total_tokens > 0 else 0.0
+                    sample_loss_values.append(sample_loss_value)
+                    del adv, ref_logprobs
+                    if device.type == "cuda":
+                        torch.cuda.empty_cache()
+                    continue
+                else:
                     policy_logprob_list = trajectory_logprobs(
                         policy_model,
                         prompt_flat,
@@ -908,144 +1404,53 @@ def run_smoke(
                     policy_logprobs = torch.stack(policy_logprob_list)
                     sample.reward_breakdown["scored_tokens"] = int(policy_logprobs.numel())
                     if args.beta != 0.0:
-                        ref_precision = args.precision if next(ref_model.parameters()).device.type == "cuda" else "fp32"
-                        ref_logprobs = torch.stack(
-                            trajectory_logprobs(
-                                ref_model,
-                                prompt_flat,
-                                sample.generated_patches,
-                                ref_precision,
-                                replay_context_patches=args.replay_context_patches,
+                        with torch.no_grad():
+                            ref_precision = args.precision if next(ref_model.parameters()).device.type == "cuda" else "fp32"
+                            ref_logprobs = torch.stack(
+                                trajectory_logprobs(
+                                    ref_model,
+                                    prompt_flat,
+                                    sample.generated_patches,
+                                    ref_precision,
+                                    replay_context_patches=args.replay_context_patches,
+                                )
                             )
-                        )
                     else:
                         ref_logprobs = None
-            elif args.score_chunk_patches > 0:
-                total_tokens = trajectory_logprob_forward_count(
-                    policy_model,
-                    prompt_flat,
-                    sample.generated_patches,
-                    args.precision,
-                    replay_context_patches=args.replay_context_patches,
-                    target_chunk_patches=args.score_chunk_patches,
-                )
-                if total_tokens <= 0:
-                    continue
-                sample.reward_breakdown["scored_tokens"] = total_tokens
-                adv = torch.tensor(advantage, device=device, dtype=torch.float32)
-                ref_logprobs = None
-                if args.beta != 0.0:
-                    ref_precision = args.precision if next(ref_model.parameters()).device.type == "cuda" else "fp32"
-                    with torch.no_grad():
-                        ref_chunks = list(
-                            trajectory_logprob_chunks(
-                                ref_model,
-                                prompt_flat,
-                                sample.generated_patches,
-                                ref_precision,
-                                replay_context_patches=args.replay_context_patches,
-                                target_chunk_patches=args.score_chunk_patches,
-                            )
-                        )
-                    if not ref_chunks:
-                        continue
-                    ref_logprobs = torch.cat([chunk.detach().cpu().float() for chunk in ref_chunks])
-                    if ref_logprobs.numel() != total_tokens:
-                        raise RuntimeError(f"reference logprob count mismatch: got {ref_logprobs.numel()}, expected {total_tokens}")
 
-                offset = 0
-                sample_loss_value = 0.0
-                sample_kl_sum = 0.0
-                for policy_logprobs in trajectory_logprob_chunks(
-                    policy_model,
-                    prompt_flat,
-                    sample.generated_patches,
-                    args.precision,
-                    replay_context_patches=args.replay_context_patches,
-                    target_chunk_patches=args.score_chunk_patches,
-                ):
-                    if policy_logprobs.numel() == 0:
-                        continue
-                    policy_logprobs = policy_logprobs.float()
-                    if ref_logprobs is not None:
-                        ref_chunk = ref_logprobs[offset : offset + policy_logprobs.numel()].to(policy_logprobs.device)
-                        kl_sum = grpo_kl_term(policy_logprobs, ref_chunk).sum()
-                        sample_kl_sum += float(kl_sum.detach().cpu())
-                    else:
-                        kl_sum = torch.zeros((), device=policy_logprobs.device, dtype=policy_logprobs.dtype)
-                    offset += policy_logprobs.numel()
-                    chunk_loss = (-(adv.to(policy_logprobs.dtype) * policy_logprobs.sum()) + args.beta * kl_sum) / total_tokens
-                    sample_loss_value += float(chunk_loss.detach().cpu())
-                    (chunk_loss / replay_count).backward()
-                    del policy_logprobs, kl_sum, chunk_loss
-
-                if offset != total_tokens:
-                    raise RuntimeError(f"policy logprob count mismatch: got {offset}, expected {total_tokens}")
+                policy_logprobs = policy_logprobs.float()
+                if ref_logprobs is not None:
+                    ref_logprobs = ref_logprobs.to(policy_logprobs.device).float()
+                    kl = grpo_kl_term(policy_logprobs, ref_logprobs).mean()
+                else:
+                    kl = torch.zeros((), device=policy_logprobs.device, dtype=policy_logprobs.dtype)
                 sample.reward_breakdown["kl_reference_active"] = bool(ref_logprobs is not None)
                 sample.reward_breakdown["kl_beta"] = float(args.beta)
-                sample.reward_breakdown["kl_sum"] = sample_kl_sum
-                sample.reward_breakdown["kl_mean"] = sample_kl_sum / total_tokens if total_tokens > 0 else 0.0
-                sample_loss_values.append(sample_loss_value)
-                del adv, ref_logprobs
-                if device.type == "cuda":
-                    torch.cuda.empty_cache()
-                continue
-            else:
-                policy_logprob_list = trajectory_logprobs(
-                    policy_model,
-                    prompt_flat,
-                    sample.generated_patches,
-                    args.precision,
-                    replay_context_patches=args.replay_context_patches,
-                )
-                if not policy_logprob_list:
-                    continue
-                policy_logprobs = torch.stack(policy_logprob_list)
-                sample.reward_breakdown["scored_tokens"] = int(policy_logprobs.numel())
-                if args.beta != 0.0:
-                    with torch.no_grad():
-                        ref_precision = args.precision if next(ref_model.parameters()).device.type == "cuda" else "fp32"
-                        ref_logprobs = torch.stack(
-                            trajectory_logprobs(
-                                ref_model,
-                                prompt_flat,
-                                sample.generated_patches,
-                                ref_precision,
-                                replay_context_patches=args.replay_context_patches,
-                            )
-                        )
-                else:
-                    ref_logprobs = None
+                sample.reward_breakdown["kl_sum"] = float((kl * policy_logprobs.numel()).detach().cpu())
+                sample.reward_breakdown["kl_mean"] = float(kl.detach().cpu())
+                adv = torch.tensor(advantage, device=device, dtype=policy_logprobs.dtype)
+                loss = -(adv * policy_logprobs.mean()) + args.beta * kl
+                sample_loss_values.append(float(loss.detach().cpu()))
 
-            policy_logprobs = policy_logprobs.float()
-            if ref_logprobs is not None:
-                ref_logprobs = ref_logprobs.to(policy_logprobs.device).float()
-                kl = grpo_kl_term(policy_logprobs, ref_logprobs).mean()
-            else:
-                kl = torch.zeros((), device=policy_logprobs.device, dtype=policy_logprobs.dtype)
-            sample.reward_breakdown["kl_reference_active"] = bool(ref_logprobs is not None)
-            sample.reward_breakdown["kl_beta"] = float(args.beta)
-            sample.reward_breakdown["kl_sum"] = float((kl * policy_logprobs.numel()).detach().cpu())
-            sample.reward_breakdown["kl_mean"] = float(kl.detach().cpu())
-            adv = torch.tensor(advantage, device=device, dtype=policy_logprobs.dtype)
-            loss = -(adv * policy_logprobs.mean()) + args.beta * kl
-            sample_loss_values.append(float(loss.detach().cpu()))
+                if not args.no_step:
+                    # True sequential replay: keep only one trajectory graph alive at a time.
+                    (loss / replay_count).backward()
 
-            if not args.no_step:
-                # True sequential replay: keep only one trajectory graph alive at a time.
-                (loss / replay_count).backward()
-
-            del policy_logprob_list, policy_logprobs, ref_logprobs, kl, adv, loss
+                del policy_logprob_list, policy_logprobs, ref_logprobs, kl, adv, loss
+        timings["logprob_backward_s"] = time.perf_counter() - replay_start
 
         if not sample_loss_values:
             raise RuntimeError("no valid rollout samples were produced for GRPO smoke test")
 
         total_loss_value = sum(sample_loss_values) / len(sample_loss_values)
         total_loss = torch.tensor(total_loss_value, device=device, dtype=torch.float32)
+        optimizer_start = time.perf_counter()
         if not args.no_step:
             torch.nn.utils.clip_grad_norm_(policy_model.parameters(), args.max_grad_norm)
             optimizer.step()
+        timings["optimizer_s"] = time.perf_counter() - optimizer_start
         checkpoint_payload = None
+        checkpoint_start = time.perf_counter()
         if (
             not args.no_step
             and args.checkpoint_dir
@@ -1060,14 +1465,22 @@ def run_smoke(
                 args.optimizer_checkpoint_every_steps,
             )
             checkpoints.append(checkpoint_payload)
+        timings["checkpoint_s"] = time.perf_counter() - checkpoint_start
         trajectory_dump_payload = None
+        trajectory_dump_start = time.perf_counter()
         if args.trajectories_dir:
             trajectory_dump_payload = save_step_trajectories(group_samples, Path(args.trajectories_dir), step_idx)
             trajectory_dumps.append(trajectory_dump_payload)
+        timings["trajectory_dump_s"] = time.perf_counter() - trajectory_dump_start
+        timings["total_step_s"] = time.perf_counter() - step_start
 
         step_log = {
             "step": step_idx,
+            "prompt_index": prompt_idx,
+            "prompt_name": prompt_name,
+            "prompt_pool_size": len(prompts),
             "loss": float(total_loss.detach().cpu()),
+            "timings": timings,
             "samples": [sample.reward_breakdown for sample in group_samples],
             "trajectories": [
                 {
@@ -1092,6 +1505,9 @@ def run_smoke(
                 {
                     "event": "step_complete",
                     "step": step_idx,
+                    "prompt_index": prompt_idx,
+                    "prompt_name": prompt_name,
+                    "prompt_pool_size": len(prompts),
                     "loss": step_log["loss"],
                     "rewards": [sample.reward for sample in group_samples],
                     "advantages": [item["advantage"] for item in advantages_payload],
@@ -1099,6 +1515,10 @@ def run_smoke(
                     "validated_bars": [sample.reward_breakdown.get("validated_bars") for sample in group_samples],
                     "scored_tokens": [sample.reward_breakdown.get("scored_tokens") for sample in group_samples],
                     "kl_mean": [sample.reward_breakdown.get("kl_mean") for sample in group_samples],
+                    "raw_similarity_rewards": [sample.reward_breakdown.get("raw_similarity_reward") for sample in group_samples],
+                    "clipped_similarity_rewards": [sample.reward_breakdown.get("clipped_similarity_reward") for sample in group_samples],
+                    "effective_similarity_rewards": [sample.reward_breakdown.get("effective_similarity_reward") for sample in group_samples],
+                    "timings": timings,
                     "checkpoint": checkpoint_payload,
                     "trajectory_dump": trajectory_dump_payload,
                 }
@@ -1121,8 +1541,25 @@ def main() -> int:
     parser.add_argument("--reference-weights", default=None)
     parser.add_argument("--prompts-jsonl", default=str(PROJECT_ROOT / "data" / "processed" / "notagen" / "goldberg_grpo_prompts.jsonl"))
     parser.add_argument("--target-json", default=str(PROJECT_ROOT / "data" / "processed" / "goldberg" / "structure" / "aria_bar_skeleton.json"))
+    parser.add_argument(
+        "--target-structure-abc",
+        required=True,
+        help="Reference NotaGen ABC whose body/stream-line count is used for the bar-count reward.",
+    )
+    parser.add_argument("--aria-reference-abc", default=str(PROJECT_ROOT / "data" / "processed" / "goldberg" / "abc" / "aria-bwv-988.abc"))
+    parser.add_argument("--aria-chroma-reward-weight", type=float, default=0.0)
+    parser.add_argument("--aria-harmony-reward-weight", type=float, default=0.0)
+    parser.add_argument("--max-similarity-reward", type=float, default=1.0, help="Cap raw added similarity reward before structural validity gating. Use <=0 to disable.")
+    parser.add_argument("--similarity-chroma-bins", type=int, default=128)
+    parser.add_argument("--similarity-band-ratio", type=float, default=0.25)
+    parser.add_argument("--similarity-timeout-s", type=float, default=20.0)
     parser.add_argument("--output-json", required=True)
-    parser.add_argument("--prompt-limit", type=int, default=1)
+    parser.add_argument(
+        "--prompt-limit",
+        type=int,
+        default=1,
+        help="Number of prompt rows to keep in the rotation pool. Use 0 for all prompts.",
+    )
     parser.add_argument("--max-steps", type=int, default=1)
     parser.add_argument("--group-size", type=int, default=4)
     parser.add_argument("--temperature", type=float, default=1.0)
@@ -1130,6 +1567,12 @@ def main() -> int:
     parser.add_argument("--top-p", type=float, default=0.95)
     parser.add_argument("--target-stream-lines", type=int, default=32)
     parser.add_argument("--max-chars", type=int, default=16000)
+    parser.add_argument(
+        "--max-generated-patches",
+        type=int,
+        default=0,
+        help="Stop a rollout after this many generated NotaGen patches. Use 0 for no patch cap.",
+    )
     parser.add_argument("--timeout-s", type=int, default=180)
     parser.add_argument("--learning-rate", type=float, default=1e-6)
     parser.add_argument("--beta", type=float, default=0.02)
@@ -1137,6 +1580,17 @@ def main() -> int:
     parser.add_argument("--rollout-retries", type=int, default=4)
     parser.add_argument("--replay-context-patches", type=int, default=128)
     parser.add_argument("--score-chunk-patches", type=int, default=0)
+    parser.add_argument(
+        "--batch-logprob-replay",
+        action="store_true",
+        help="Batch GRPO logprob replay across trajectories after the prompt-alignment prefix.",
+    )
+    parser.add_argument(
+        "--logprob-replay-batch-size",
+        type=int,
+        default=0,
+        help="Maximum trajectories per batched logprob replay call. Use 0 for all active trajectories.",
+    )
     parser.add_argument("--lora-r", type=int, default=0)
     parser.add_argument("--lora-alpha", type=float, default=16.0)
     parser.add_argument("--lora-dropout", type=float, default=0.05)
@@ -1147,6 +1601,12 @@ def main() -> int:
     parser.add_argument("--reference-on-cpu", action="store_true")
     parser.add_argument("--gradient-checkpointing", action="store_true")
     parser.add_argument("--cached-rollout", action="store_true")
+    parser.add_argument(
+        "--rollout-batch-size",
+        type=int,
+        default=1,
+        help="Generate rollout completions in cached batches. Values >1 require --cached-rollout.",
+    )
     parser.add_argument("--resume-checkpoint-dir", default=None)
     parser.add_argument("--resume-optimizer-checkpoint", default=None)
     parser.add_argument("--checkpoint-dir", default=None)
@@ -1187,7 +1647,7 @@ def main() -> int:
         param.requires_grad_(False)
 
     prompts = load_prompt_rows(args.prompts_jsonl, limit=args.prompt_limit)
-    target = load_structural_target(args.target_json)
+    target = load_structural_target(args.target_json, structure_path=args.target_structure_abc)
     reward_config = GoldbergRewardConfig()
 
     payload = run_smoke(
@@ -1203,6 +1663,15 @@ def main() -> int:
         "args": vars(args),
         "policy_shape": asdict(policy_shape),
         "reward_config": asdict(reward_config),
+        "similarity_reward": {
+            "aria_chroma_weight": args.aria_chroma_reward_weight,
+            "aria_harmony_weight": args.aria_harmony_reward_weight,
+            "max_similarity_reward": args.max_similarity_reward,
+            "aria_reference_abc": args.aria_reference_abc,
+            "chroma_bins": args.similarity_chroma_bins,
+            "band_ratio": args.similarity_band_ratio,
+            "timeout_s": args.similarity_timeout_s,
+        },
         "policy_weights": str(policy_weights),
         "reference_weights": str(reference_weights),
         "reference_device": str(ref_device),
