@@ -1,13 +1,22 @@
 from __future__ import annotations
 
 import argparse
+import bisect
 import json
+import re
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+import numpy as np
 import torch
 
+from evaluation.rewards import (
+    _abc_grammar_metrics,
+    _extract_header_context,
+    _extract_stream_line_features,
+    _validated_bar_metrics,
+)
 from scripts.custom_grpo_notagen import (
     PATCH_SIZE,
     PATCH_STREAM,
@@ -374,7 +383,93 @@ def generated_patch_completion_prefixes(generated_patches: list[list[int]]) -> l
     return prefixes
 
 
-def patch_rewards_from_prefix_deltas(
+def _generated_patch_texts(generated_patches: list[list[int]]) -> list[str]:
+    patchilizer = Patchilizer(stream=PATCH_STREAM)
+    return ["".join(patchilizer.decode([patch])) for patch in generated_patches]
+
+
+def _stream_line_end_patch_indices(completion_text: str, patch_texts: list[str]) -> list[int]:
+    cumulative_offsets: list[int] = []
+    offset = 0
+    for patch_text in patch_texts:
+        offset += len(patch_text)
+        cumulative_offsets.append(offset)
+
+    starts = [match.start() for match in re.finditer(r"\[r:\d+/\d+\]", completion_text)]
+    if not starts:
+        return []
+    ends = starts[1:] + [len(completion_text)]
+    return [min(bisect.bisect_left(cumulative_offsets, end), len(patch_texts) - 1) for end in ends]
+
+
+def _countdown_local_rewards(stream_lines) -> np.ndarray:
+    if not stream_lines:
+        return np.zeros(0, dtype=np.float32)
+    rewards = np.zeros(len(stream_lines), dtype=np.float32)
+    if stream_lines[0].index == 0:
+        rewards[0] += 1.0
+    for idx, (prev_line, curr_line) in enumerate(zip(stream_lines, stream_lines[1:]), start=1):
+        if curr_line.index == prev_line.index + 1 and curr_line.tag_marker == prev_line.tag_marker - 1:
+            rewards[idx] += 1.0
+    if stream_lines[-1].tag_marker == 0:
+        rewards[-1] += 1.0
+    return rewards
+
+
+def _single_pass_line_rewards(
+    *,
+    full_text: str,
+    target,
+    reward_config: GoldbergRewardConfig,
+) -> list[float]:
+    stream_lines = _extract_stream_line_features(full_text)
+    if not stream_lines:
+        return []
+
+    n = len(stream_lines)
+    header = _extract_header_context(full_text)
+    closure = np.array([1.0 if line.closed else 0.0 for line in stream_lines], dtype=np.float32)
+    bar_token = np.array([1.0 if line.has_bar_token else 0.0 for line in stream_lines], dtype=np.float32)
+    countdown = _countdown_local_rewards(stream_lines)
+    meter_alignment = np.zeros(n, dtype=np.float32)
+    meter_duration = np.zeros(n, dtype=np.float32)
+    bar_meter = np.zeros(n, dtype=np.float32)
+    voice_decl = np.zeros(n, dtype=np.float32)
+    score_voice = np.zeros(n, dtype=np.float32)
+
+    for idx, line in enumerate(stream_lines):
+        meter_metrics = _validated_bar_metrics([line], header)
+        grammar_metrics = _abc_grammar_metrics([line], header)
+        meter_alignment[idx] = meter_metrics.meter_alignment_reward
+        meter_duration[idx] = meter_metrics.meter_duration_closeness_reward
+        bar_meter[idx] = meter_metrics.bar_meter_consistency_reward
+        voice_decl[idx] = grammar_metrics.voice_declaration_reward
+        score_voice[idx] = grammar_metrics.score_voice_reward
+
+    line_denominator = float(max(1, n))
+    line_rewards = (
+        reward_config.countdown_weight * countdown / line_denominator
+        + reward_config.line_closure_weight * closure / line_denominator
+        + reward_config.bar_token_weight * bar_token / line_denominator
+        + reward_config.meter_alignment_weight * meter_alignment / line_denominator
+        + reward_config.meter_duration_closeness_weight * meter_duration / line_denominator
+        + reward_config.bar_meter_consistency_weight * bar_meter / line_denominator
+        + reward_config.voice_declaration_weight * voice_decl / line_denominator
+        + reward_config.score_voice_weight * score_voice / line_denominator
+    )
+
+    counts = np.arange(1, n + 1, dtype=np.float32)
+    previous_counts = np.arange(0, n, dtype=np.float32)
+    expected = float(target.expected_reward_bars)
+    if expected > 0:
+        bar_count = np.maximum(0.0, 1.0 - np.abs(counts - expected) / expected)
+        previous_bar_count = np.maximum(0.0, 1.0 - np.abs(previous_counts - expected) / expected)
+        line_rewards += reward_config.bar_count_weight * (bar_count - previous_bar_count)
+
+    return [float(item) for item in line_rewards]
+
+
+def patch_rewards_single_pass(
     *,
     prompt_text: str,
     generated_patches: list[list[int]],
@@ -388,17 +483,15 @@ def patch_rewards_from_prefix_deltas(
     similarity_timeout_s: float,
     max_similarity_reward: float,
 ) -> PatchRewardTrace:
-    rewards: list[float] = []
-    prefix_totals: list[float] = []
-    previous_total = 0.0
-    final_score: RewardScore | None = None
-    for patch_idx, completion_prefix in enumerate(generated_patch_completion_prefixes(generated_patches)):
-        score = score_total_reward(
+    patch_texts = _generated_patch_texts(generated_patches)
+    completion_text = "".join(patch_texts)
+    if generated_patches:
+        final_score = score_total_reward(
             prompt_text=prompt_text,
-            completion_text=completion_prefix,
+            completion_text=completion_text,
             target=target,
             reward_config=reward_config,
-            candidate_name=f"{candidate_name}_patch{patch_idx:04d}",
+            candidate_name=f"{candidate_name}_final",
             similarity_weights=similarity_weights,
             aria_similarity_ref=aria_similarity_ref,
             similarity_chroma_bins=similarity_chroma_bins,
@@ -406,11 +499,7 @@ def patch_rewards_from_prefix_deltas(
             similarity_timeout_s=similarity_timeout_s,
             max_similarity_reward=max_similarity_reward,
         )
-        rewards.append(score.total - previous_total)
-        prefix_totals.append(score.total)
-        previous_total = score.total
-        final_score = score
-    if final_score is None:
+    else:
         final_score = score_total_reward(
             prompt_text=prompt_text,
             completion_text="",
@@ -424,7 +513,30 @@ def patch_rewards_from_prefix_deltas(
             similarity_timeout_s=similarity_timeout_s,
             max_similarity_reward=max_similarity_reward,
         )
+        return PatchRewardTrace(rewards=[], prefix_totals=[], final_score=final_score)
+
+    rewards = [0.0 for _ in generated_patches]
+    line_rewards = _single_pass_line_rewards(
+        full_text=prompt_text + completion_text,
+        target=target,
+        reward_config=reward_config,
+    )
+    line_end_patch_indices = _stream_line_end_patch_indices(completion_text, patch_texts)
+    for line_reward, patch_idx in zip(line_rewards, line_end_patch_indices, strict=False):
+        rewards[patch_idx] += line_reward
+
+    terminal_residual = final_score.total - sum(rewards)
+    rewards[-1] += terminal_residual
+    prefix_totals: list[float] = []
+    running = 0.0
+    for reward in rewards:
+        running += reward
+        prefix_totals.append(running)
     return PatchRewardTrace(rewards=rewards, prefix_totals=prefix_totals, final_score=final_score)
+
+
+def patch_rewards_from_prefix_deltas(**kwargs) -> PatchRewardTrace:
+    return patch_rewards_single_pass(**kwargs)
 
 
 def normalize_advantages(advantages: torch.Tensor, eps: float = 1e-8) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
