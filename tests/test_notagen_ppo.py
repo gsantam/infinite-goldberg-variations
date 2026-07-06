@@ -6,6 +6,7 @@ try:
 
     from scripts.custom_ppo_notagen import (
         PatchValueHead,
+        _stream_line_end_patch_indices,
         discounted_returns,
         ppo_clipped_loss,
         terminal_returns,
@@ -122,6 +123,11 @@ class NotaGenPPOTests(unittest.TestCase):
         rewards = torch.tensor([1.0, 2.0, 3.0])
         returns = discounted_returns(rewards, gamma=0.5)
         self.assertTrue(torch.allclose(returns, torch.tensor([2.75, 3.5, 3.0])))
+
+    def test_stream_line_end_patch_indices_maps_line_boundaries(self):
+        completion = "[r:0/1][V:1]abc|\n[r:1/0][V:1]def|\n"
+        patch_texts = ["[r:0/1][V:1]", "abc|\n[r:1", "/0][V:1]def|\n"]
+        self.assertEqual(_stream_line_end_patch_indices(completion, patch_texts), [1, 2])
 
 
 if __name__ == "__main__":
