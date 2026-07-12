@@ -2,20 +2,20 @@ from fractions import Fraction
 import time
 import unittest
 
-from grpo.notagen_abc_preprocess import (
+from preprocessing.notagen_abc import (
     expand_notagen_rest_omitted_voice_segments,
     preprocess_notagen_abc,
     strip_dangling_terminal_ties,
 )
-from grpo.rewards import (
+from evaluation.rewards import (
     GoldbergRewardConfig,
-    StructuralBarTarget,
     StructuralTarget,
     _bar_count_reward,
     _countdown_reward,
     _extract_header_context,
     _extract_stream_line_features,
     _abc_grammar_metrics,
+    count_notagen_structure_lines,
     _parse_length_multiplier,
     score_candidate_text,
     _total_reward,
@@ -24,6 +24,49 @@ from grpo.rewards import (
 
 
 class GoldbergRewardTests(unittest.TestCase):
+    def test_count_notagen_structure_lines_accepts_plain_and_stream_tagged_abc(self):
+        plain = "\n".join(
+            [
+                "X:1",
+                "M:12/8",
+                "L:1/8",
+                "K:G",
+                "V:1 treble",
+                "[V:1]C2D2E2F2G2A2|",
+                "[V:1]A2G2F2E2D2C2|",
+            ]
+        )
+        tagged = "\n".join(
+            [
+                "M:12/8",
+                "L:1/8",
+                "[r:0/1][V:1]C2D2E2F2G2A2|",
+                "[r:1/0][V:1]A2G2F2E2D2C2|",
+            ]
+        )
+
+        self.assertEqual(count_notagen_structure_lines(plain), 2)
+        self.assertEqual(count_notagen_structure_lines(tagged), 2)
+
+    def test_bar_count_uses_target_notagen_structure_length_when_available(self):
+        target = StructuralTarget(
+            expected_bars=32,
+            expected_structure_bars=2,
+        )
+        text = "\n".join(
+            [
+                "M:12/8",
+                "L:1/8",
+                "[r:0/1][V:1]C2D2E2F2G2A2|",
+                "[r:1/0][V:1]A2G2F2E2D2C2|",
+            ]
+        )
+
+        breakdown = score_candidate_text(text, target, GoldbergRewardConfig(music21_parse_timeout_s=1.0))
+
+        self.assertEqual(breakdown.validated_bars, 2)
+        self.assertEqual(breakdown.bar_count_reward, 1.0)
+
     def test_parse_length_multiplier_accepts_abc_shorthand_fraction(self):
         self.assertEqual(_parse_length_multiplier("/"), Fraction(1, 2))
         self.assertEqual(_parse_length_multiplier("3/"), Fraction(3, 2))
@@ -31,15 +74,7 @@ class GoldbergRewardTests(unittest.TestCase):
     def test_absurd_duration_skips_music21_parse(self):
         target = StructuralTarget(
             expected_bars=1,
-            bars=[
-                StructuralBarTarget(
-                    bar_index=1,
-                    chord_root="C",
-                    bass_pitch_class="C",
-                    bass_midi=None,
-                    cadence_bar=False,
-                )
-            ],
+            expected_structure_bars=1,
         )
         text = "\n".join(
             [
@@ -148,22 +183,6 @@ class GoldbergRewardTests(unittest.TestCase):
 
         self.assertEqual(metrics.voice_declaration_reward, 0.5)
         self.assertEqual(metrics.score_voice_reward, 0.5)
-
-    def test_grammar_metrics_penalize_unmatched_repeat_endings(self):
-        text = "\n".join(
-            [
-                "M:3/4",
-                "L:1/8",
-                "[r:0/0][V:1]C2D2E2|1",
-            ]
-        )
-
-        metrics = _abc_grammar_metrics(
-            _extract_stream_line_features(text),
-            _extract_header_context(text),
-        )
-
-        self.assertLess(metrics.repeat_syntax_reward, 1.0)
 
     def test_expand_notagen_rest_omitted_voice_segments_adds_missing_declared_voices(self):
         text = "\n".join(
@@ -283,13 +302,11 @@ class GoldbergRewardTests(unittest.TestCase):
 
         self.assertIn("E2-|", preprocessed)
 
-    def test_validated_bars_dominate_zero_bar_harmonic_guess(self):
+    def test_validated_bars_dominate_zero_bar_output(self):
         config = GoldbergRewardConfig()
 
-        zero_bar_with_harmony = _total_reward(
+        zero_bar = _total_reward(
             config=config,
-            expected_bars=32,
-            validated_bars=0,
             parse_reward=1.0,
             countdown_reward=0.9,
             line_closure_reward=1.0,
@@ -300,17 +317,10 @@ class GoldbergRewardTests(unittest.TestCase):
             bar_count_reward=_bar_count_reward(0, 32),
             voice_declaration_reward=1.0,
             score_voice_reward=1.0,
-            repeat_syntax_reward=1.0,
-            root_similarity_reward=1.0,
-            bass_pitch_class_reward=1.0,
-            cadence_root_reward=1.0,
-            cadence_bass_reward=1.0,
         )
 
-        four_bar_without_harmony = _total_reward(
+        four_bar = _total_reward(
             config=config,
-            expected_bars=32,
-            validated_bars=4,
             parse_reward=1.0,
             countdown_reward=0.9,
             line_closure_reward=1.0,
@@ -321,21 +331,14 @@ class GoldbergRewardTests(unittest.TestCase):
             bar_count_reward=_bar_count_reward(4, 32),
             voice_declaration_reward=1.0,
             score_voice_reward=1.0,
-            repeat_syntax_reward=1.0,
-            root_similarity_reward=0.0,
-            bass_pitch_class_reward=0.0,
-            cadence_root_reward=0.0,
-            cadence_bass_reward=0.0,
         )
 
-        self.assertGreater(four_bar_without_harmony, zero_bar_with_harmony)
+        self.assertGreater(four_bar, zero_bar)
 
-    def test_harmonic_rewards_still_apply_for_complete_variation(self):
+    def test_total_reward_combines_structural_terms(self):
         config = GoldbergRewardConfig()
-        base = _total_reward(
+        strong = _total_reward(
             config=config,
-            expected_bars=32,
-            validated_bars=32,
             parse_reward=1.0,
             countdown_reward=1.0,
             line_closure_reward=1.0,
@@ -346,34 +349,22 @@ class GoldbergRewardTests(unittest.TestCase):
             bar_count_reward=_bar_count_reward(32, 32),
             voice_declaration_reward=1.0,
             score_voice_reward=1.0,
-            repeat_syntax_reward=1.0,
-            root_similarity_reward=0.0,
-            bass_pitch_class_reward=0.0,
-            cadence_root_reward=0.0,
-            cadence_bass_reward=0.0,
         )
-        with_harmony = _total_reward(
+        weak = _total_reward(
             config=config,
-            expected_bars=32,
-            validated_bars=32,
             parse_reward=1.0,
             countdown_reward=1.0,
             line_closure_reward=1.0,
             bar_token_reward=1.0,
-            meter_alignment_reward=1.0,
-            meter_duration_closeness_reward=1.0,
-            bar_meter_consistency_reward=1.0,
+            meter_alignment_reward=0.5,
+            meter_duration_closeness_reward=0.5,
+            bar_meter_consistency_reward=0.5,
             bar_count_reward=_bar_count_reward(32, 32),
             voice_declaration_reward=1.0,
             score_voice_reward=1.0,
-            repeat_syntax_reward=1.0,
-            root_similarity_reward=0.5,
-            bass_pitch_class_reward=0.5,
-            cadence_root_reward=0.5,
-            cadence_bass_reward=0.5,
         )
 
-        self.assertGreater(with_harmony, base)
+        self.assertGreater(strong, weak)
 
 
 if __name__ == "__main__":

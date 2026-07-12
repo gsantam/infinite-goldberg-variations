@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import time
+from dataclasses import dataclass
 from typing import Any
 
-import numpy as np
 import torch
 
 from .notagen_cached_generation import (
@@ -39,7 +38,7 @@ class BatchedSampleResult:
 @dataclass
 class _BatchContext:
     generator: CachedNotaGenPatchGenerator
-    rng: np.random.Generator
+    torch_rng: torch.Generator
     prompt_stream_lines: int
     target_total_stream_lines: int
     byte_list: list[str]
@@ -89,7 +88,33 @@ def _top_k_top_p_filter_logits(logits: torch.Tensor, *, top_k: int, top_p: float
     return filtered
 
 
-def _sample_from_logits(logits: torch.Tensor, *, top_k: int, top_p: float, temperature: float) -> torch.Tensor:
+def _make_torch_generator(device: torch.device, seed: int) -> torch.Generator:
+    generator_device = device if device.type in {"cuda", "mps"} else torch.device("cpu")
+    generator = torch.Generator(device=generator_device)
+    generator.manual_seed(int(seed) % (2**63 - 1))
+    return generator
+
+
+def _multinomial_rows(probs: torch.Tensor, *, generators: list[torch.Generator] | None) -> torch.Tensor:
+    if generators is None:
+        return torch.multinomial(probs, num_samples=1).squeeze(-1)
+    if len(generators) != probs.shape[0]:
+        raise RuntimeError(f"generator/probability batch mismatch: {len(generators)} != {probs.shape[0]}")
+    sampled = [
+        torch.multinomial(probs[row_idx], num_samples=1, generator=generators[row_idx]).squeeze(0)
+        for row_idx in range(probs.shape[0])
+    ]
+    return torch.stack(sampled, dim=0)
+
+
+def _sample_from_logits(
+    logits: torch.Tensor,
+    *,
+    top_k: int,
+    top_p: float,
+    temperature: float,
+    generators: list[torch.Generator] | None = None,
+) -> torch.Tensor:
     logits = torch.nan_to_num(logits.float(), nan=-1e9, posinf=1e9, neginf=-1e9)
 
     if temperature <= 0:
@@ -107,18 +132,19 @@ def _sample_from_logits(logits: torch.Tensor, *, top_k: int, top_p: float, tempe
             remove[..., 0] = False
             probs = probs.masked_fill(remove, 0.0)
             probs = probs / probs.sum(dim=-1, keepdim=True).clamp_min(1e-12)
-        sampled_top = torch.multinomial(probs, num_samples=1)
+        sampled_top = _multinomial_rows(probs, generators=generators).unsqueeze(-1)
         return top_indices.gather(-1, sampled_top).squeeze(-1)
 
     filtered_logits = _top_k_top_p_filter_logits(logits, top_k=top_k, top_p=top_p)
     probs = torch.nn.functional.softmax(filtered_logits, dim=-1)
-    return torch.multinomial(probs, num_samples=1).squeeze(-1)
+    return _multinomial_rows(probs, generators=generators)
 
 
 def _sample_chars_batch(
     *,
     generators: list[CachedNotaGenPatchGenerator],
     token_lists: list[list[int]],
+    sample_generators: list[torch.Generator] | None,
     precision: str,
     top_k: int,
     top_p: float,
@@ -164,7 +190,13 @@ def _sample_chars_batch(
     t0 = time.perf_counter()
     logits = outputs.logits
     next_logits = torch.stack([logits[row_idx, last_pos] for row_idx, last_pos in enumerate(last_positions)], dim=0).float()
-    sampled = _sample_from_logits(next_logits, top_k=top_k, top_p=top_p, temperature=temperature)
+    sampled = _sample_from_logits(
+        next_logits,
+        top_k=top_k,
+        top_p=top_p,
+        temperature=temperature,
+        generators=sample_generators,
+    )
     _add_timing(timings, "char_torch_filter_sample", time.perf_counter() - t0)
 
     t0 = time.perf_counter()
@@ -189,9 +221,11 @@ def _generate_candidate_patches_batch(
     while active:
         batch_gens = [contexts[i].generator for i in active]
         batch_tokens = [token_lists[i] for i in active]
+        batch_sample_generators = [contexts[i].torch_rng for i in active]
         batch_tokens_sampled = _sample_chars_batch(
             generators=batch_gens,
             token_lists=batch_tokens,
+            sample_generators=batch_sample_generators,
             precision=batch_gens[0].precision,
             top_k=top_k,
             top_p=top_p,
@@ -461,7 +495,7 @@ def sample_completions_cached_batch(
         contexts.append(
             _BatchContext(
                 generator=generator,
-                rng=np.random.default_rng(seed),
+                torch_rng=_make_torch_generator(generator.device, seed),
                 prompt_stream_lines=prompt_stream_lines,
                 target_total_stream_lines=target_total_stream_lines,
                 byte_list=list(prefix),

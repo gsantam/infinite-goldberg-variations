@@ -12,7 +12,7 @@ import numpy as np
 import torch
 from transformers import GPT2Config
 
-from grpo.stream_tags import (
+from evaluation.stream_tags import (
     count_stream_lines as _count_stream_lines,
     latest_stream_line as _latest_stream_line,
     latest_stream_line_closed,
