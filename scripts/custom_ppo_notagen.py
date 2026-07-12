@@ -11,6 +11,13 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from evaluation.harmony_similarity import (
+    generic_dtw_alignment,
+    infer_harmony,
+    parse_bar_notes,
+    pitch_class_similarity,
+    token_similarity,
+)
 from evaluation.rewards import (
     _abc_grammar_metrics,
     _extract_header_context,
@@ -75,6 +82,14 @@ class PPOLossPayload:
 class RewardScore:
     total: float
     breakdown: dict
+
+
+@dataclass(frozen=True)
+class RewardEvent:
+    start: int
+    end: int
+    value: float
+    name: str
 
 
 @dataclass
@@ -388,18 +403,185 @@ def _generated_patch_texts(generated_patches: list[list[int]]) -> list[str]:
     return ["".join(patchilizer.decode([patch])) for patch in generated_patches]
 
 
-def _stream_line_end_patch_indices(completion_text: str, patch_texts: list[str]) -> list[int]:
-    cumulative_offsets: list[int] = []
+def _patch_char_spans(patch_texts: list[str]) -> list[tuple[int, int]]:
+    spans: list[tuple[int, int]] = []
     offset = 0
     for patch_text in patch_texts:
+        start = offset
         offset += len(patch_text)
-        cumulative_offsets.append(offset)
+        spans.append((start, offset))
+    return spans
 
+
+def _stream_line_spans(completion_text: str) -> list[tuple[int, int]]:
     starts = [match.start() for match in re.finditer(r"\[r:\d+/\d+\]", completion_text)]
     if not starts:
         return []
-    ends = starts[1:] + [len(completion_text)]
+    return [(start, end) for start, end in zip(starts, starts[1:] + [len(completion_text)], strict=True) if end > start]
+
+
+def _stream_line_end_patch_indices(completion_text: str, patch_texts: list[str]) -> list[int]:
+    patch_spans = _patch_char_spans(patch_texts)
+    if not patch_spans:
+        return []
+
+    spans = _stream_line_spans(completion_text)
+    if not spans:
+        return []
+    cumulative_offsets = [end for _start, end in patch_spans]
+    ends = [end for _start, end in spans]
     return [min(bisect.bisect_left(cumulative_offsets, end), len(patch_texts) - 1) for end in ends]
+
+
+def _line_reward_events(completion_text: str, line_rewards: list[float]) -> list[RewardEvent]:
+    spans = _stream_line_spans(completion_text)
+    return [
+        RewardEvent(start=start, end=end, value=float(value), name="structural_line")
+        for (start, end), value in zip(spans, line_rewards, strict=False)
+        if value != 0.0
+    ]
+
+
+def _completion_harmony_tokens(completion_text: str) -> tuple[list[dict], list[tuple[int, int]]]:
+    spans = _stream_line_spans(completion_text)
+    return [infer_harmony(parse_bar_notes(completion_text[start:end])) for start, end in spans], spans
+
+
+def _effective_similarity_component(raw_component: float, final_score: RewardScore) -> float:
+    breakdown = final_score.breakdown
+    raw_total = float(breakdown.get("raw_similarity_reward", 0.0))
+    if raw_total == 0.0 or raw_component == 0.0:
+        return 0.0
+    clipped_total = float(breakdown.get("clipped_similarity_reward", raw_total))
+    gate = float(breakdown.get("similarity_validity_gate", 1.0))
+    return raw_component * (clipped_total / raw_total) * gate
+
+
+def _dtw_metric_reward_events(
+    *,
+    name: str,
+    reference: list,
+    candidate: list,
+    candidate_spans: list[tuple[int, int]],
+    similarity_fn,
+    total_value: float,
+    band_ratio: float,
+) -> list[RewardEvent]:
+    if total_value == 0.0 or not reference or not candidate or not candidate_spans:
+        return []
+    alignment = generic_dtw_alignment(reference, candidate, similarity_fn, band_ratio=band_ratio)
+    if not alignment.path:
+        return []
+
+    credits = [0.0 for _ in candidate_spans]
+    for (_ref_idx, candidate_idx), local_similarity in zip(
+        alignment.path,
+        alignment.local_similarities,
+        strict=True,
+    ):
+        if 0 <= candidate_idx < len(credits):
+            credits[candidate_idx] += max(0.0, float(local_similarity))
+
+    total_credit = sum(credits)
+    if total_credit <= 0.0:
+        return []
+
+    return [
+        RewardEvent(
+            start=start,
+            end=end,
+            value=total_value * (credit / total_credit),
+            name=name,
+        )
+        for credit, (start, end) in zip(credits, candidate_spans, strict=True)
+        if credit > 0.0 and end > start
+    ]
+
+
+def _harmony_reward_events(
+    *,
+    completion_text: str,
+    similarity_weights: SimilarityRewardWeights,
+    aria_similarity_ref: SimilarityReference | None,
+    final_score: RewardScore,
+    band_ratio: float,
+) -> list[RewardEvent]:
+    if (
+        similarity_weights.aria_harmony == 0.0
+        or aria_similarity_ref is None
+        or aria_similarity_ref.harmony is None
+        or not final_score.breakdown.get("similarity_harmony_valid")
+    ):
+        return []
+
+    candidate_harmony, candidate_spans = _completion_harmony_tokens(completion_text)
+    if not candidate_harmony:
+        return []
+
+    weight_per_metric = similarity_weights.aria_harmony / 3.0
+    metric_specs = [
+        (
+            "aria_harmony_harmony_dtw",
+            aria_similarity_ref.harmony,
+            candidate_harmony,
+            token_similarity,
+        ),
+        (
+            "aria_harmony_root_dtw",
+            [item["root"] for item in aria_similarity_ref.harmony],
+            [item["root"] for item in candidate_harmony],
+            pitch_class_similarity,
+        ),
+        (
+            "aria_harmony_bass_dtw",
+            [item["bass"] for item in aria_similarity_ref.harmony],
+            [item["bass"] for item in candidate_harmony],
+            pitch_class_similarity,
+        ),
+    ]
+
+    events: list[RewardEvent] = []
+    for metric_name, reference, candidate, similarity_fn in metric_specs:
+        metric_score = float(final_score.breakdown.get(metric_name, 0.0))
+        total_value = _effective_similarity_component(weight_per_metric * metric_score, final_score)
+        events.extend(
+            _dtw_metric_reward_events(
+                name=metric_name,
+                reference=reference,
+                candidate=candidate,
+                candidate_spans=candidate_spans,
+                similarity_fn=similarity_fn,
+                total_value=total_value,
+                band_ratio=band_ratio,
+            )
+        )
+    return events
+
+
+def _project_reward_events_to_patches(events: list[RewardEvent], patch_texts: list[str]) -> list[float]:
+    patch_spans = _patch_char_spans(patch_texts)
+    rewards = [0.0 for _ in patch_spans]
+    if not patch_spans:
+        return rewards
+
+    completion_len = patch_spans[-1][1]
+    for event in events:
+        start = max(0, min(completion_len, event.start))
+        end = max(start, min(completion_len, event.end))
+        if end <= start or event.value == 0.0:
+            continue
+
+        overlaps: list[tuple[int, int]] = []
+        for patch_idx, (patch_start, patch_end) in enumerate(patch_spans):
+            overlap = max(0, min(end, patch_end) - max(start, patch_start))
+            if overlap > 0:
+                overlaps.append((patch_idx, overlap))
+        total_overlap = sum(overlap for _patch_idx, overlap in overlaps)
+        if total_overlap <= 0:
+            continue
+        for patch_idx, overlap in overlaps:
+            rewards[patch_idx] += event.value * (overlap / total_overlap)
+    return rewards
 
 
 def _countdown_local_rewards(stream_lines) -> np.ndarray:
@@ -515,15 +697,22 @@ def patch_rewards_single_pass(
         )
         return PatchRewardTrace(rewards=[], prefix_totals=[], final_score=final_score)
 
-    rewards = [0.0 for _ in generated_patches]
     line_rewards = _single_pass_line_rewards(
         full_text=prompt_text + completion_text,
         target=target,
         reward_config=reward_config,
     )
-    line_end_patch_indices = _stream_line_end_patch_indices(completion_text, patch_texts)
-    for line_reward, patch_idx in zip(line_rewards, line_end_patch_indices, strict=False):
-        rewards[patch_idx] += line_reward
+    reward_events = _line_reward_events(completion_text, line_rewards)
+    reward_events.extend(
+        _harmony_reward_events(
+            completion_text=completion_text,
+            similarity_weights=similarity_weights,
+            aria_similarity_ref=aria_similarity_ref,
+            final_score=final_score,
+            band_ratio=similarity_band_ratio,
+        )
+    )
+    rewards = _project_reward_events_to_patches(reward_events, patch_texts)
 
     terminal_residual = final_score.total - sum(rewards)
     rewards[-1] += terminal_residual
@@ -667,7 +856,7 @@ def run_ppo_smoke(
             target=target,
             reward_config=reward_config,
             candidate_name=f"step{step_idx}_sample0",
-            weights=similarity_weights,
+            similarity_weights=similarity_weights,
             aria_similarity_ref=aria_similarity_ref,
             similarity_chroma_bins=args.similarity_chroma_bins,
             similarity_band_ratio=args.similarity_band_ratio,
@@ -788,9 +977,9 @@ def main() -> int:
     parser.add_argument("--target-json", default=str(Path("data/processed/goldberg/structure/aria_bar_skeleton.json")))
     parser.add_argument("--target-structure-abc", required=True)
     parser.add_argument("--aria-reference-abc", default=str(Path("data/processed/goldberg/abc/aria-bwv-988.abc")))
-    parser.add_argument("--aria-chroma-reward-weight", type=float, default=0.0)
-    parser.add_argument("--aria-harmony-reward-weight", type=float, default=0.0)
-    parser.add_argument("--max-similarity-reward", type=float, default=1.0)
+    parser.add_argument("--aria-chroma-reward-weight", type=float, default=1.0)
+    parser.add_argument("--aria-harmony-reward-weight", type=float, default=1.0)
+    parser.add_argument("--max-similarity-reward", type=float, default=2.0)
     parser.add_argument("--similarity-chroma-bins", type=int, default=128)
     parser.add_argument("--similarity-band-ratio", type=float, default=0.25)
     parser.add_argument("--similarity-timeout-s", type=float, default=20.0)
