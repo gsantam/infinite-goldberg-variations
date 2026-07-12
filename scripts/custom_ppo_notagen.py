@@ -338,6 +338,28 @@ def discounted_returns(rewards: torch.Tensor, gamma: float) -> torch.Tensor:
     return returns
 
 
+def generalized_advantage_estimates(
+    rewards: torch.Tensor,
+    values: torch.Tensor,
+    gamma: float,
+    gae_lambda: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    if rewards.shape != values.shape:
+        raise RuntimeError(f"GAE tensor shape mismatch: rewards={tuple(rewards.shape)} values={tuple(values.shape)}")
+    advantages = torch.empty_like(rewards, dtype=torch.float32)
+    running = torch.zeros((), device=rewards.device, dtype=torch.float32)
+    discount = torch.tensor(float(gamma), device=rewards.device, dtype=torch.float32)
+    trace_decay = torch.tensor(float(gae_lambda), device=rewards.device, dtype=torch.float32)
+    baseline = values.detach().float()
+    for idx in range(rewards.numel() - 1, -1, -1):
+        next_value = baseline[idx + 1] if idx + 1 < rewards.numel() else torch.zeros((), device=rewards.device)
+        delta = rewards[idx].float() + discount * next_value - baseline[idx]
+        running = delta + discount * trace_decay * running
+        advantages[idx] = running
+    value_targets = advantages + baseline
+    return advantages, value_targets
+
+
 def score_total_reward(
     *,
     prompt_text: str,
@@ -742,19 +764,21 @@ def ppo_clipped_loss(
     old_logprobs: torch.Tensor,
     values: torch.Tensor,
     old_values: torch.Tensor,
-    returns: torch.Tensor,
+    advantages: torch.Tensor,
+    value_targets: torch.Tensor,
     clip_range: float,
     value_loss_coef: float,
     entropy_bonus_coef: float = 0.0,
     normalize_advantage: bool = True,
 ) -> PPOLossPayload:
-    if not (new_logprobs.shape == old_logprobs.shape == values.shape == old_values.shape == returns.shape):
+    if not (new_logprobs.shape == old_logprobs.shape == values.shape == old_values.shape == advantages.shape == value_targets.shape):
         raise RuntimeError(
             "PPO tensor shape mismatch: "
             f"new={tuple(new_logprobs.shape)} old={tuple(old_logprobs.shape)} "
-            f"values={tuple(values.shape)} old_values={tuple(old_values.shape)} returns={tuple(returns.shape)}"
+            f"values={tuple(values.shape)} old_values={tuple(old_values.shape)} "
+            f"advantages={tuple(advantages.shape)} value_targets={tuple(value_targets.shape)}"
         )
-    raw_advantages = returns - old_values.detach()
+    raw_advantages = advantages.detach().float()
     if normalize_advantage:
         advantages, adv_mean, adv_std = normalize_advantages(raw_advantages)
     else:
@@ -767,7 +791,7 @@ def ppo_clipped_loss(
     unclipped = ratio * advantages.detach()
     clipped = torch.clamp(ratio, 1.0 - clip_range, 1.0 + clip_range) * advantages.detach()
     policy_loss = -torch.minimum(unclipped, clipped).mean()
-    value_loss = torch.nn.functional.mse_loss(values.float(), returns.float())
+    value_loss = torch.nn.functional.mse_loss(values.float(), value_targets.detach().float())
     entropy_loss = -entropy_bonus_coef * (-new_logprobs).mean()
     loss = policy_loss + value_loss_coef * value_loss + entropy_loss
     approx_kl = ((old_logprobs.detach() - new_logprobs) ** 2).mean() * 0.5
@@ -819,6 +843,8 @@ def run_ppo_smoke(
         )
     if not prompts:
         raise ValueError("no prompt rows loaded")
+    if not 0.0 <= args.gae_lambda <= 1.0:
+        raise ValueError(f"gae_lambda must be in [0, 1], got {args.gae_lambda}")
 
     logs: list[dict] = []
     for local_step_idx in range(1, args.max_steps + 1):
@@ -900,6 +926,12 @@ def run_ppo_smoke(
             )
         patch_rewards = torch.tensor(reward_trace.rewards, device=device, dtype=torch.float32)
         returns = discounted_returns(patch_rewards, args.gamma)
+        advantages, value_targets = generalized_advantage_estimates(
+            rewards=patch_rewards,
+            values=old_replay.values.detach().float(),
+            gamma=args.gamma,
+            gae_lambda=args.gae_lambda,
+        )
 
         optimizer.zero_grad(set_to_none=True)
         new_replay = trajectory_patch_logprobs_values(
@@ -916,7 +948,8 @@ def run_ppo_smoke(
             old_logprobs=old_replay.logprobs.detach().float(),
             values=new_replay.values.float(),
             old_values=old_replay.values.detach().float(),
-            returns=returns.float(),
+            advantages=advantages.float(),
+            value_targets=value_targets.float(),
             clip_range=args.ppo_clip_range,
             value_loss_coef=args.value_loss_coef,
             entropy_bonus_coef=args.entropy_bonus_coef,
@@ -946,6 +979,9 @@ def run_ppo_smoke(
             "advantages_std": float(loss_payload.advantages_std.detach().cpu()),
             "return_mean": float(returns.mean().detach().cpu()),
             "return_std": float(returns.std(unbiased=False).detach().cpu()),
+            "value_target_mean": float(value_targets.mean().detach().cpu()),
+            "value_target_std": float(value_targets.std(unbiased=False).detach().cpu()),
+            "gae_lambda": args.gae_lambda,
             "patch_reward_mean": float(patch_rewards.mean().detach().cpu()),
             "patch_reward_std": float(patch_rewards.std(unbiased=False).detach().cpu()),
             "patch_rewards": reward_trace.rewards,
@@ -999,6 +1035,7 @@ def main() -> int:
     parser.add_argument("--value-loss-coef", type=float, default=0.5)
     parser.add_argument("--entropy-bonus-coef", type=float, default=0.0)
     parser.add_argument("--gamma", type=float, default=1.0)
+    parser.add_argument("--gae-lambda", type=float, default=0.95)
     parser.add_argument("--max-grad-norm", type=float, default=1.0)
     parser.add_argument("--replay-context-patches", type=int, default=128)
     parser.add_argument("--score-chunk-patches", type=int, default=16)
@@ -1048,6 +1085,7 @@ def main() -> int:
             "value_loss_coef": args.value_loss_coef,
             "entropy_bonus_coef": args.entropy_bonus_coef,
             "gamma": args.gamma,
+            "gae_lambda": args.gae_lambda,
             "reward_assignment": "prefix_delta_same_reward_logic_per_generated_patch",
         },
     }
