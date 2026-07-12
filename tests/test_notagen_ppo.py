@@ -12,6 +12,7 @@ try:
         _stream_line_end_patch_indices,
         _stream_line_spans,
         discounted_returns,
+        generalized_advantage_estimates,
         ppo_clipped_loss,
         terminal_returns,
         trajectory_patch_logprobs_values,
@@ -106,14 +107,16 @@ class NotaGenPPOTests(unittest.TestCase):
         new_logprobs = torch.tensor([-3.9, -3.2, -2.1], requires_grad=True)
         old_values = torch.tensor([0.2, 0.1, -0.1])
         values = torch.tensor([0.3, 0.0, -0.2], requires_grad=True)
-        returns = terminal_returns(1.5, 3, gamma=1.0, device=torch.device("cpu"))
+        value_targets = terminal_returns(1.5, 3, gamma=1.0, device=torch.device("cpu"))
+        advantages = value_targets - old_values
 
         payload = ppo_clipped_loss(
             new_logprobs=new_logprobs,
             old_logprobs=old_logprobs,
             values=values,
             old_values=old_values,
-            returns=returns,
+            advantages=advantages,
+            value_targets=value_targets,
             clip_range=0.2,
             value_loss_coef=0.5,
         )
@@ -127,6 +130,40 @@ class NotaGenPPOTests(unittest.TestCase):
         rewards = torch.tensor([1.0, 2.0, 3.0])
         returns = discounted_returns(rewards, gamma=0.5)
         self.assertTrue(torch.allclose(returns, torch.tensor([2.75, 3.5, 3.0])))
+
+    def test_gae_lambda_one_matches_discounted_returns(self):
+        rewards = torch.tensor([1.0, 2.0, 3.0])
+        values = torch.tensor([0.2, 0.4, 0.6])
+
+        advantages, value_targets = generalized_advantage_estimates(
+            rewards,
+            values,
+            gamma=0.5,
+            gae_lambda=1.0,
+        )
+
+        returns = discounted_returns(rewards, gamma=0.5)
+        self.assertTrue(torch.allclose(value_targets, returns))
+        self.assertTrue(torch.allclose(advantages, returns - values))
+
+    def test_gae_lambda_zero_uses_one_step_td_errors(self):
+        rewards = torch.tensor([1.0, 2.0, 3.0])
+        values = torch.tensor([0.2, 0.4, 0.6])
+
+        advantages, value_targets = generalized_advantage_estimates(
+            rewards,
+            values,
+            gamma=0.5,
+            gae_lambda=0.0,
+        )
+
+        expected_advantages = torch.tensor([
+            1.0 + 0.5 * 0.4 - 0.2,
+            2.0 + 0.5 * 0.6 - 0.4,
+            3.0 - 0.6,
+        ])
+        self.assertTrue(torch.allclose(advantages, expected_advantages))
+        self.assertTrue(torch.allclose(value_targets, expected_advantages + values))
 
     def test_stream_line_end_patch_indices_maps_line_boundaries(self):
         completion = "[r:0/1][V:1]abc|\n[r:1/0][V:1]def|\n"
