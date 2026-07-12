@@ -1,6 +1,6 @@
 import unittest
 
-from grpo.stream_tags import (
+from evaluation.stream_tags import (
     count_stream_lines,
     extract_stream_lines,
     latest_stream_line_closed,
