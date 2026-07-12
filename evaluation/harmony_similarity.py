@@ -3,8 +3,9 @@ from __future__ import annotations
 import re
 import statistics
 from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 NOTE_RE = re.compile(
@@ -21,6 +22,13 @@ QUALITIES = {
     "min7": {0, 3, 7, 10},
     "maj7": {0, 4, 7, 11},
 }
+
+
+@dataclass(frozen=True)
+class DtwAlignment:
+    similarity: float
+    path: list[tuple[int, int]]
+    local_similarities: list[float]
 
 
 def parse_duration(text: str | None) -> float:
@@ -203,24 +211,57 @@ def contour_sequence(harmony: list[dict[str, Any]]) -> list[int]:
     return sequence
 
 
-def generic_dtw_similarity(reference: list[Any], candidate: list[Any], similarity_fn, *, band_ratio: float) -> float:
+def generic_dtw_alignment(
+    reference: list[Any],
+    candidate: list[Any],
+    similarity_fn: Callable[[Any, Any], float],
+    *,
+    band_ratio: float,
+) -> DtwAlignment:
     n = len(reference)
     m = len(candidate)
     if n == 0 or m == 0:
-        return 0.0
+        return DtwAlignment(similarity=0.0, path=[], local_similarities=[])
     inf = 1e9
-    previous = [inf] * (m + 1)
-    previous[0] = 0.0
+    costs = [[inf] * (m + 1) for _ in range(n + 1)]
+    traceback: list[list[tuple[int, int] | None]] = [[None] * (m + 1) for _ in range(n + 1)]
+    costs[0][0] = 0.0
     band = max(abs(n - m), int(max(n, m) * band_ratio))
     for i in range(1, n + 1):
-        current = [inf] * (m + 1)
         center = int(i * m / n)
         for j in range(max(1, center - band), min(m, center + band) + 1):
             cost = 1.0 - similarity_fn(reference[i - 1], candidate[j - 1])
-            current[j] = cost + min(previous[j], current[j - 1], previous[j - 1])
-        previous = current
-    distance = previous[m] / (n + m)
-    return 1.0 / (1.0 + distance)
+            predecessors = (
+                (costs[i - 1][j], (i - 1, j)),
+                (costs[i][j - 1], (i, j - 1)),
+                (costs[i - 1][j - 1], (i - 1, j - 1)),
+            )
+            prev_cost, prev_idx = min(predecessors, key=lambda item: item[0])
+            costs[i][j] = cost + prev_cost
+            traceback[i][j] = prev_idx
+
+    if costs[n][m] >= inf:
+        return DtwAlignment(similarity=0.0, path=[], local_similarities=[])
+
+    path: list[tuple[int, int]] = []
+    local_similarities: list[float] = []
+    i, j = n, m
+    while i > 0 and j > 0:
+        path.append((i - 1, j - 1))
+        local_similarities.append(similarity_fn(reference[i - 1], candidate[j - 1]))
+        previous = traceback[i][j]
+        if previous is None:
+            break
+        i, j = previous
+    path.reverse()
+    local_similarities.reverse()
+
+    distance = costs[n][m] / (n + m)
+    return DtwAlignment(similarity=1.0 / (1.0 + distance), path=path, local_similarities=local_similarities)
+
+
+def generic_dtw_similarity(reference: list[Any], candidate: list[Any], similarity_fn, *, band_ratio: float) -> float:
+    return generic_dtw_alignment(reference, candidate, similarity_fn, band_ratio=band_ratio).similarity
 
 
 def aligned_similarity(reference: list[dict[str, Any]], candidate: list[dict[str, Any]]) -> dict[str, float | int]:

@@ -6,7 +6,11 @@ try:
 
     from scripts.custom_ppo_notagen import (
         PatchValueHead,
+        RewardEvent,
+        _dtw_metric_reward_events,
+        _project_reward_events_to_patches,
         _stream_line_end_patch_indices,
+        _stream_line_spans,
         discounted_returns,
         ppo_clipped_loss,
         terminal_returns,
@@ -128,6 +132,37 @@ class NotaGenPPOTests(unittest.TestCase):
         completion = "[r:0/1][V:1]abc|\n[r:1/0][V:1]def|\n"
         patch_texts = ["[r:0/1][V:1]", "abc|\n[r:1", "/0][V:1]def|\n"]
         self.assertEqual(_stream_line_end_patch_indices(completion, patch_texts), [1, 2])
+
+    def test_stream_line_spans_follow_countdown_markers(self):
+        completion = "[r:0/1][V:1]abc|[r:1/0][V:1]def|"
+        self.assertEqual(_stream_line_spans(completion), [(0, 16), (16, len(completion))])
+
+    def test_reward_events_are_distributed_by_patch_overlap(self):
+        patch_texts = ["abcdefghij", "klmnopqrst", "uvwxyz"]
+        events = [RewardEvent(start=5, end=25, value=2.0, name="line")]
+
+        rewards = _project_reward_events_to_patches(events, patch_texts)
+
+        self.assertEqual(len(rewards), 3)
+        self.assertAlmostEqual(sum(rewards), 2.0)
+        self.assertAlmostEqual(rewards[0], 0.5)
+        self.assertAlmostEqual(rewards[1], 1.0)
+        self.assertAlmostEqual(rewards[2], 0.5)
+
+    def test_dtw_metric_reward_events_sum_to_metric_value(self):
+        events = _dtw_metric_reward_events(
+            name="root_dtw",
+            reference=[0, 7, 2],
+            candidate=[0, 2],
+            candidate_spans=[(0, 10), (10, 20)],
+            similarity_fn=lambda left, right: 1.0 if left == right else 0.0,
+            total_value=0.9,
+            band_ratio=1.0,
+        )
+
+        self.assertGreater(len(events), 0)
+        self.assertAlmostEqual(sum(event.value for event in events), 0.9)
+        self.assertTrue(all(event.name == "root_dtw" for event in events))
 
 
 if __name__ == "__main__":

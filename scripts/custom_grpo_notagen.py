@@ -1516,9 +1516,9 @@ def main() -> int:
         help="Reference NotaGen ABC whose body/stream-line count is used for the bar-count reward.",
     )
     parser.add_argument("--aria-reference-abc", default=str(PROJECT_ROOT / "data" / "processed" / "goldberg" / "abc" / "aria-bwv-988.abc"))
-    parser.add_argument("--aria-chroma-reward-weight", type=float, default=0.0)
-    parser.add_argument("--aria-harmony-reward-weight", type=float, default=0.0)
-    parser.add_argument("--max-similarity-reward", type=float, default=1.0, help="Cap raw added similarity reward before structural validity gating. Use <=0 to disable.")
+    parser.add_argument("--aria-chroma-reward-weight", type=float, default=1.0)
+    parser.add_argument("--aria-harmony-reward-weight", type=float, default=1.0)
+    parser.add_argument("--max-similarity-reward", type=float, default=2.0, help="Cap raw added similarity reward before structural validity gating. Use <=0 to disable.")
     parser.add_argument("--similarity-chroma-bins", type=int, default=128)
     parser.add_argument("--similarity-band-ratio", type=float, default=0.25)
     parser.add_argument("--similarity-timeout-s", type=float, default=20.0)
