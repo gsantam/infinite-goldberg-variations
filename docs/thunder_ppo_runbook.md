@@ -146,6 +146,8 @@ print(out, len(rows))
 PY
 ```
 
+Keep the `source` or `continuation` fields in each prompt row. PPO uses them to load the prompt-specific NotaGen structure target for `bar_count_reward` and rollout stopping length. `--target-structure-abc` is only a fallback for prompt rows that do not provide their own target path. This matters because the Goldberg NotaGen structure-line count is variation-dependent after preprocessing/augmentation.
+
 ## Sync Minimal Project State
 
 Create remote directories:
@@ -477,6 +479,8 @@ The normal `approx_kl` and `clip_fraction` are computed before `optimizer.step()
 ## Current Recommended One-Step PPO Setup
 
 The best full-PPO setup measured so far is 16 rollout trajectories with replay/backprop microbatched in groups of 4. This keeps rollout batched while avoiding the OOM from replaying all 16 differentiably at once.
+
+The `--target-structure-abc` value below is a fallback. For the standard `goldberg_ppo_prompts_e3_header_allvoices.jsonl`, each prompt row has `source`, so PPO scores `bar_count_reward` and chooses rollout stopping length from the selected prompt variation rather than always from variation 01.
 
 ```bash
 $SSH "$HOST" "cd $REMOTE_REPO && \

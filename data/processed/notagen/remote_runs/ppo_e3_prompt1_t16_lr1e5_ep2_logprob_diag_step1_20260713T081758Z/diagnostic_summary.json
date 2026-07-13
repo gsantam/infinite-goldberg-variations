@@ -1,0 +1,56 @@
+{
+  "run": "ppo_e3_prompt1_t16_lr1e5_ep2_logprob_diag_step1_20260713T081758Z",
+  "note": "Remote result.json was not pulled because the instance was deleted while rsync was still running. These metrics were captured from the remote monitor output before deletion.",
+  "settings": {
+    "prompt": "variation-01_G",
+    "trajectories_per_step": 16,
+    "rollout_batch_size": 16,
+    "learning_rate": 0.00001,
+    "ppo_epochs": 2,
+    "trained_critic": "ppo_e3_rollout_only_t200_seedfix_20260712T135300Z_combined_full_reward_value_head_e80_all200.pt"
+  },
+  "step": {
+    "reward_mean": 8.079503059387207,
+    "reward_std": 0.4285186529159546,
+    "post_step_approx_kl": 0.00450907601043582,
+    "post_step_clip_fraction": 0.03591809421777725,
+    "scored_patches": 2979
+  },
+  "post_step_log_ratio": {
+    "definition": "post_step_logprob - old_logprob on the sampled patches",
+    "count": 2979,
+    "mean": -0.0014534981455653906,
+    "std": 0.09495282918214798,
+    "min": -0.8347396850585938,
+    "p05": -0.10752105712890625,
+    "p25": -0.025455951690673828,
+    "p50": -0.00008237361907958984,
+    "p75": 0.015570312738418579,
+    "p95": 0.1077355220913887,
+    "max": 1.5628585815429688
+  },
+  "raw_advantage": {
+    "count": 2979,
+    "mean": 0.04830246791243553,
+    "std": 0.39037588238716125,
+    "min": -1.7844165563583374,
+    "p05": -0.5633941888809204,
+    "p25": -0.18560980260372162,
+    "p50": 0.015210706740617752,
+    "p75": 0.2756602168083191,
+    "p95": 0.7112628817558289,
+    "max": 2.262692928314209
+  },
+  "alignment": {
+    "positive_advantage_count": 1623,
+    "negative_advantage_count": 1356,
+    "zero_advantage_count": 0,
+    "advantage_log_ratio_correlation": 0.0991724506020546,
+    "normalized_advantage_log_ratio_correlation": 0.09917245805263519,
+    "sign_alignment_fraction": 0.556898295879364,
+    "log_ratio_mean_positive_advantage": 0.009435003623366356,
+    "log_ratio_mean_negative_advantage": -0.014485974796116352,
+    "log_ratio_mean_top_advantage_decile": 0.01341725792735815,
+    "log_ratio_mean_bottom_advantage_decile": 0.00023552984930574894
+  }
+}
