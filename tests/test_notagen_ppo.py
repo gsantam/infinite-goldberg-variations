@@ -1,5 +1,7 @@
 import tempfile
 import unittest
+from pathlib import Path
+from types import SimpleNamespace
 
 try:
     import torch
@@ -15,6 +17,7 @@ try:
         batch_trajectory_returns_advantages,
         discounted_returns,
         generalized_advantage_estimates,
+        load_prompt_structural_targets,
         load_value_head_checkpoint,
         normalize_advantages,
         ppo_clipped_loss,
@@ -26,6 +29,7 @@ try:
         value_mse_loss,
         value_prediction_metrics,
     )
+    from scripts.notagen_ppo_diagnostics import logprob_advantage_diagnostics
     from scripts.custom_grpo_notagen import PATCH_SIZE
     from utils import NotaGenLMHeadModel
 except ModuleNotFoundError as exc:
@@ -59,6 +63,35 @@ def _tiny_notagen():
 
 @unittest.skipIf(torch is None, f"NotaGen torch dependencies unavailable: {IMPORT_ERROR}")
 class NotaGenPPOTests(unittest.TestCase):
+    def test_prompt_structural_targets_prefer_row_source_over_fallback(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            target_json = tmp / "target.json"
+            target_json.write_text("[{}]", encoding="utf-8")
+            fallback_abc = tmp / "fallback.abc"
+            fallback_abc.write_text("[r:0/0][V:1]C|\n", encoding="utf-8")
+            source_abc = tmp / "source.abc"
+            source_abc.write_text("[r:0/1][V:1]C|\n[r:1/0][V:1]D|\n", encoding="utf-8")
+            prompts_jsonl = tmp / "prompts.jsonl"
+
+            args = SimpleNamespace(
+                prompts_jsonl=str(prompts_jsonl),
+                target_json=str(target_json),
+                target_structure_abc=str(fallback_abc),
+            )
+            prompt_targets = load_prompt_structural_targets(
+                [
+                    {"prompt": "", "source": "source.abc"},
+                    {"prompt": ""},
+                ],
+                args,
+            )
+
+        self.assertEqual(prompt_targets[0].source_key, "source")
+        self.assertEqual(prompt_targets[0].target.expected_reward_bars, 2)
+        self.assertEqual(prompt_targets[1].source_key, "fallback_target_structure_abc")
+        self.assertEqual(prompt_targets[1].target.expected_reward_bars, 1)
+
     def test_patch_replay_returns_one_logprob_and_value_per_aligned_patch(self):
         torch.manual_seed(0)
         model = _tiny_notagen()
@@ -188,6 +221,40 @@ class NotaGenPPOTests(unittest.TestCase):
         payload.loss.backward()
         self.assertIsNotNone(new_logprobs.grad)
         self.assertIsNotNone(values.grad)
+
+    def test_logprob_advantage_diagnostics_reports_split_sign_hit_rates(self):
+        diagnostics = logprob_advantage_diagnostics(
+            old_logprobs=torch.zeros(5),
+            post_step_logprobs=torch.tensor([0.1, -0.2, 0.3, 0.4, -0.5]),
+            raw_advantages=torch.tensor([1.0, 2.0, -1.0, -2.0, -3.0]),
+            normalized_advantages=torch.tensor([0.5, 1.0, -0.25, -0.75, -1.0]),
+            patch_rewards=torch.zeros(5),
+            returns=torch.zeros(5),
+            value_targets=torch.zeros(5),
+            old_values=torch.zeros(5),
+            trajectory_lengths=[2, 3],
+            trajectory_logs=[{"trajectory_index": 0}, {"trajectory_index": 1}],
+            clip_range=0.2,
+        )
+
+        self.assertAlmostEqual(
+            diagnostics["positive_advantage_positive_log_ratio_fraction"],
+            0.5,
+        )
+        self.assertAlmostEqual(
+            diagnostics["negative_advantage_negative_log_ratio_fraction"],
+            1.0 / 3.0,
+        )
+        self.assertAlmostEqual(diagnostics["sign_alignment_fraction"], 0.4)
+        self.assertAlmostEqual(
+            diagnostics["per_trajectory"][0]["positive_advantage_positive_log_ratio_fraction"],
+            0.5,
+        )
+        self.assertIsNone(diagnostics["per_trajectory"][0]["negative_advantage_negative_log_ratio_fraction"])
+        self.assertAlmostEqual(
+            diagnostics["per_trajectory"][1]["negative_advantage_negative_log_ratio_fraction"],
+            1.0 / 3.0,
+        )
 
     def test_ppo_microbatch_loss_matches_full_batch_normalization(self):
         old_logprobs = torch.tensor([-4.0, -3.0, -2.0, -2.5, -3.5])

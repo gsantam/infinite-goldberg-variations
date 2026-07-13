@@ -60,6 +60,7 @@ from scripts.custom_grpo_notagen import (
     select_device,
     set_seed,
 )
+from scripts.notagen_ppo_diagnostics import logprob_advantage_diagnostics, value_prediction_metrics
 from utils import NotaGenLMHeadModel, Patchilizer
 
 
@@ -111,6 +112,13 @@ class PPORolloutPayload:
     full_text: str
     generated_patches: list[list[int]]
     meta: dict
+
+
+@dataclass(frozen=True)
+class PromptStructuralTarget:
+    target: object
+    structure_path: str
+    source_key: str
 
 
 @dataclass
@@ -273,6 +281,66 @@ def build_value_head(policy_shape: ModelShape, args, device: torch.device) -> tu
 
     loaded = load_value_head_checkpoint(value_head, args.value_head_weights, device)
     return value_head, loaded
+
+
+def _resolve_prompt_path(raw_path: str | Path, *, base_dir: Path) -> Path:
+    path = Path(raw_path)
+    if path.is_absolute():
+        return path
+    if path.exists():
+        return path
+    return base_dir / path
+
+
+def _prompt_structure_path(row: dict, prompt_idx: int, args) -> tuple[Path, str]:
+    base_dir = Path(args.prompts_jsonl).resolve().parent
+    for key in ("target_structure_abc", "source", "continuation"):
+        value = row.get(key)
+        if not value:
+            continue
+        path = _resolve_prompt_path(value, base_dir=base_dir)
+        if not path.exists():
+            raise FileNotFoundError(
+                f"prompt {prompt_idx} has {key}={value!r}, but the target structure file was not found at {path}"
+            )
+        return path, key
+
+    fallback = _resolve_prompt_path(args.target_structure_abc, base_dir=base_dir)
+    if not fallback.exists():
+        raise FileNotFoundError(f"fallback --target-structure-abc was not found at {fallback}")
+    return fallback, "fallback_target_structure_abc"
+
+
+def load_prompt_structural_targets(prompts: list[dict], args) -> list[PromptStructuralTarget]:
+    cache: dict[str, object] = {}
+    prompt_targets: list[PromptStructuralTarget] = []
+    for prompt_idx, row in enumerate(prompts):
+        structure_path, source_key = _prompt_structure_path(row, prompt_idx, args)
+        cache_key = str(structure_path.resolve())
+        target = cache.get(cache_key)
+        if target is None:
+            target = load_structural_target(args.target_json, structure_path=structure_path)
+            cache[cache_key] = target
+        prompt_targets.append(
+            PromptStructuralTarget(
+                target=target,
+                structure_path=str(structure_path),
+                source_key=source_key,
+            )
+        )
+    return prompt_targets
+
+
+def prompt_structural_target_metadata(prompt_targets: list[PromptStructuralTarget]) -> list[dict]:
+    return [
+        {
+            "structure_path": item.structure_path,
+            "source_key": item.source_key,
+            "expected_bars": int(item.target.expected_bars),
+            "expected_reward_bars": int(item.target.expected_reward_bars),
+        }
+        for item in prompt_targets
+    ]
 
 
 def value_from_last_patch(
@@ -1271,78 +1339,6 @@ def value_mse_loss(
     return scaled_loss, raw_value_loss, scale
 
 
-def _safe_float(value: torch.Tensor | float | None) -> float | None:
-    if value is None:
-        return None
-    if torch.is_tensor(value):
-        if not torch.isfinite(value).item():
-            return None
-        return float(value.detach().cpu())
-    return float(value)
-
-
-def value_prediction_metrics(
-    values: torch.Tensor,
-    targets: torch.Tensor,
-    *,
-    eps: float = 1e-8,
-) -> dict:
-    values_f = values.detach().float().reshape(-1)
-    targets_f = targets.detach().float().reshape(-1)
-    if values_f.shape != targets_f.shape:
-        raise RuntimeError(
-            f"value metric shape mismatch: values={tuple(values_f.shape)} targets={tuple(targets_f.shape)}"
-        )
-    if values_f.numel() == 0:
-        return {
-            "count": 0,
-            "mse": None,
-            "mae": None,
-            "bias": None,
-            "explained_variance": None,
-            "correlation": None,
-            "value_mean": None,
-            "value_std": None,
-            "target_mean": None,
-            "target_std": None,
-            "residual_mean": None,
-            "residual_std": None,
-        }
-
-    residual = targets_f - values_f
-    mse = torch.mean(residual.square())
-    mae = torch.mean(residual.abs())
-    bias = torch.mean(values_f - targets_f)
-    value_std = values_f.std(unbiased=False)
-    target_std = targets_f.std(unbiased=False)
-    residual_std = residual.std(unbiased=False)
-    target_var = target_std.square()
-    residual_var = residual_std.square()
-    explained_variance = None
-    correlation = None
-    if target_var > eps:
-        explained_variance = 1.0 - residual_var / target_var
-    if values_f.numel() > 1 and value_std > eps and target_std > eps:
-        centered_values = values_f - values_f.mean()
-        centered_targets = targets_f - targets_f.mean()
-        correlation = torch.mean(centered_values * centered_targets) / (value_std * target_std)
-
-    return {
-        "count": int(values_f.numel()),
-        "mse": _safe_float(mse),
-        "mae": _safe_float(mae),
-        "bias": _safe_float(bias),
-        "explained_variance": _safe_float(explained_variance),
-        "correlation": _safe_float(correlation),
-        "value_mean": _safe_float(values_f.mean()),
-        "value_std": _safe_float(value_std),
-        "target_mean": _safe_float(targets_f.mean()),
-        "target_std": _safe_float(target_std),
-        "residual_mean": _safe_float(residual.mean()),
-        "residual_std": _safe_float(residual_std),
-    }
-
-
 def ppo_clipped_loss(
     *,
     new_logprobs: torch.Tensor,
@@ -1656,6 +1652,7 @@ def sample_ppo_rollouts(
     policy_model: NotaGenLMHeadModel,
     policy_shape: ModelShape,
     prompt: str,
+    target_stream_lines: int,
     step_idx: int,
     args,
 ) -> list[PPORolloutPayload]:
@@ -1684,7 +1681,7 @@ def sample_ppo_rollouts(
                     temperature=args.temperature,
                     top_k=args.top_k,
                     top_p=args.top_p,
-                    target_stream_lines=args.target_stream_lines,
+                    target_stream_lines=target_stream_lines,
                     target_new_stream_lines=False,
                     max_chars=args.max_chars,
                     max_generated_patches=args.max_generated_patches,
@@ -1703,6 +1700,7 @@ def sample_ppo_rollouts(
                                     "cached_rollout": True,
                                     "batched_rollout": True,
                                     "rollout_batch_size": args.rollout_batch_size,
+                                    "rollout_target_stream_lines": target_stream_lines,
                                     **(result.meta or {}),
                                 },
                             )
@@ -1731,7 +1729,7 @@ def sample_ppo_rollouts(
                         temperature=args.temperature,
                         top_k=args.top_k,
                         top_p=args.top_p,
-                        target_stream_lines=args.target_stream_lines,
+                        target_stream_lines=target_stream_lines,
                         max_chars=args.max_chars,
                         max_generated_patches=args.max_generated_patches,
                         timeout_s=args.timeout_s,
@@ -1748,6 +1746,7 @@ def sample_ppo_rollouts(
                                 "cached_rollout": bool(args.cached_rollout),
                                 "batched_rollout": False,
                                 "rollout_batch_size": 1,
+                                "rollout_target_stream_lines": target_stream_lines,
                             },
                         )
                     )
@@ -1858,7 +1857,7 @@ def run_ppo_smoke(
     policy_shape: ModelShape,
     value_head: PatchValueHead,
     prompts: list[dict],
-    target,
+    prompt_targets: list[PromptStructuralTarget],
     reward_config: GoldbergRewardConfig,
     args,
 ) -> dict:
@@ -1889,6 +1888,8 @@ def run_ppo_smoke(
         )
     if not prompts:
         raise ValueError("no prompt rows loaded")
+    if len(prompt_targets) != len(prompts):
+        raise ValueError(f"prompt target count mismatch: prompts={len(prompts)} targets={len(prompt_targets)}")
     if not 0.0 <= args.gae_lambda <= 1.0:
         raise ValueError(f"gae_lambda must be in [0, 1], got {args.gae_lambda}")
     if args.rollout_retries <= 0:
@@ -1909,6 +1910,9 @@ def run_ppo_smoke(
         step_idx = args.step_offset + local_step_idx
         prompt_idx = (step_idx - 1) % len(prompts)
         row = prompts[prompt_idx]
+        prompt_target = prompt_targets[prompt_idx]
+        target = prompt_target.target
+        target_stream_lines = int(target.expected_reward_bars)
         prompt_name = prompt_row_name(row, prompt_idx)
         prompt = row["prompt"]
 
@@ -1917,6 +1921,7 @@ def run_ppo_smoke(
             policy_model=policy_model,
             policy_shape=policy_shape,
             prompt=prompt,
+            target_stream_lines=target_stream_lines,
             step_idx=step_idx,
             args=args,
         )
@@ -1926,7 +1931,7 @@ def run_ppo_smoke(
         reward_start = time.perf_counter()
         trajectory_logs: list[dict] = []
         reward_traces: list[PatchRewardTrace] = []
-        prompt_stream_lines = count_stream_lines(build_rollout_prefix(prompt, args.target_stream_lines))
+        prompt_stream_lines = count_stream_lines(build_rollout_prefix(prompt, target_stream_lines))
         for payload in rollout_payloads:
             reward_trace = patch_rewards_from_prefix_deltas(
                 prompt_text=prompt,
@@ -1947,11 +1952,15 @@ def run_ppo_smoke(
             reward_breakdown["generated_token_slots"] = generated_token_slots(payload.generated_patches)
             reward_breakdown["prompt_index"] = prompt_idx
             reward_breakdown["prompt_name"] = prompt_name
+            reward_breakdown["target_structure_path"] = prompt_target.structure_path
+            reward_breakdown["target_structure_source_key"] = prompt_target.source_key
+            reward_breakdown["target_expected_reward_bars"] = int(target.expected_reward_bars)
+            reward_breakdown["target_stream_lines"] = target_stream_lines
             reward_breakdown["trajectory_index"] = payload.trajectory_index
             reward_breakdown["rollout_seed"] = payload.rollout_seed
             reward_breakdown["rollout_prefix_stream_lines"] = prompt_stream_lines
             reward_breakdown.update(payload.meta)
-            reward_breakdown["patch_reward_mode"] = "prefix_delta"
+            reward_breakdown["patch_reward_mode"] = "single_pass_events_plus_terminal_residual"
             reward_breakdown["patch_reward_count"] = len(reward_trace.rewards)
             reward_breakdown["patch_reward_sum"] = float(sum(reward_trace.rewards))
             reward_traces.append(reward_trace)
@@ -1988,6 +1997,10 @@ def run_ppo_smoke(
                 "step": step_idx,
                 "prompt_index": prompt_idx,
                 "prompt_name": prompt_name,
+                "target_structure_path": prompt_target.structure_path,
+                "target_structure_source_key": prompt_target.source_key,
+                "target_expected_reward_bars": int(target.expected_reward_bars),
+                "target_stream_lines": target_stream_lines,
                 "trajectories_per_step": len(rollout_payloads),
                 "rollout_batch_size": args.rollout_batch_size,
                 "rollout_only": True,
@@ -2010,7 +2023,7 @@ def run_ppo_smoke(
             continue
 
         replay_start = time.perf_counter()
-        rollout_prompt = build_rollout_prefix(prompt, args.target_stream_lines)
+        rollout_prompt = build_rollout_prefix(prompt, target_stream_lines)
         prompt_flat = [item for sublist in patchilizer.encode_generate(rollout_prompt) for item in sublist]
         old_replay_start = time.perf_counter()
         old_replays: list[PatchReplayChunk] = []
@@ -2166,6 +2179,7 @@ def run_ppo_smoke(
         else:
             post_step_approx_kl = None
             post_step_clip_fraction = None
+            post_step_logprobs = None
             post_step_log_ratio = None
         timings["new_replay_backward_s"] = time.perf_counter() - new_replay_start
 
@@ -2193,10 +2207,27 @@ def run_ppo_smoke(
         patch_rewards = batch_tensors.patch_rewards
         returns = batch_tensors.returns
         value_targets = batch_tensors.value_targets
+        logprob_advantage_diag = logprob_advantage_diagnostics(
+            old_logprobs=old_logprobs,
+            post_step_logprobs=post_step_logprobs,
+            raw_advantages=batch_tensors.advantages,
+            normalized_advantages=normalized_advantages,
+            patch_rewards=patch_rewards,
+            returns=returns,
+            value_targets=value_targets,
+            old_values=old_values,
+            trajectory_lengths=trajectory_lengths,
+            trajectory_logs=trajectory_logs,
+            clip_range=args.ppo_clip_range,
+        )
         step_log = {
             "step": step_idx,
             "prompt_index": prompt_idx,
             "prompt_name": prompt_name,
+            "target_structure_path": prompt_target.structure_path,
+            "target_structure_source_key": prompt_target.source_key,
+            "target_expected_reward_bars": int(target.expected_reward_bars),
+            "target_stream_lines": target_stream_lines,
             "trajectories_per_step": len(rollout_payloads),
             "rollout_batch_size": args.rollout_batch_size,
             "loss": float(loss_payload.loss.detach().cpu()),
@@ -2219,6 +2250,7 @@ def run_ppo_smoke(
             "post_step_log_ratio_max_abs": (
                 None if post_step_log_ratio is None else float(post_step_log_ratio.abs().max().detach().cpu())
             ),
+            "logprob_advantage_diagnostics": logprob_advantage_diag,
             "advantages_mean": float(loss_payload.advantages_mean.detach().cpu()),
             "advantages_std": float(loss_payload.advantages_std.detach().cpu()),
             "return_mean": float(returns.mean().detach().cpu()),
@@ -2405,14 +2437,14 @@ def main() -> int:
         print(f"Resumed policy LoRA checkpoint from {args.resume_checkpoint_dir}")
     value_head, value_head_load = build_value_head(policy_shape, args, device)
     prompts = load_prompt_rows(args.prompts_jsonl, limit=args.prompt_limit)
-    target = load_structural_target(args.target_json, structure_path=args.target_structure_abc)
+    prompt_targets = load_prompt_structural_targets(prompts, args)
     reward_config = GoldbergRewardConfig()
     payload = run_ppo_smoke(
         policy_model=policy_model,
         policy_shape=policy_shape,
         value_head=value_head,
         prompts=prompts,
-        target=target,
+        prompt_targets=prompt_targets,
         reward_config=reward_config,
         args=args,
     )
@@ -2428,6 +2460,7 @@ def main() -> int:
         "policy_shape": asdict(policy_shape),
         "reward_config": asdict(reward_config),
         "policy_weights": str(policy_weights),
+        "prompt_structural_targets": prompt_structural_target_metadata(prompt_targets),
         "ppo": {
             "clip_range": args.ppo_clip_range,
             "value_loss_coef": args.value_loss_coef,
