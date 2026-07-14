@@ -482,6 +482,8 @@ The best full-PPO setup measured so far is 16 rollout trajectories with replay/b
 
 The `--target-structure-abc` value below is a fallback. For the standard `goldberg_ppo_prompts_e3_header_allvoices.jsonl`, each prompt row has `source`, so PPO scores `bar_count_reward` and chooses rollout stopping length from the selected prompt variation rather than always from variation 01.
 
+For one-step diagnostic runs, add `--post-step-kl-check --position-diagnostic-bins 5 --save-patch-diagnostics` and pull the full `result.json` before deleting the instance. The compact position summaries live at `steps[*].logprob_advantage_diagnostics.by_relative_patch_position`; the raw local analysis rows live at `steps[*].patch_diagnostics`. Patch diagnostics include total reward fields plus component reward and lambda-return columns for structural, chroma, harmony, residual, and atomic subrewards.
+
 ```bash
 $SSH "$HOST" "cd $REMOTE_REPO && \
   export PYTHONPATH=$REMOTE_NOTAGEN:$REMOTE_REPO:\$PYTHONPATH && \
