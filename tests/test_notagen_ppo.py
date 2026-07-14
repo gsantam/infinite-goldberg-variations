@@ -8,8 +8,10 @@ try:
     from transformers import GPT2Config
 
     from scripts.custom_ppo_notagen import (
+        PatchRewardTrace,
         PatchValueHead,
         RewardEvent,
+        RewardScore,
         _dtw_metric_reward_events,
         _project_reward_events_to_patches,
         _stream_line_end_patch_indices,
@@ -29,7 +31,12 @@ try:
         value_mse_loss,
         value_prediction_metrics,
     )
-    from scripts.notagen_ppo_diagnostics import logprob_advantage_diagnostics
+    from scripts.notagen_ppo_diagnostics import (
+        component_lambda_return_tensors,
+        component_reward_tensors,
+        logprob_advantage_diagnostics,
+        per_patch_diagnostic_records,
+    )
     from scripts.custom_grpo_notagen import PATCH_SIZE
     from utils import NotaGenLMHeadModel
 except ModuleNotFoundError as exc:
@@ -255,6 +262,102 @@ class NotaGenPPOTests(unittest.TestCase):
             diagnostics["per_trajectory"][1]["negative_advantage_negative_log_ratio_fraction"],
             1.0 / 3.0,
         )
+
+    def test_logprob_advantage_diagnostics_reports_relative_patch_position_bins(self):
+        diagnostics = logprob_advantage_diagnostics(
+            old_logprobs=torch.zeros(5),
+            post_step_logprobs=torch.tensor([0.1, -0.2, 0.3, 0.4, -0.5]),
+            raw_advantages=torch.tensor([1.0, 2.0, -1.0, -2.0, -3.0]),
+            normalized_advantages=torch.tensor([0.5, 1.0, -0.25, -0.75, -1.0]),
+            patch_rewards=torch.tensor([0.2, 0.1, -0.1, 0.0, 0.3]),
+            returns=torch.zeros(5),
+            value_targets=torch.zeros(5),
+            old_values=torch.zeros(5),
+            trajectory_lengths=[2, 3],
+            trajectory_logs=[{"trajectory_index": 0}, {"trajectory_index": 1}],
+            clip_range=0.2,
+            position_bins=2,
+        )
+
+        bins = diagnostics["by_relative_patch_position"]
+        self.assertEqual(len(bins), 2)
+        self.assertEqual(bins[0]["count"], 2)
+        self.assertEqual(bins[1]["count"], 3)
+        self.assertAlmostEqual(bins[0]["positive_advantage_positive_log_ratio_fraction"], 1.0)
+        self.assertAlmostEqual(bins[0]["negative_advantage_negative_log_ratio_fraction"], 0.0)
+        self.assertAlmostEqual(bins[1]["positive_advantage_positive_log_ratio_fraction"], 0.0)
+        self.assertAlmostEqual(bins[1]["negative_advantage_negative_log_ratio_fraction"], 0.5)
+
+    def test_per_patch_diagnostic_records_include_position_and_raw_fields(self):
+        records = per_patch_diagnostic_records(
+            old_logprobs=torch.zeros(3),
+            post_step_logprobs=torch.tensor([0.1, -0.2, 0.3]),
+            raw_advantages=torch.tensor([1.0, -1.0, 2.0]),
+            normalized_advantages=torch.tensor([0.5, -0.5, 1.0]),
+            patch_rewards=torch.tensor([0.2, -0.1, 0.3]),
+            returns=torch.tensor([0.4, 0.2, 0.3]),
+            value_targets=torch.tensor([0.5, 0.1, 0.2]),
+            old_values=torch.tensor([0.0, 0.0, 0.0]),
+            trajectory_lengths=[1, 2],
+            component_rewards={
+                "structural_total_reward": torch.tensor([0.2, -0.1, 0.3]),
+                "aria_chroma_harmonic_hist_effective": torch.tensor([0.0, 0.0, 0.4]),
+            },
+            component_lambda_returns={
+                "structural_total_reward": torch.tensor([0.2, 0.185, 0.3]),
+                "aria_chroma_harmonic_hist_effective": torch.tensor([0.0, 0.38, 0.4]),
+            },
+        )
+
+        self.assertEqual(len(records), 3)
+        self.assertEqual(records[0]["trajectory_index"], 0)
+        self.assertEqual(records[0]["trajectory_patch_index"], 0)
+        self.assertAlmostEqual(records[0]["trajectory_relative_position"], 0.0)
+        self.assertEqual(records[1]["trajectory_index"], 1)
+        self.assertEqual(records[1]["trajectory_patch_index"], 0)
+        self.assertAlmostEqual(records[1]["trajectory_relative_position"], 0.0)
+        self.assertEqual(records[2]["trajectory_index"], 1)
+        self.assertEqual(records[2]["trajectory_patch_index"], 1)
+        self.assertAlmostEqual(records[2]["trajectory_relative_position"], 1.0)
+        self.assertAlmostEqual(records[2]["post_step_log_ratio"], 0.3)
+        self.assertAlmostEqual(records[2]["raw_advantage"], 2.0)
+        self.assertAlmostEqual(records[2]["structural_total_reward__reward"], 0.3)
+        self.assertAlmostEqual(records[2]["structural_total_reward__lambda_return"], 0.3)
+        self.assertAlmostEqual(records[1]["aria_chroma_harmonic_hist_effective__reward"], 0.0)
+        self.assertAlmostEqual(records[1]["aria_chroma_harmonic_hist_effective__lambda_return"], 0.38)
+
+    def test_component_reward_tensors_include_derived_reward_families(self):
+        traces = [
+            PatchRewardTrace(
+                rewards=[1.2, 2.3],
+                prefix_totals=[1.2, 3.5],
+                final_score=RewardScore(total=3.5, breakdown={}),
+                component_rewards={
+                    "parse_reward": [0.0, 0.25],
+                    "bar_count_reward": [0.5, 0.5],
+                    "aria_chroma_harmonic_hist_effective": [0.0, 1.0],
+                    "aria_harmony_root_dtw_effective": [0.2, 0.0],
+                    "other_residual": [0.5, 0.55],
+                },
+                component_prefix_totals={},
+            )
+        ]
+
+        tensors = component_reward_tensors(traces, device=torch.device("cpu"))
+
+        self.assertTrue(torch.allclose(tensors["parse_reward"], torch.tensor([0.0, 0.25])))
+        self.assertTrue(torch.allclose(tensors["structural_total_reward"], torch.tensor([0.5, 0.75])))
+        self.assertTrue(torch.allclose(tensors["aria_harmony_dtw_effective"], torch.tensor([0.2, 0.0])))
+        self.assertTrue(torch.allclose(tensors["effective_similarity_reward"], torch.tensor([0.2, 1.0])))
+        self.assertTrue(torch.allclose(tensors["total_reward"], torch.tensor([1.2, 2.3])))
+
+        lambda_returns = component_lambda_return_tensors(
+            traces,
+            gamma=1.0,
+            gae_lambda=0.5,
+            device=torch.device("cpu"),
+        )
+        self.assertTrue(torch.allclose(lambda_returns["structural_total_reward"], torch.tensor([0.875, 0.75])))
 
     def test_ppo_microbatch_loss_matches_full_batch_normalization(self):
         old_logprobs = torch.tensor([-4.0, -3.0, -2.0, -2.5, -3.5])

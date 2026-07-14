@@ -5,6 +5,7 @@ import json
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -22,7 +23,33 @@ from grpo.notagen_wrapper import (
     split_metadata_and_tunebody_lines,
     trim_to_stream_lines,
 )
-from grpo.stream_tags import stream_target_reached
+from evaluation.stream_tags import stream_target_reached
+
+
+def load_prefix_specs(*, prefix: Path | None, prefix_manifest: Path | None) -> list[dict[str, Any]]:
+    if (prefix is None) == (prefix_manifest is None):
+        raise ValueError("provide exactly one of --prefix or --prefix-manifest")
+
+    if prefix is not None:
+        return [{"prefix": str(prefix), "prefix_name": prefix.stem}]
+
+    assert prefix_manifest is not None
+    rows = []
+    for line in prefix_manifest.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        row = json.loads(line)
+        if "prefix" not in row:
+            raise ValueError(f"prefix manifest row is missing 'prefix': {row}")
+        prefix_path = Path(row["prefix"])
+        if not prefix_path.is_absolute():
+            prefix_path = prefix_manifest.parent / prefix_path
+            if not prefix_path.exists():
+                prefix_path = PROJECT_ROOT / row["prefix"]
+        rows.append({**row, "prefix": str(prefix_path), "prefix_name": prefix_path.stem})
+    if not rows:
+        raise ValueError(f"empty prefix manifest: {prefix_manifest}")
+    return rows
 
 
 def sample_completion_cached(
@@ -141,7 +168,9 @@ def sample_completion_cached(
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--weights", required=True)
-    parser.add_argument("--prefix", required=True)
+    prefix_group = parser.add_mutually_exclusive_group(required=True)
+    prefix_group.add_argument("--prefix")
+    prefix_group.add_argument("--prefix-manifest")
     parser.add_argument("--out-dir", required=True)
     parser.add_argument("--seeds", type=int, nargs="+", default=[0, 1, 2])
     parser.add_argument("--precision", default="bf16", choices=["fp32", "bf16"])
@@ -155,13 +184,20 @@ def main() -> int:
     args = parser.parse_args()
 
     weights = Path(args.weights)
-    prefix_text = Path(args.prefix).read_text(encoding="utf-8")
+    prefix_specs = load_prefix_specs(
+        prefix=Path(args.prefix) if args.prefix else None,
+        prefix_manifest=Path(args.prefix_manifest) if args.prefix_manifest else None,
+    )
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     model, model_shape = build_model(weights, precision=args.precision)
     summary = []
-    for seed in args.seeds:
+    for sample_idx, seed in enumerate(args.seeds):
+        prefix_spec = prefix_specs[sample_idx % len(prefix_specs)]
+        prefix_path = Path(prefix_spec["prefix"])
+        prefix_text = prefix_path.read_text(encoding="utf-8")
+        prefix_name = str(prefix_spec["prefix_name"])
         set_seed(seed)
         t0 = time.perf_counter()
         full_text, generated_patches, meta = sample_completion_cached(
@@ -178,11 +214,13 @@ def main() -> int:
             precision=args.precision,
         )
         elapsed_s = time.perf_counter() - t0
-        out_path = out_dir / f"notagen_large_rerun_cached_seed{seed}.abc"
+        out_path = out_dir / f"notagen_large_rerun_cached_{prefix_name}_seed{seed}.abc"
         out_path.write_text(full_text, encoding="utf-8")
         row = {
             "seed": seed,
             "path": str(out_path),
+            "prefix_path": str(prefix_path),
+            "prefix_name": prefix_name,
             "generated_patches": len(generated_patches),
             "chars": len(full_text),
             "stream_lines": count_stream_lines(full_text),

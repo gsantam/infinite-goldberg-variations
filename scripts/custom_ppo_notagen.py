@@ -60,7 +60,21 @@ from scripts.custom_grpo_notagen import (
     select_device,
     set_seed,
 )
-from scripts.notagen_ppo_diagnostics import logprob_advantage_diagnostics, value_prediction_metrics
+from scripts.notagen_ppo_diagnostics import (
+    aggregate_component_sums,
+    component_group_rewards,
+    component_group_sums,
+    component_lambda_return_tensors,
+    component_prefix_totals,
+    component_reward_sums,
+    component_reward_tensors,
+    logprob_advantage_diagnostics,
+    masked_tensor_mean,
+    per_patch_diagnostic_records,
+    prefix_totals,
+    tensor_correlation,
+    value_prediction_metrics,
+)
 from utils import NotaGenLMHeadModel, Patchilizer
 
 
@@ -103,6 +117,8 @@ class PatchRewardTrace:
     rewards: list[float]
     prefix_totals: list[float]
     final_score: RewardScore
+    component_rewards: dict[str, list[float]]
+    component_prefix_totals: dict[str, list[float]]
 
 
 @dataclass
@@ -1015,10 +1031,10 @@ def _stream_line_end_patch_indices(completion_text: str, patch_texts: list[str])
     return [min(bisect.bisect_left(cumulative_offsets, end), len(patch_texts) - 1) for end in ends]
 
 
-def _line_reward_events(completion_text: str, line_rewards: list[float]) -> list[RewardEvent]:
+def _line_reward_events(completion_text: str, line_rewards: list[float], *, name: str = "structural_line") -> list[RewardEvent]:
     spans = _stream_line_spans(completion_text)
     return [
-        RewardEvent(start=start, end=end, value=float(value), name="structural_line")
+        RewardEvent(start=start, end=end, value=float(value), name=name)
         for (start, end), value in zip(spans, line_rewards, strict=False)
         if value != 0.0
     ]
@@ -1128,7 +1144,7 @@ def _harmony_reward_events(
         total_value = _effective_similarity_component(weight_per_metric * metric_score, final_score)
         events.extend(
             _dtw_metric_reward_events(
-                name=metric_name,
+                name=f"{metric_name}_effective",
                 reference=reference,
                 candidate=candidate,
                 candidate_spans=candidate_spans,
@@ -1166,6 +1182,27 @@ def _project_reward_events_to_patches(events: list[RewardEvent], patch_texts: li
     return rewards
 
 
+def _project_reward_events_by_name_to_patches(
+    events: list[RewardEvent],
+    patch_texts: list[str],
+) -> dict[str, list[float]]:
+    event_names = sorted({event.name for event in events})
+    return {
+        name: _project_reward_events_to_patches(
+            [event for event in events if event.name == name],
+            patch_texts,
+        )
+        for name in event_names
+    }
+
+
+def _terminal_patch_rewards(patch_count: int, value: float) -> list[float]:
+    rewards = [0.0 for _idx in range(patch_count)]
+    if rewards and value != 0.0:
+        rewards[-1] = float(value)
+    return rewards
+
+
 def _countdown_local_rewards(stream_lines) -> np.ndarray:
     if not stream_lines:
         return np.zeros(0, dtype=np.float32)
@@ -1180,15 +1217,15 @@ def _countdown_local_rewards(stream_lines) -> np.ndarray:
     return rewards
 
 
-def _single_pass_line_rewards(
+def _single_pass_line_reward_components(
     *,
     full_text: str,
     target,
     reward_config: GoldbergRewardConfig,
-) -> list[float]:
+) -> dict[str, list[float]]:
     stream_lines = _extract_stream_line_features(full_text)
     if not stream_lines:
-        return []
+        return {}
 
     n = len(stream_lines)
     header = _extract_header_context(full_text)
@@ -1211,16 +1248,18 @@ def _single_pass_line_rewards(
         score_voice[idx] = grammar_metrics.score_voice_reward
 
     line_denominator = float(max(1, n))
-    line_rewards = (
-        reward_config.countdown_weight * countdown / line_denominator
-        + reward_config.line_closure_weight * closure / line_denominator
-        + reward_config.bar_token_weight * bar_token / line_denominator
-        + reward_config.meter_alignment_weight * meter_alignment / line_denominator
-        + reward_config.meter_duration_closeness_weight * meter_duration / line_denominator
-        + reward_config.bar_meter_consistency_weight * bar_meter / line_denominator
-        + reward_config.voice_declaration_weight * voice_decl / line_denominator
-        + reward_config.score_voice_weight * score_voice / line_denominator
-    )
+    components: dict[str, np.ndarray] = {
+        "countdown_reward": reward_config.countdown_weight * countdown / line_denominator,
+        "line_closure_reward": reward_config.line_closure_weight * closure / line_denominator,
+        "bar_token_reward": reward_config.bar_token_weight * bar_token / line_denominator,
+        "meter_alignment_reward": reward_config.meter_alignment_weight * meter_alignment / line_denominator,
+        "meter_duration_closeness_reward": (
+            reward_config.meter_duration_closeness_weight * meter_duration / line_denominator
+        ),
+        "bar_meter_consistency_reward": reward_config.bar_meter_consistency_weight * bar_meter / line_denominator,
+        "voice_declaration_reward": reward_config.voice_declaration_weight * voice_decl / line_denominator,
+        "score_voice_reward": reward_config.score_voice_weight * score_voice / line_denominator,
+    }
 
     counts = np.arange(1, n + 1, dtype=np.float32)
     previous_counts = np.arange(0, n, dtype=np.float32)
@@ -1228,9 +1267,31 @@ def _single_pass_line_rewards(
     if expected > 0:
         bar_count = np.maximum(0.0, 1.0 - np.abs(counts - expected) / expected)
         previous_bar_count = np.maximum(0.0, 1.0 - np.abs(previous_counts - expected) / expected)
-        line_rewards += reward_config.bar_count_weight * (bar_count - previous_bar_count)
+        components["bar_count_reward"] = reward_config.bar_count_weight * (bar_count - previous_bar_count)
+    else:
+        components["bar_count_reward"] = np.zeros(n, dtype=np.float32)
 
-    return [float(item) for item in line_rewards]
+    return {name: [float(item) for item in values] for name, values in components.items()}
+
+
+def _single_pass_line_rewards(
+    *,
+    full_text: str,
+    target,
+    reward_config: GoldbergRewardConfig,
+) -> list[float]:
+    components = _single_pass_line_reward_components(
+        full_text=full_text,
+        target=target,
+        reward_config=reward_config,
+    )
+    if not components:
+        return []
+    component_values = list(components.values())
+    return [
+        float(sum(values[idx] for values in component_values))
+        for idx in range(len(component_values[0]))
+    ]
 
 
 def patch_rewards_single_pass(
@@ -1277,33 +1338,66 @@ def patch_rewards_single_pass(
             similarity_timeout_s=similarity_timeout_s,
             max_similarity_reward=max_similarity_reward,
         )
-        return PatchRewardTrace(rewards=[], prefix_totals=[], final_score=final_score)
+        return PatchRewardTrace(
+            rewards=[],
+            prefix_totals=[],
+            final_score=final_score,
+            component_rewards={},
+            component_prefix_totals={},
+        )
 
-    line_rewards = _single_pass_line_rewards(
+    line_reward_components = _single_pass_line_reward_components(
         full_text=prompt_text + completion_text,
         target=target,
         reward_config=reward_config,
     )
-    reward_events = _line_reward_events(completion_text, line_rewards)
-    reward_events.extend(
-        _harmony_reward_events(
-            completion_text=completion_text,
-            similarity_weights=similarity_weights,
-            aria_similarity_ref=aria_similarity_ref,
-            final_score=final_score,
-            band_ratio=similarity_band_ratio,
+    component_rewards: dict[str, list[float]] = {}
+    for component_name, line_rewards in line_reward_components.items():
+        component_rewards[component_name] = _project_reward_events_to_patches(
+            _line_reward_events(completion_text, line_rewards, name=component_name),
+            patch_texts,
         )
-    )
-    rewards = _project_reward_events_to_patches(reward_events, patch_texts)
 
+    harmony_events = _harmony_reward_events(
+        completion_text=completion_text,
+        similarity_weights=similarity_weights,
+        aria_similarity_ref=aria_similarity_ref,
+        final_score=final_score,
+        band_ratio=similarity_band_ratio,
+    )
+    component_rewards.update(_project_reward_events_by_name_to_patches(harmony_events, patch_texts))
+
+    parse_component = reward_config.parse_weight * float(final_score.breakdown.get("parse_reward", 0.0))
+    component_rewards["parse_reward"] = _terminal_patch_rewards(len(patch_texts), parse_component)
+
+    chroma_component = _effective_similarity_component(
+        similarity_weights.aria_chroma * float(final_score.breakdown.get("aria_chroma_harmonic_hist", 0.0)),
+        final_score,
+    )
+    component_rewards["aria_chroma_harmonic_hist_effective"] = _terminal_patch_rewards(
+        len(patch_texts),
+        chroma_component,
+    )
+
+    rewards = [
+        float(sum(component_rewards[name][idx] for name in component_rewards))
+        for idx in range(len(patch_texts))
+    ]
     terminal_residual = final_score.total - sum(rewards)
-    rewards[-1] += terminal_residual
-    prefix_totals: list[float] = []
-    running = 0.0
-    for reward in rewards:
-        running += reward
-        prefix_totals.append(running)
-    return PatchRewardTrace(rewards=rewards, prefix_totals=prefix_totals, final_score=final_score)
+    if terminal_residual != 0.0:
+        component_rewards["other_residual"] = _terminal_patch_rewards(len(patch_texts), terminal_residual)
+        rewards[-1] += terminal_residual
+    else:
+        component_rewards["other_residual"] = [0.0 for _idx in patch_texts]
+
+    reward_prefix_totals = prefix_totals(rewards)
+    return PatchRewardTrace(
+        rewards=rewards,
+        prefix_totals=reward_prefix_totals,
+        final_score=final_score,
+        component_rewards=component_rewards,
+        component_prefix_totals=component_prefix_totals(component_rewards),
+    )
 
 
 def patch_rewards_from_prefix_deltas(**kwargs) -> PatchRewardTrace:
@@ -1483,6 +1577,73 @@ def _effective_microbatch_size(requested: int, total_items: int) -> int:
     if requested <= 0:
         return max(1, total_items)
     return max(1, int(requested))
+
+
+def compact_logprob_advantage_diagnostics(
+    *,
+    old_logprobs: torch.Tensor,
+    current_logprobs: torch.Tensor,
+    raw_advantages: torch.Tensor,
+    normalized_advantages: torch.Tensor,
+    patch_rewards: torch.Tensor,
+    clip_range: float,
+) -> dict:
+    old_logprobs_f = old_logprobs.detach().float()
+    current_logprobs_f = current_logprobs.detach().float()
+    raw_advantages_f = raw_advantages.detach().float()
+    normalized_advantages_f = normalized_advantages.detach().float()
+    patch_rewards_f = patch_rewards.detach().float()
+    if not (
+        old_logprobs_f.shape
+        == current_logprobs_f.shape
+        == raw_advantages_f.shape
+        == normalized_advantages_f.shape
+        == patch_rewards_f.shape
+    ):
+        raise RuntimeError(
+            "compact PPO diagnostic shape mismatch: "
+            f"old={tuple(old_logprobs_f.shape)} current={tuple(current_logprobs_f.shape)} "
+            f"raw_adv={tuple(raw_advantages_f.shape)} norm_adv={tuple(normalized_advantages_f.shape)} "
+            f"patch_reward={tuple(patch_rewards_f.shape)}"
+        )
+
+    log_ratio = current_logprobs_f - old_logprobs_f
+    ratio = torch.exp(log_ratio)
+    positive_advantage = raw_advantages_f > 0
+    negative_advantage = raw_advantages_f < 0
+    nonzero_advantage = raw_advantages_f != 0
+    sign_aligned = (log_ratio * raw_advantages_f) > 0
+    upper_clipped = ratio > (1.0 + float(clip_range))
+    lower_clipped = ratio < (1.0 - float(clip_range))
+    any_clipped = upper_clipped | lower_clipped
+    ppo_active_clipped = (positive_advantage & upper_clipped) | (negative_advantage & lower_clipped)
+    return {
+        "post_epoch_available": True,
+        "patch_count": int(log_ratio.numel()),
+        "approx_kl": float((((old_logprobs_f - current_logprobs_f) ** 2).mean() * 0.5).detach().cpu()),
+        "clip_fraction": float(any_clipped.float().mean().detach().cpu()),
+        "active_clip_fraction_nonzero_advantage": masked_tensor_mean(
+            ppo_active_clipped.float(),
+            nonzero_advantage,
+        ),
+        "log_ratio_mean": float(log_ratio.mean().detach().cpu()),
+        "log_ratio_std": float(log_ratio.std(unbiased=False).detach().cpu()),
+        "log_ratio_max_abs": float(log_ratio.abs().max().detach().cpu()),
+        "log_ratio_mean_positive_advantage": masked_tensor_mean(log_ratio, positive_advantage),
+        "log_ratio_mean_negative_advantage": masked_tensor_mean(log_ratio, negative_advantage),
+        "positive_advantage_positive_log_ratio_fraction": masked_tensor_mean(
+            (log_ratio > 0).float(),
+            positive_advantage,
+        ),
+        "negative_advantage_negative_log_ratio_fraction": masked_tensor_mean(
+            (log_ratio < 0).float(),
+            negative_advantage,
+        ),
+        "advantage_log_ratio_correlation": tensor_correlation(raw_advantages_f, log_ratio),
+        "normalized_advantage_log_ratio_correlation": tensor_correlation(normalized_advantages_f, log_ratio),
+        "patch_reward_log_ratio_correlation": tensor_correlation(patch_rewards_f, log_ratio),
+        "sign_alignment_fraction": masked_tensor_mean(sign_aligned.float(), nonzero_advantage),
+    }
 
 
 def run_ppo_replay_epoch_microbatched(
@@ -1860,9 +2021,12 @@ def run_ppo_smoke(
     prompt_targets: list[PromptStructuralTarget],
     reward_config: GoldbergRewardConfig,
     args,
+    behavior_policy_model: NotaGenLMHeadModel | None = None,
 ) -> dict:
     patchilizer = Patchilizer(stream=PATCH_STREAM)
     device = next(policy_model.parameters()).device
+    rollout_model = behavior_policy_model or policy_model
+    old_logprob_model = behavior_policy_model or policy_model
     optimizer = torch.optim.AdamW(
         [
             {"params": [param for param in policy_model.parameters() if param.requires_grad], "lr": args.learning_rate},
@@ -1871,8 +2035,15 @@ def run_ppo_smoke(
     )
     value_optimizer = torch.optim.AdamW(value_head.parameters(), lr=args.value_learning_rate)
     policy_model.eval()
+    if behavior_policy_model is not None:
+        behavior_policy_model.eval()
+        for param in behavior_policy_model.parameters():
+            param.requires_grad_(False)
     value_head.train()
     dropout_modules_disabled = disable_dropout_modules(policy_model)
+    behavior_dropout_modules_disabled = (
+        disable_dropout_modules(behavior_policy_model) if behavior_policy_model is not None else []
+    )
 
     similarity_weights = SimilarityRewardWeights(
         aria_chroma=args.aria_chroma_reward_weight,
@@ -1918,7 +2089,7 @@ def run_ppo_smoke(
 
         rollout_start = time.perf_counter()
         rollout_payloads = sample_ppo_rollouts(
-            policy_model=policy_model,
+            policy_model=rollout_model,
             policy_shape=policy_shape,
             prompt=prompt,
             target_stream_lines=target_stream_lines,
@@ -1963,6 +2134,10 @@ def run_ppo_smoke(
             reward_breakdown["patch_reward_mode"] = "single_pass_events_plus_terminal_residual"
             reward_breakdown["patch_reward_count"] = len(reward_trace.rewards)
             reward_breakdown["patch_reward_sum"] = float(sum(reward_trace.rewards))
+            patch_reward_component_sums = component_reward_sums(reward_trace.component_rewards)
+            patch_reward_groups = component_group_rewards(reward_trace.component_rewards, len(reward_trace.rewards))
+            reward_breakdown["patch_reward_component_sums"] = patch_reward_component_sums
+            reward_breakdown["patch_reward_group_sums"] = component_group_sums(patch_reward_component_sums)
             reward_traces.append(reward_trace)
             trajectory_logs.append(
                 {
@@ -1978,6 +2153,12 @@ def run_ppo_smoke(
                     "patch_reward_std": float(np.std(reward_trace.rewards)) if reward_trace.rewards else 0.0,
                     "patch_rewards": reward_trace.rewards,
                     "patch_reward_prefix_totals": reward_trace.prefix_totals,
+                    "patch_reward_components": reward_trace.component_rewards,
+                    "patch_reward_component_prefix_totals": reward_trace.component_prefix_totals,
+                    "patch_reward_component_sums": patch_reward_component_sums,
+                    "patch_reward_groups": patch_reward_groups,
+                    "patch_reward_group_prefix_totals": component_prefix_totals(patch_reward_groups),
+                    "patch_reward_group_sums": component_group_sums(patch_reward_component_sums),
                     "reward_breakdown": reward_breakdown,
                 }
             )
@@ -1993,6 +2174,7 @@ def run_ppo_smoke(
                 for trajectory_log in trajectory_logs
                 for reward in trajectory_log["patch_rewards"]
             ]
+            patch_reward_component_sums = aggregate_component_sums(reward_traces)
             step_log = {
                 "step": step_idx,
                 "prompt_index": prompt_idx,
@@ -2006,6 +2188,8 @@ def run_ppo_smoke(
                 "rollout_only": True,
                 "patch_reward_mean": float(np.mean(flattened_patch_rewards)) if flattened_patch_rewards else 0.0,
                 "patch_reward_std": float(np.std(flattened_patch_rewards)) if flattened_patch_rewards else 0.0,
+                "patch_reward_component_sums": patch_reward_component_sums,
+                "patch_reward_group_sums": component_group_sums(patch_reward_component_sums),
                 "scored_patches": int(sum(len(log["patch_rewards"]) for log in trajectory_logs)),
                 "reward": float(sample_rewards_array.mean()),
                 "reward_mean": float(sample_rewards_array.mean()),
@@ -2031,7 +2215,7 @@ def run_ppo_smoke(
         with torch.no_grad():
             for payload, reward_trace in zip(rollout_payloads, reward_traces, strict=True):
                 old_replay = trajectory_patch_logprobs_values(
-                    policy_model,
+                    old_logprob_model,
                     value_head,
                     prompt_flat,
                     payload.generated_patches,
@@ -2135,6 +2319,25 @@ def run_ppo_smoke(
             new_values = epoch_result.new_values
             value_return_metrics = value_prediction_metrics(new_values, batch_tensors.returns)
             value_target_metrics = value_prediction_metrics(new_values, batch_tensors.value_targets)
+            post_epoch_logprob_advantage_diag = None
+            if not args.no_step and args.post_epoch_kl_check:
+                post_epoch_start = time.perf_counter()
+                post_epoch_logprobs = post_step_replay_logprobs_microbatched(
+                    policy_model=policy_model,
+                    value_head=value_head,
+                    flat_prompt_ids=prompt_flat,
+                    rollout_payloads=rollout_payloads,
+                    args=args,
+                )
+                post_epoch_logprob_advantage_diag = compact_logprob_advantage_diagnostics(
+                    old_logprobs=old_logprobs,
+                    current_logprobs=post_epoch_logprobs,
+                    raw_advantages=batch_tensors.advantages,
+                    normalized_advantages=normalized_advantages,
+                    patch_rewards=batch_tensors.patch_rewards,
+                    clip_range=args.ppo_clip_range,
+                )
+                post_epoch_logprob_advantage_diag["duration_s"] = time.perf_counter() - post_epoch_start
             ppo_epoch_logs.append(
                 {
                     "epoch": ppo_epoch_idx,
@@ -2151,9 +2354,31 @@ def run_ppo_smoke(
                     "grad_norm": epoch_result.grad_norm,
                     "replay_microbatch_size": epoch_result.microbatch_size,
                     "replay_microbatch_count": epoch_result.microbatch_count,
+                    "post_epoch_logprob_advantage_diagnostics": post_epoch_logprob_advantage_diag,
                     "duration_s": time.perf_counter() - ppo_epoch_start,
                 }
             )
+            if args.print_epoch_logs:
+                epoch_log = ppo_epoch_logs[-1]
+                print(
+                    json.dumps(
+                        {
+                            "event": "ppo_epoch_complete",
+                            "step": step_idx,
+                            "epoch": ppo_epoch_idx,
+                            "loss": epoch_log["loss"],
+                            "policy_loss": epoch_log["policy_loss"],
+                            "approx_kl": epoch_log["approx_kl"],
+                            "clip_fraction": epoch_log["clip_fraction"],
+                            "grad_norm": epoch_log["grad_norm"],
+                            "duration_s": epoch_log["duration_s"],
+                            "post_epoch_logprob_advantage_diagnostics": (
+                                epoch_log["post_epoch_logprob_advantage_diagnostics"]
+                            ),
+                        }
+                    ),
+                    flush=True,
+                )
         if loss_payload is None:
             raise RuntimeError("PPO update produced no loss payload")
 
@@ -2207,6 +2432,7 @@ def run_ppo_smoke(
         patch_rewards = batch_tensors.patch_rewards
         returns = batch_tensors.returns
         value_targets = batch_tensors.value_targets
+        patch_reward_component_sums = aggregate_component_sums(reward_traces)
         logprob_advantage_diag = logprob_advantage_diagnostics(
             old_logprobs=old_logprobs,
             post_step_logprobs=post_step_logprobs,
@@ -2219,6 +2445,7 @@ def run_ppo_smoke(
             trajectory_lengths=trajectory_lengths,
             trajectory_logs=trajectory_logs,
             clip_range=args.ppo_clip_range,
+            position_bins=args.position_diagnostic_bins,
         )
         step_log = {
             "step": step_idx,
@@ -2263,6 +2490,7 @@ def run_ppo_smoke(
                 args.ppo_replay_microbatch_size,
                 len(rollout_payloads),
             ),
+            "frozen_behavior_policy": bool(behavior_policy_model is not None),
             "ppo_epoch_logs": ppo_epoch_logs,
             "value_warmup": value_warmup_log,
             "normalize_value_loss": args.normalize_value_loss,
@@ -2275,6 +2503,8 @@ def run_ppo_smoke(
             "patch_reward_mean": float(patch_rewards.mean().detach().cpu()),
             "patch_reward_std": float(patch_rewards.std(unbiased=False).detach().cpu()),
             "patch_rewards": patch_rewards.detach().cpu().tolist(),
+            "patch_reward_component_sums": patch_reward_component_sums,
+            "patch_reward_group_sums": component_group_sums(patch_reward_component_sums),
             "patch_reward_prefix_totals": (
                 trajectory_logs[0]["patch_reward_prefix_totals"] if len(trajectory_logs) == 1 else None
             ),
@@ -2293,6 +2523,27 @@ def run_ppo_smoke(
             "trajectories": trajectory_logs,
             "timings": timings,
         }
+        if args.save_patch_diagnostics:
+            diagnostic_component_rewards = component_reward_tensors(reward_traces, device=device)
+            diagnostic_component_lambda_returns = component_lambda_return_tensors(
+                reward_traces,
+                gamma=args.gamma,
+                gae_lambda=args.gae_lambda,
+                device=device,
+            )
+            step_log["patch_diagnostics"] = per_patch_diagnostic_records(
+                old_logprobs=old_logprobs,
+                post_step_logprobs=post_step_logprobs,
+                raw_advantages=batch_tensors.advantages,
+                normalized_advantages=normalized_advantages,
+                patch_rewards=patch_rewards,
+                returns=returns,
+                value_targets=value_targets,
+                old_values=old_values,
+                trajectory_lengths=trajectory_lengths,
+                component_rewards=diagnostic_component_rewards,
+                component_lambda_returns=diagnostic_component_lambda_returns,
+            )
         print(json.dumps({"event": "ppo_step_complete", **step_log}), flush=True)
         logs.append(step_log)
         del (
@@ -2319,6 +2570,7 @@ def run_ppo_smoke(
     return {
         "steps": logs,
         "policy_dropout_modules_disabled": dropout_modules_disabled,
+        "behavior_policy_dropout_modules_disabled": behavior_dropout_modules_disabled,
         "value_head": {
             **value_head.config(),
             "trainable_params": sum(param.numel() for param in value_head.parameters() if param.requires_grad),
@@ -2417,6 +2669,42 @@ def main() -> int:
         action="store_true",
         help="After optimizer.step(), replay the same trajectories and log post-update KL/clip diagnostics.",
     )
+    parser.add_argument(
+        "--post-epoch-kl-check",
+        action="store_true",
+        help=(
+            "After each PPO epoch optimizer step, replay the same trajectories and log compact "
+            "post-update advantage/log-ratio diagnostics against the fixed old logprobs."
+        ),
+    )
+    parser.add_argument(
+        "--print-epoch-logs",
+        action="store_true",
+        help="Print one compact JSON event after each PPO epoch. Useful for long fixed-behavior diagnostics.",
+    )
+    parser.add_argument(
+        "--frozen-behavior-policy",
+        action="store_true",
+        help=(
+            "Build a separate frozen copy of the initial policy and use it for rollouts and old logprobs "
+            "across all PPO steps. This samples fresh trajectories from a fixed pi_old while training "
+            "the main policy."
+        ),
+    )
+    parser.add_argument(
+        "--position-diagnostic-bins",
+        type=int,
+        default=5,
+        help="Number of relative patch-position bins to summarize in PPO logprob/advantage diagnostics. Use 0 to disable.",
+    )
+    parser.add_argument(
+        "--save-patch-diagnostics",
+        action="store_true",
+        help=(
+            "Persist one row per generated patch with logprobs, advantages, rewards, returns, values, "
+            "and relative position. Useful for local slicing, but can make result.json large."
+        ),
+    )
     args = parser.parse_args()
 
     set_seed(args.seed)
@@ -2435,6 +2723,21 @@ def main() -> int:
     if args.resume_checkpoint_dir:
         resume_payload = load_policy_checkpoint(policy_model, Path(args.resume_checkpoint_dir))
         print(f"Resumed policy LoRA checkpoint from {args.resume_checkpoint_dir}")
+    behavior_policy_model = None
+    if args.frozen_behavior_policy:
+        behavior_policy_model = build_model(
+            policy_weights,
+            device,
+            lora_r=args.lora_r,
+            lora_alpha=args.lora_alpha,
+            lora_dropout=args.lora_dropout,
+            precision=args.precision,
+            freeze_before_precision_cast=True,
+        )
+        if args.resume_checkpoint_dir:
+            load_policy_checkpoint(behavior_policy_model, Path(args.resume_checkpoint_dir))
+            print(f"Loaded frozen behavior policy LoRA checkpoint from {args.resume_checkpoint_dir}")
+        print("Frozen behavior policy enabled for rollouts and old logprobs")
     value_head, value_head_load = build_value_head(policy_shape, args, device)
     prompts = load_prompt_rows(args.prompts_jsonl, limit=args.prompt_limit)
     prompt_targets = load_prompt_structural_targets(prompts, args)
@@ -2447,6 +2750,7 @@ def main() -> int:
         prompt_targets=prompt_targets,
         reward_config=reward_config,
         args=args,
+        behavior_policy_model=behavior_policy_model,
     )
     if args.save_value_head_weights:
         save_value_head_checkpoint(value_head, args.save_value_head_weights)
@@ -2468,6 +2772,7 @@ def main() -> int:
             "gamma": args.gamma,
             "gae_lambda": args.gae_lambda,
             "ppo_epochs": args.ppo_epochs,
+            "frozen_behavior_policy": args.frozen_behavior_policy,
             "value_warmup_epochs": args.value_warmup_epochs,
             "normalize_value_loss": args.normalize_value_loss,
             "value_loss_scale_min": args.value_loss_scale_min,

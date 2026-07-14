@@ -84,6 +84,20 @@ Capture these in the next full PPO diagnostic run:
 
 - Persist the full remote `result.json` before deleting the instance.
 - Save sampled trajectories and the exact local replay command.
+- Use `--position-diagnostic-bins 5` to save beginning/middle/end-style summaries under
+  `steps[*].logprob_advantage_diagnostics.by_relative_patch_position`.
+- Use `--save-patch-diagnostics` for diagnostic runs where we want to slice locally after the fact. This saves one row per generated patch under `steps[*].patch_diagnostics`, including:
+  - trajectory index and patch index
+  - relative position inside the trajectory
+  - old logprob
+  - post-step logprob and log-ratio, when `--post-step-kl-check` is enabled
+  - raw and normalized advantage
+  - patch reward
+  - component patch rewards and component lambda-returns, with columns like
+    `structural_total_reward__reward`, `aria_harmony_dtw_effective__lambda_return`,
+    and atomic subrewards such as `bar_count_reward__reward`
+  - return and value target
+  - old value
 - Log split PPO clipping:
   - overall any/upper/lower clip fraction
   - positive-advantage any/upper/lower clip fraction
@@ -117,3 +131,5 @@ Capture these in the next full PPO diagnostic run:
   - old logprob/value replay
   - PPO replay/backprop
   - post-step diagnostic replay
+
+For the existing `ppo_e3_prompt1_t16_lr1e5_ep2_step10_20260712T225720Z` run, exact per-position log-ratio/advantage diagnostics cannot be reconstructed from `result.json`: it saved trajectories and patch rewards, but not the per-patch old/post logprobs, old values, or advantages. It also only retained the final checkpoint, so step-1 post-update logprobs cannot be replayed exactly. Future diagnostic runs should use the flags above before deleting the remote instance.
