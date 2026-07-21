@@ -345,11 +345,71 @@ def _fraction_component_too_large(value: Fraction, limit: int) -> bool:
     return abs(value.numerator) > limit or abs(value.denominator) > limit
 
 
+def _balanced_abc_construct_guard_tripped(text: str) -> bool:
+    for raw_line in text.splitlines():
+        if raw_line.count('"') % 2 != 0:
+            return True
+        line = re.sub(r'"[^"\n]*"', " ", raw_line)
+        bracket_line = line.replace("|]", "|").replace("[|", "|")
+        bracket_line = re.sub(r"\[\d+", " ", bracket_line)
+        if bracket_line.count("[") != bracket_line.count("]"):
+            return True
+        if line.count("{") != line.count("}"):
+            return True
+        if line.count("!") % 2 != 0:
+            return True
+    return False
+
+
+def _inline_field_guard_tripped(field: str, value: str, config: GoldbergRewardConfig) -> bool:
+    value = value.strip()
+    if not value:
+        return True
+    if field == "V":
+        return bool(re.search(r"[\[\]\n]", value))
+    if field in {"M", "L"}:
+        parsed = _parse_fraction_token(value, Fraction(0, 1))
+        return parsed <= 0 or _fraction_component_too_large(parsed, config.max_music21_meter_component)
+    if field == "K":
+        return bool(re.search(r"[\[\]\n]", value))
+    # Keep the preflight conservative: these are the inline fields this reward
+    # path expects to see in generated NotaGen ABC.
+    return field not in {"I", "P", "Q"}
+
+
+def _bracket_token_guard_tripped(content: str, config: GoldbergRewardConfig) -> bool:
+    if not content or "[" in content or "]" in content or "\n" in content:
+        return True
+    field_match = re.match(r"^([A-Za-z]):(.*)$", content)
+    if field_match:
+        return _inline_field_guard_tripped(field_match.group(1), field_match.group(2), config)
+    if ":" in content or "|" in content:
+        return True
+    if not re.search(r"[_=^]*[A-Ga-gxz]", content):
+        return True
+
+    note_pattern = re.compile(r"[_=^]*[A-Ga-gxz][,']*(?:\d+(?:/\d*)?|/\d+|/)?")
+    remainder = note_pattern.sub(" ", content)
+    remainder = re.sub(r"[\s,\-/_=^']+", " ", remainder)
+    return bool(remainder.strip())
+
+
+def _abc_tokenize_valid(renderable_abc_text: str) -> bool:
+    try:
+        abcFormat.ABCFile().readstr(renderable_abc_text)
+        return True
+    except Exception:
+        return False
+
+
 def _music21_parse_guard_tripped(
     abc_text: str,
     stream_lines: list[StreamLineFeatures],
     config: GoldbergRewardConfig,
 ) -> bool:
+    if _balanced_abc_construct_guard_tripped(abc_text):
+        return True
+
     meter_tokens = re.findall(r"(?:^|\n)M:([^\s\]]+)|\[M:([^\]]+)\]", abc_text)
     for header_token, inline_token in meter_tokens:
         token = header_token or inline_token
@@ -358,11 +418,15 @@ def _music21_parse_guard_tripped(
             return True
 
     token_pattern = re.compile(r"(\[[^\]]+\]|[_=^]*[A-Ga-gxz][,']*)(\d+(?:/\d*)?|/\d+|/)?")
-    bracket_token_pattern = re.compile(r"\[([^\]\n]+)\](\d+(?:/\d*)?|/\d+|/)?")
+    bracket_token_pattern = re.compile(r"\[([^\]\n]*)\](\d+(?:/\d*)?|/\d+|/)?")
     bracket_note_pattern = re.compile(r"[_=^]*[A-Ga-gxz][,']*(\d+(?:/\d*)?|/\d+|/)?")
     for line in stream_lines:
         cleaned = re.sub(r'"[^"\n]*"', " ", line.body)
         cleaned = re.sub(r"![^!\n]*!", " ", cleaned)
+        for match in bracket_token_pattern.finditer(cleaned):
+            content = match.group(1)
+            if _bracket_token_guard_tripped(content, config):
+                return True
         cleaned = re.sub(r"\[[A-Za-z]:[^\]]*\]", " ", cleaned)
         for match in bracket_token_pattern.finditer(cleaned):
             content = match.group(1)
@@ -394,15 +458,14 @@ def _extract_music21_candidate_features(
         raise ValueError(f"unsupported parse_validation_mode: {config.parse_validation_mode}")
     if _music21_parse_guard_tripped(abc_text, stream_lines, config):
         return False
+    renderable_abc = _ensure_renderable_abc(abc_text)
+    if not _abc_tokenize_valid(renderable_abc):
+        return False
     if mode == "abc-tokenize":
-        try:
-            abcFormat.ABCFile().readstr(_ensure_renderable_abc(abc_text))
-            return True
-        except Exception:
-            return False
+        return True
     try:
         with _music21_parse_time_limit(config.music21_parse_timeout_s):
-            converter.parseData(_ensure_renderable_abc(abc_text), format="abc")
+            converter.parseData(renderable_abc, format="abc")
         return True
     except Exception:
         return False
