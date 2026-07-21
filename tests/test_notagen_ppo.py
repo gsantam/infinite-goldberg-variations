@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 try:
     import torch
@@ -30,6 +31,7 @@ try:
         normalize_advantages,
         ppo_clipped_loss,
         save_value_head_checkpoint,
+        sample_ppo_rollouts,
         score_ppo_rollout_payloads,
         terminal_returns,
         trajectory_patch_hidden_states,
@@ -185,6 +187,183 @@ class NotaGenPPOTests(unittest.TestCase):
         self.assertEqual(parallel.reward_summary, serial.reward_summary)
         self.assertEqual(parallel.trajectory_logs, serial.trajectory_logs)
         self.assertEqual(parallel.reward_traces, serial.reward_traces)
+
+    def test_zero_policy_records_failed_batched_rollout_without_retrying(self):
+        prompt = "X:1\nT:Zero failed rollout test\nM:3/4\nL:1/8\nK:C\n"
+
+        def fake_batch(**kwargs):
+            return [
+                SimpleNamespace(
+                    ok=True,
+                    full_text=prompt + "[r:0/1][V:1]C2 D2 E2|\n",
+                    generated_patches=[[ord("C")]],
+                    meta={"stop_reason": "target_stream_lines"},
+                    error=None,
+                ),
+                SimpleNamespace(
+                    ok=False,
+                    full_text=None,
+                    generated_patches=None,
+                    meta={},
+                    error="early eos",
+                ),
+            ]
+
+        args = SimpleNamespace(
+            trajectories_per_step=2,
+            rollout_batch_size=2,
+            cached_rollout=True,
+            rollout_retries=3,
+            rollout_failure_policy="zero",
+            seed=7,
+            temperature=1.0,
+            top_k=8,
+            top_p=0.95,
+            max_chars=100,
+            max_generated_patches=10,
+            timeout_s=5,
+            precision="fp32",
+        )
+        with patch("scripts.custom_ppo_notagen.sample_completions_cached_batch", side_effect=fake_batch) as mocked:
+            payloads = sample_ppo_rollouts(
+                policy_model=object(),
+                policy_shape=object(),
+                prompt=prompt,
+                target_stream_lines=1,
+                step_idx=2,
+                args=args,
+            )
+
+        self.assertEqual(mocked.call_count, 1)
+        self.assertEqual([payload.trajectory_index for payload in payloads], [0, 1])
+        self.assertFalse(payloads[0].meta.get("rollout_failed", False))
+        self.assertEqual(payloads[0].generated_patches, [[ord("C")]])
+        self.assertTrue(payloads[1].meta["rollout_failed"])
+        self.assertTrue(payloads[1].meta["zero_contribution_rollout"])
+        self.assertEqual(payloads[1].generated_patches, [])
+        self.assertEqual(payloads[1].full_text, prompt)
+
+    def test_spares_policy_keeps_first_successful_candidates_without_retrying(self):
+        prompt = "X:1\nT:Spares rollout test\nM:3/4\nL:1/8\nK:C\n"
+
+        def fake_batch(**kwargs):
+            self.assertEqual(len(kwargs["seeds"]), 3)
+            return [
+                SimpleNamespace(
+                    ok=False,
+                    full_text=None,
+                    generated_patches=None,
+                    meta={},
+                    error="early eos",
+                ),
+                SimpleNamespace(
+                    ok=True,
+                    full_text=prompt + "[r:0/1][V:1]C2 D2 E2|\n",
+                    generated_patches=[[ord("C")]],
+                    meta={"stop_reason": "target_stream_lines"},
+                    error=None,
+                ),
+                SimpleNamespace(
+                    ok=True,
+                    full_text=prompt + "[r:0/1][V:1]F2 G2 A2|\n",
+                    generated_patches=[[ord("F")]],
+                    meta={"stop_reason": "target_stream_lines"},
+                    error=None,
+                ),
+            ]
+
+        args = SimpleNamespace(
+            trajectories_per_step=2,
+            rollout_batch_size=2,
+            cached_rollout=True,
+            rollout_retries=3,
+            rollout_failure_policy="spares",
+            rollout_spares_percent=50.0,
+            seed=7,
+            temperature=1.0,
+            top_k=8,
+            top_p=0.95,
+            max_chars=100,
+            max_generated_patches=10,
+            timeout_s=5,
+            precision="fp32",
+        )
+        with patch("scripts.custom_ppo_notagen.sample_completions_cached_batch", side_effect=fake_batch) as mocked:
+            payloads = sample_ppo_rollouts(
+                policy_model=object(),
+                policy_shape=object(),
+                prompt=prompt,
+                target_stream_lines=1,
+                step_idx=2,
+                args=args,
+            )
+
+        self.assertEqual(mocked.call_count, 1)
+        self.assertEqual([payload.trajectory_index for payload in payloads], [0, 1])
+        self.assertEqual([payload.meta["rollout_candidate_index"] for payload in payloads], [1, 2])
+        self.assertEqual([payload.generated_patches for payload in payloads], [[[ord("C")]], [[ord("F")]]])
+        self.assertEqual(payloads[0].meta["rollout_sampled_candidates"], 3)
+        self.assertEqual(payloads[0].meta["rollout_success_candidates"], 2)
+        self.assertEqual(payloads[0].meta["rollout_failed_candidates"], 1)
+        self.assertEqual(payloads[0].meta["rollout_dropped_candidates"], 1)
+        self.assertEqual(payloads[0].meta["rollout_dropped_success_candidates"], 0)
+        self.assertEqual(payloads[0].meta["rollout_effective_batch_size"], 3)
+
+    def test_failed_rollout_scores_as_empty_zero_contribution_trace(self):
+        prompt = "X:1\nT:Failed rollout score test\nM:3/4\nL:1/8\nK:C\n"
+        target = StructuralTarget(expected_bars=1, expected_structure_bars=1)
+        prompt_target = PromptStructuralTarget(
+            target=target,
+            structure_path="<test>",
+            source_key="failed_rollout_test",
+        )
+        payload = PPORolloutPayload(
+            trajectory_index=3,
+            rollout_seed=44,
+            full_text=prompt,
+            generated_patches=[],
+            meta={
+                "cached_rollout": True,
+                "batched_rollout": True,
+                "rollout_batch_size": 2,
+                "rollout_target_stream_lines": 1,
+                "rollout_failed": True,
+                "zero_contribution_rollout": True,
+                "stop_reason": "rollout_failed",
+                "error": "early eos",
+            },
+        )
+
+        scored = score_ppo_rollout_payloads(
+            prompt=prompt,
+            prompt_idx=0,
+            prompt_name="failed_rollout_test",
+            prompt_target=prompt_target,
+            target=target,
+            target_stream_lines=1,
+            rollout_payloads=[payload],
+            reward_config=GoldbergRewardConfig(parse_validation_mode="abc-tokenize"),
+            similarity_weights=SimilarityRewardWeights(),
+            aria_similarity_ref=None,
+            args=SimpleNamespace(
+                similarity_chroma_bins=8,
+                similarity_band_ratio=0.25,
+                similarity_timeout_s=5.0,
+                max_similarity_reward=2.0,
+                reward_workers=0,
+            ),
+            step_idx=0,
+            candidate_name_prefix="failed_rollout",
+        )
+
+        self.assertEqual(scored.reward_summary["sample_rewards"], [0.0])
+        self.assertEqual(scored.reward_summary["reward_sum"], 0.0)
+        self.assertEqual(scored.reward_traces[0].rewards, [])
+        self.assertEqual(scored.reward_traces[0].final_score.total, 0.0)
+        self.assertEqual(scored.trajectory_logs[0]["reward"], 0.0)
+        self.assertEqual(scored.trajectory_logs[0]["patch_rewards"], [])
+        self.assertTrue(scored.trajectory_logs[0]["reward_breakdown"]["rollout_failed"])
+        self.assertTrue(scored.trajectory_logs[0]["reward_breakdown"]["zero_contribution_rollout"])
 
     def test_patch_replay_returns_one_logprob_and_value_per_aligned_patch(self):
         torch.manual_seed(0)
