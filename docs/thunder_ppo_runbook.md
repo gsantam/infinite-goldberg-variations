@@ -205,10 +205,10 @@ $SSH "$HOST" "cd $REMOTE_REPO && \
     --no-step \
     --cached-rollout \
     --precision bf16 \
-    --max-generated-patches 512 \
+    --max-generated-patches 256 \
     --timeout-s 900 \
     --replay-context-patches 128 \
-    --score-chunk-patches 16 \
+    --score-chunk-patches 64 \
     --gae-lambda 0.95"
 ```
 
@@ -317,7 +317,7 @@ $SSH "$HOST" "cd $REMOTE_REPO && \
     --rollout-only \
     --cached-rollout \
     --precision bf16 \
-    --max-generated-patches 512 \
+    --max-generated-patches 256 \
     --timeout-s 900 \
     --target-stream-lines 32"
 ```
@@ -376,7 +376,7 @@ python scripts/train_notagen_ppo_value_head_offline.py \
   --normalize-value-loss \
   --value-loss-scale-min 1.0 \
   --replay-context-patches 128 \
-  --score-chunk-patches 8 \
+  --score-chunk-patches 64 \
   --precision bf16 \
   --seed 0
 ```
@@ -426,10 +426,10 @@ $SSH "$HOST" "cd $REMOTE_REPO && \
     --prompt-limit 1 \
     --cached-rollout \
     --precision bf16 \
-    --max-generated-patches 512 \
+    --max-generated-patches 256 \
     --timeout-s 900 \
     --replay-context-patches 128 \
-    --score-chunk-patches 16 \
+    --score-chunk-patches 64 \
     --gae-lambda 0.95 \
     --value-warmup-epochs 1 \
     --ppo-epochs 1 \
@@ -459,10 +459,10 @@ $SSH "$HOST" "cd $REMOTE_REPO && \
     --rollout-retries 1 \
     --cached-rollout \
     --precision bf16 \
-    --max-generated-patches 512 \
+    --max-generated-patches 256 \
     --timeout-s 900 \
     --replay-context-patches 0 \
-    --score-chunk-patches 16 \
+    --score-chunk-patches 64 \
     --gae-lambda 0.95 \
     --value-warmup-epochs 1 \
     --ppo-epochs 1 \
@@ -484,6 +484,15 @@ The `--target-structure-abc` value below is a fallback. For the standard `goldbe
 
 For one-step diagnostic runs, add `--post-step-kl-check --position-diagnostic-bins 5 --save-patch-diagnostics` and pull the full `result.json` before deleting the instance. The compact position summaries live at `steps[*].logprob_advantage_diagnostics.by_relative_patch_position`; the raw local analysis rows live at `steps[*].patch_diagnostics`. Patch diagnostics include total reward fields plus component reward and lambda-return columns for structural, chroma, harmony, residual, and atomic subrewards.
 
+Advantage tracking is logged under `steps[*].advantage_summary` and repeated in the full diagnostic block at `steps[*].logprob_advantage_diagnostics.advantage_summary`. This includes raw and normalized advantage distributions, positive/negative/zero fractions, positive/negative means, absolute mean, and per-trajectory mean/sum distributions. To extract a compact time series from a completed run:
+
+```bash
+python scripts/summarize_ppo_advantages.py \
+  data/processed/notagen/remote_runs/<run>/result.json \
+  --output-csv data/processed/notagen/remote_runs/<run>/advantage_summary.csv \
+  --markdown
+```
+
 ```bash
 $SSH "$HOST" "cd $REMOTE_REPO && \
   export PYTHONPATH=$REMOTE_NOTAGEN:$REMOTE_REPO:\$PYTHONPATH && \
@@ -502,11 +511,11 @@ $SSH "$HOST" "cd $REMOTE_REPO && \
     --rollout-retries 8 \
     --cached-rollout \
     --precision bf16 \
-    --max-generated-patches 512 \
+    --max-generated-patches 256 \
     --timeout-s 1200 \
     --similarity-timeout-s 20 \
     --replay-context-patches 128 \
-    --score-chunk-patches 8 \
+    --score-chunk-patches 64 \
     --gamma 1.0 \
     --gae-lambda 0.95 \
     --value-head-weights data/processed/notagen/remote_runs/ppo_e3_rollout_only_t200_seedfix_20260712T135300Z_combined_full_reward_value_head_e80_all200.pt \
@@ -526,7 +535,7 @@ $SSH "$HOST" "cd $REMOTE_REPO && \
     --seed 0 > \$RUN_DIR/run.log 2>&1"
 ```
 
-If replay/backward OOMs, lower `--ppo-replay-microbatch-size` to `2` before lowering `--rollout-batch-size`. Do not reduce `--max-generated-patches` unless incomplete pieces are acceptable.
+If replay/backward OOMs, lower `--ppo-replay-microbatch-size` to `2` before lowering `--rollout-batch-size`. Use `--max-generated-patches 256` for PPO unless we explicitly choose to tolerate longer rollouts. Monitor `rollout_length.max_generated_patches_hit_count`, `rollout_length.missing_stream_lines_to_target`, and `rollout_length.patches_per_stream_line`: in the old 512-cap SFT sample set, `13/200` trajectories exceeded 256 patches, including `10/197` target-complete trajectories.
 
 ## Current Reward Baselines
 

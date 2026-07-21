@@ -1,6 +1,7 @@
 from fractions import Fraction
 import time
 import unittest
+from unittest.mock import patch
 
 from preprocessing.notagen_abc import (
     expand_notagen_rest_omitted_voice_segments,
@@ -91,6 +92,34 @@ class GoldbergRewardTests(unittest.TestCase):
         breakdown = score_candidate_text(text, target, GoldbergRewardConfig(music21_parse_timeout_s=1.0))
 
         self.assertFalse(breakdown.parse_valid)
+        self.assertLess(time.perf_counter() - start, 1.0)
+
+    def test_absurd_duration_inside_chord_skips_music21_parse(self):
+        target = StructuralTarget(
+            expected_bars=1,
+            expected_structure_bars=1,
+        )
+        text = "\n".join(
+            [
+                "M:3/4",
+                "L:1/8",
+                "[r:0/0][V:1][C2222224737E]2|",
+            ]
+        )
+
+        start = time.perf_counter()
+        with patch("evaluation.rewards.converter.parseData") as parse_data:
+            breakdown = score_candidate_text(text, target, GoldbergRewardConfig(music21_parse_timeout_s=1.0))
+
+        parse_data.assert_not_called()
+        self.assertFalse(breakdown.parse_valid)
+        self.assertEqual(breakdown.structural_validity_gate_reward, 0.0)
+        self.assertGreater(breakdown.ungated_total_reward, 0.0)
+        self.assertEqual(breakdown.total_reward, 0.0)
+        self.assertAlmostEqual(
+            breakdown.structural_validity_gate_adjustment,
+            -breakdown.ungated_total_reward,
+        )
         self.assertLess(time.perf_counter() - start, 1.0)
 
     def test_meter_validation_tracks_inline_meter_changes(self):
@@ -459,6 +488,24 @@ class GoldbergRewardTests(unittest.TestCase):
         )
 
         self.assertGreater(strong, weak)
+
+    def test_total_reward_is_gated_by_parse_validity(self):
+        config = GoldbergRewardConfig()
+        invalid = _total_reward(
+            config=config,
+            parse_reward=0.0,
+            countdown_reward=1.0,
+            line_closure_reward=1.0,
+            bar_token_reward=1.0,
+            meter_alignment_reward=1.0,
+            meter_duration_closeness_reward=1.0,
+            bar_meter_consistency_reward=1.0,
+            bar_count_reward=1.0,
+            voice_declaration_reward=1.0,
+            score_voice_reward=1.0,
+        )
+
+        self.assertEqual(invalid, 0.0)
 
 
 if __name__ == "__main__":

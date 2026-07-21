@@ -1616,28 +1616,32 @@ def _line_reward_components_from_metrics(
     score_voice = np.array(local_metrics.score_voice_reward, dtype=np.float32)
 
     line_denominator = float(max(1, n))
-    components: dict[str, np.ndarray] = {
-        "countdown_reward": reward_config.countdown_weight * countdown / line_denominator,
-        "line_closure_reward": reward_config.line_closure_weight * closure / line_denominator,
-        "bar_token_reward": reward_config.bar_token_weight * bar_token / line_denominator,
-        "meter_alignment_reward": reward_config.meter_alignment_weight * meter_alignment / line_denominator,
-        "meter_duration_closeness_reward": (
-            reward_config.meter_duration_closeness_weight * meter_duration / line_denominator
-        ),
-        "bar_meter_consistency_reward": reward_config.bar_meter_consistency_weight * bar_meter / line_denominator,
-        "voice_declaration_reward": reward_config.voice_declaration_weight * voice_decl / line_denominator,
-        "score_voice_reward": reward_config.score_voice_weight * score_voice / line_denominator,
-    }
+    components: dict[str, np.ndarray] = {}
+
+    def add_weighted_component(name: str, weight: float, values: np.ndarray) -> None:
+        if weight != 0.0:
+            components[name] = weight * values / line_denominator
+
+    add_weighted_component("countdown_reward", reward_config.countdown_weight, countdown)
+    add_weighted_component("line_closure_reward", reward_config.line_closure_weight, closure)
+    add_weighted_component("bar_token_reward", reward_config.bar_token_weight, bar_token)
+    add_weighted_component("meter_alignment_reward", reward_config.meter_alignment_weight, meter_alignment)
+    add_weighted_component(
+        "meter_duration_closeness_reward",
+        reward_config.meter_duration_closeness_weight,
+        meter_duration,
+    )
+    add_weighted_component("bar_meter_consistency_reward", reward_config.bar_meter_consistency_weight, bar_meter)
+    add_weighted_component("voice_declaration_reward", reward_config.voice_declaration_weight, voice_decl)
+    add_weighted_component("score_voice_reward", reward_config.score_voice_weight, score_voice)
 
     counts = np.arange(1, n + 1, dtype=np.float32)
     previous_counts = np.arange(0, n, dtype=np.float32)
     expected = float(target.expected_reward_bars)
-    if expected > 0:
+    if expected > 0 and reward_config.bar_count_weight != 0.0:
         bar_count = np.maximum(0.0, 1.0 - np.abs(counts - expected) / expected)
         previous_bar_count = np.maximum(0.0, 1.0 - np.abs(previous_counts - expected) / expected)
         components["bar_count_reward"] = reward_config.bar_count_weight * (bar_count - previous_bar_count)
-    else:
-        components["bar_count_reward"] = np.zeros(n, dtype=np.float32)
 
     return {name: [float(item) for item in values] for name, values in components.items()}
 
@@ -1740,17 +1744,26 @@ def patch_rewards_single_pass(
     )
     component_rewards.update(_project_reward_events_by_name_to_patches(harmony_events, patch_texts))
 
-    parse_component = reward_config.parse_weight * float(final_score.breakdown.get("parse_reward", 0.0))
-    component_rewards["parse_reward"] = _terminal_patch_rewards(len(patch_texts), parse_component)
+    if reward_config.parse_weight != 0.0:
+        parse_component = reward_config.parse_weight * float(final_score.breakdown.get("parse_reward", 0.0))
+        component_rewards["parse_reward"] = _terminal_patch_rewards(len(patch_texts), parse_component)
 
-    chroma_component = _effective_similarity_component(
-        similarity_weights.aria_chroma * float(final_score.breakdown.get("aria_chroma_harmonic_hist", 0.0)),
-        final_score,
-    )
-    component_rewards["aria_chroma_harmonic_hist_effective"] = _terminal_patch_rewards(
-        len(patch_texts),
-        chroma_component,
-    )
+    structural_gate_adjustment = float(final_score.breakdown.get("structural_validity_gate_adjustment", 0.0))
+    if structural_gate_adjustment != 0.0:
+        component_rewards["structural_validity_gate_adjustment"] = _terminal_patch_rewards(
+            len(patch_texts),
+            structural_gate_adjustment,
+        )
+
+    if similarity_weights.aria_chroma != 0.0:
+        chroma_component = _effective_similarity_component(
+            similarity_weights.aria_chroma * float(final_score.breakdown.get("aria_chroma_harmonic_hist", 0.0)),
+            final_score,
+        )
+        component_rewards["aria_chroma_harmonic_hist_effective"] = _terminal_patch_rewards(
+            len(patch_texts),
+            chroma_component,
+        )
 
     rewards = [
         float(sum(component_rewards[name][idx] for name in component_rewards))
@@ -3784,7 +3797,7 @@ def main() -> int:
     parser.add_argument("--gae-lambda", type=float, default=0.95)
     parser.add_argument("--max-grad-norm", type=float, default=1.0)
     parser.add_argument("--replay-context-patches", type=int, default=128)
-    parser.add_argument("--score-chunk-patches", type=int, default=16)
+    parser.add_argument("--score-chunk-patches", type=int, default=64)
     parser.add_argument(
         "--ppo-replay-microbatch-size",
         type=int,

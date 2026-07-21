@@ -428,7 +428,7 @@ def main() -> int:
     parser.add_argument("--value-loss-scale-min", type=float, default=1e-6)
     parser.add_argument("--max-grad-norm", type=float, default=1.0)
     parser.add_argument("--replay-context-patches", type=int, default=128)
-    parser.add_argument("--score-chunk-patches", type=int, default=16)
+    parser.add_argument("--score-chunk-patches", type=int, default=64)
     parser.add_argument("--precision", choices=("fp32", "bf16"), default="fp32")
     parser.add_argument("--device", default="auto")
     parser.add_argument("--seed", type=int, default=0)
