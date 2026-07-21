@@ -122,6 +122,72 @@ class GoldbergRewardTests(unittest.TestCase):
         )
         self.assertLess(time.perf_counter() - start, 1.0)
 
+    def test_unbalanced_chord_skips_music21_parse(self):
+        target = StructuralTarget(
+            expected_bars=1,
+            expected_structure_bars=1,
+        )
+        text = "\n".join(
+            [
+                "M:3/4",
+                "L:1/8",
+                "[r:0/0][V:1][CEG2|",
+            ]
+        )
+
+        start = time.perf_counter()
+        with patch("evaluation.rewards.converter.parseData") as parse_data:
+            breakdown = score_candidate_text(text, target, GoldbergRewardConfig(music21_parse_timeout_s=1.0))
+
+        parse_data.assert_not_called()
+        self.assertFalse(breakdown.parse_valid)
+        self.assertEqual(breakdown.total_reward, 0.0)
+        self.assertLess(time.perf_counter() - start, 1.0)
+
+    def test_invalid_inline_voice_skips_music21_parse(self):
+        target = StructuralTarget(
+            expected_bars=1,
+            expected_structure_bars=1,
+        )
+        text = "\n".join(
+            [
+                "M:3/4",
+                "L:1/8",
+                "[r:0/0][V:]C2D2E2|",
+            ]
+        )
+
+        with patch("evaluation.rewards.converter.parseData") as parse_data:
+            breakdown = score_candidate_text(text, target, GoldbergRewardConfig(music21_parse_timeout_s=1.0))
+
+        parse_data.assert_not_called()
+        self.assertFalse(breakdown.parse_valid)
+        self.assertEqual(breakdown.total_reward, 0.0)
+
+    def test_abc_tokenizer_failure_skips_full_music21_parse(self):
+        target = StructuralTarget(
+            expected_bars=1,
+            expected_structure_bars=1,
+        )
+        text = "\n".join(
+            [
+                "M:3/4",
+                "L:1/8",
+                "[r:0/0][V:1]C2D2E2|",
+            ]
+        )
+
+        with (
+            patch("evaluation.rewards.abcFormat.ABCFile") as abc_file,
+            patch("evaluation.rewards.converter.parseData") as parse_data,
+        ):
+            abc_file.return_value.readstr.side_effect = ValueError("tokenizer rejected ABC")
+            breakdown = score_candidate_text(text, target, GoldbergRewardConfig(music21_parse_timeout_s=1.0))
+
+        parse_data.assert_not_called()
+        self.assertFalse(breakdown.parse_valid)
+        self.assertEqual(breakdown.total_reward, 0.0)
+
     def test_meter_validation_tracks_inline_meter_changes(self):
         text = "\n".join(
             [
