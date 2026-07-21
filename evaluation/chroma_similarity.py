@@ -105,23 +105,17 @@ def _note_events(path: Path) -> tuple[list[tuple[float, float, int, int]], float
     return events, max(total_duration, 1e-6)
 
 
-def chroma_features(
-    path: str | Path,
+def _chroma_features_from_events(
     *,
-    bins: int = 128,
-    mode: str = "full",
-    normalize_key: bool = True,
+    text: str,
+    events: list[tuple[float, float, int, int]],
+    total_duration: float,
+    bins: int,
+    mode: str,
+    normalize_key: bool,
 ) -> ChromaFeatures:
-    path = Path(path)
-    if bins <= 0:
-        raise ValueError("bins must be positive")
-    if mode not in {"full", "bass", "top"}:
-        raise ValueError("mode must be one of: full, bass, top")
-
-    text = path.read_text(encoding="utf-8")
     tonic = parse_piece_tonic(text)
     shift = (-tonic_pitch_class(tonic)) % 12 if normalize_key else 0
-    events, total_duration = _note_events(path)
 
     frames = np.zeros((bins, 12), dtype=np.float64)
     for frame_idx in range(bins):
@@ -143,6 +137,15 @@ def chroma_features(
         for _midi, pitch_class, overlap in active:
             frames[frame_idx, pitch_class] += overlap
 
+    return _chroma_features_from_frames(frames=frames, total_duration=total_duration, tonic=tonic)
+
+
+def _chroma_features_from_frames(
+    *,
+    frames: np.ndarray,
+    total_duration: float,
+    tonic: str | None,
+) -> ChromaFeatures:
     hist = frames.sum(axis=0)
     hist_norm = np.linalg.norm(hist)
     if hist_norm > 0.0:
@@ -159,6 +162,80 @@ def chroma_features(
         frames=int(sequence.shape[0]),
         duration_quarters=total_duration,
         tonic=tonic,
+    )
+
+
+def _chroma_feature_set_from_events(
+    *,
+    text: str,
+    events: list[tuple[float, float, int, int]],
+    total_duration: float,
+    bins: int,
+    normalize_key: bool,
+) -> dict[str, ChromaFeatures]:
+    tonic = parse_piece_tonic(text)
+    shift = (-tonic_pitch_class(tonic)) % 12 if normalize_key else 0
+    frames_by_mode = {
+        "full": np.zeros((bins, 12), dtype=np.float64),
+        "bass": np.zeros((bins, 12), dtype=np.float64),
+        "top": np.zeros((bins, 12), dtype=np.float64),
+    }
+
+    for frame_idx in range(bins):
+        start = total_duration * frame_idx / bins
+        end = total_duration * (frame_idx + 1) / bins
+        active: list[tuple[int, int, float]] = []
+        for offset, duration, midi, pitch_class in events:
+            overlap = max(0.0, min(end, offset + duration) - max(start, offset))
+            if overlap > 0.0:
+                active.append((midi, (pitch_class + shift) % 12, overlap))
+
+        for _midi, pitch_class, overlap in active:
+            frames_by_mode["full"][frame_idx, pitch_class] += overlap
+
+        if active:
+            bass_midi = min(midi for midi, _pc, _overlap in active)
+            for midi, pitch_class, overlap in active:
+                if midi == bass_midi:
+                    frames_by_mode["bass"][frame_idx, pitch_class] += overlap
+
+            top_midi = max(midi for midi, _pc, _overlap in active)
+            for midi, pitch_class, overlap in active:
+                if midi == top_midi:
+                    frames_by_mode["top"][frame_idx, pitch_class] += overlap
+
+    return {
+        mode: _chroma_features_from_frames(
+            frames=frames,
+            total_duration=total_duration,
+            tonic=tonic,
+        )
+        for mode, frames in frames_by_mode.items()
+    }
+
+
+def chroma_features(
+    path: str | Path,
+    *,
+    bins: int = 128,
+    mode: str = "full",
+    normalize_key: bool = True,
+) -> ChromaFeatures:
+    path = Path(path)
+    if bins <= 0:
+        raise ValueError("bins must be positive")
+    if mode not in {"full", "bass", "top"}:
+        raise ValueError("mode must be one of: full, bass, top")
+
+    text = path.read_text(encoding="utf-8")
+    events, total_duration = _note_events(path)
+    return _chroma_features_from_events(
+        text=text,
+        events=events,
+        total_duration=total_duration,
+        bins=bins,
+        mode=mode,
+        normalize_key=normalize_key,
     )
 
 
@@ -221,7 +298,16 @@ def load_chroma_feature_set(
     bins: int = 128,
     normalize_key: bool = True,
 ) -> dict[str, ChromaFeatures]:
-    return {
-        mode: chroma_features(path, bins=bins, mode=mode, normalize_key=normalize_key)
-        for mode in ("full", "bass", "top")
-    }
+    path = Path(path)
+    if bins <= 0:
+        raise ValueError("bins must be positive")
+
+    text = path.read_text(encoding="utf-8")
+    events, total_duration = _note_events(path)
+    return _chroma_feature_set_from_events(
+        text=text,
+        events=events,
+        total_duration=total_duration,
+        bins=bins,
+        normalize_key=normalize_key,
+    )

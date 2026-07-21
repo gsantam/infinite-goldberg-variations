@@ -11,7 +11,7 @@ from fractions import Fraction
 from pathlib import Path
 import tempfile
 
-from music21 import converter
+from music21 import abcFormat, converter
 
 from evaluation.stream_tags import (
     StreamLine,
@@ -44,6 +44,7 @@ class GoldbergRewardConfig:
     bar_count_weight: float = 3.0
     voice_declaration_weight: float = 1.0
     score_voice_weight: float = 0.5
+    parse_validation_mode: str = "music21"
     music21_parse_timeout_s: float = 5.0
     max_music21_meter_component: int = 128
     max_music21_duration_component: int = 512
@@ -111,6 +112,29 @@ class MeterValidationMetrics:
 class AbcGrammarMetrics:
     voice_declaration_reward: float
     score_voice_reward: float
+
+
+@dataclass(frozen=True)
+class StreamLineLocalMetrics:
+    meter_alignment_reward: list[float]
+    meter_duration_closeness_reward: list[float]
+    bar_meter_consistency_reward: list[float]
+    voice_declaration_reward: list[float]
+    score_voice_reward: list[float]
+
+
+@dataclass(frozen=True)
+class StreamLineMetricBundle:
+    meter_metrics: MeterValidationMetrics
+    grammar_metrics: AbcGrammarMetrics
+    local_metrics: StreamLineLocalMetrics
+
+
+@dataclass(frozen=True)
+class CandidateStructuralScore:
+    breakdown: RewardBreakdown
+    stream_lines: list[StreamLineFeatures]
+    local_metrics: StreamLineLocalMetrics
 
 
 def count_notagen_structure_lines(text: str) -> int:
@@ -347,8 +371,19 @@ def _extract_music21_candidate_features(
     stream_lines: list[StreamLineFeatures],
     config: GoldbergRewardConfig,
 ) -> bool:
+    mode = config.parse_validation_mode.replace("_", "-")
+    if mode == "none":
+        return True
+    if mode not in {"music21", "abc-tokenize"}:
+        raise ValueError(f"unsupported parse_validation_mode: {config.parse_validation_mode}")
     if _music21_parse_guard_tripped(abc_text, stream_lines, config):
         return False
+    if mode == "abc-tokenize":
+        try:
+            abcFormat.ABCFile().readstr(_ensure_renderable_abc(abc_text))
+            return True
+        except Exception:
+            return False
     try:
         with _music21_parse_time_limit(config.music21_parse_timeout_s):
             converter.parseData(_ensure_renderable_abc(abc_text), format="abc")
@@ -445,6 +480,127 @@ def _abc_grammar_metrics(stream_lines: list[StreamLineFeatures], header: HeaderC
         voice_declaration_reward=voice_declaration_reward,
         score_voice_reward=score_voice_reward,
     )
+
+
+def _stream_line_metric_bundle(stream_lines: list[StreamLineFeatures], header: HeaderContext) -> StreamLineMetricBundle:
+    global_total_voice_bars = 0
+    global_aligned_voice_bars = 0
+    global_duration_closeness_sum = 0.0
+    global_total_stream_bars = 0
+    global_validated_bars = 0
+    global_strict_validated_bars = 0
+    global_active_meter = header.meter
+    global_used_voices: set[int] = set()
+
+    local_meter_alignment: list[float] = []
+    local_meter_duration: list[float] = []
+    local_bar_meter: list[float] = []
+    local_voice_declaration: list[float] = []
+    local_score_voice: list[float] = []
+
+    declared_voices = set(header.voice_lengths)
+    for stream_line in stream_lines:
+        voice_segments = _split_voice_segments(stream_line.body)
+        used_voices = {voice for voice, _segment in voice_segments if voice is not None}
+        global_used_voices.update(used_voices)
+
+        if used_voices:
+            local_voice_declaration.append(_safe_fraction(len(used_voices & declared_voices), len(used_voices)))
+            local_score_voice.append(
+                _safe_fraction(len(used_voices & header.score_voices), len(used_voices)) if header.has_score else 1.0
+            )
+        else:
+            local_voice_declaration.append(1.0)
+            local_score_voice.append(1.0)
+
+        local_total_voice_bars = 0
+        local_aligned_voice_bars = 0
+        local_duration_closeness_sum = 0.0
+        local_populated = 0
+        local_aligned = 0
+        local_active_meter = header.meter
+
+        global_populated = 0
+        global_aligned = 0
+
+        for voice, segment in voice_segments:
+            global_segment_meter, global_active_meter = _segment_active_meter(segment, global_active_meter)
+            local_segment_meter, local_active_meter = _segment_active_meter(segment, local_active_meter)
+            if "|" not in segment:
+                continue
+            base_length = header.voice_lengths.get(voice, header.default_length) if voice is not None else header.default_length
+            duration = _voice_segment_duration(segment, base_length)
+            if duration == 0:
+                continue
+
+            global_populated += 1
+            global_total_voice_bars += 1
+            global_duration_closeness_sum += _duration_closeness(duration, global_segment_meter)
+            if duration == global_segment_meter:
+                global_aligned += 1
+                global_aligned_voice_bars += 1
+
+            local_populated += 1
+            local_total_voice_bars += 1
+            local_duration_closeness_sum += _duration_closeness(duration, local_segment_meter)
+            if duration == local_segment_meter:
+                local_aligned += 1
+                local_aligned_voice_bars += 1
+
+        if global_populated > 0 and global_aligned > 0:
+            global_validated_bars += 1
+        if global_populated > 0 and global_aligned == global_populated:
+            global_strict_validated_bars += 1
+        if global_populated > 0:
+            global_total_stream_bars += 1
+
+        local_meter_alignment.append(_safe_fraction(local_aligned_voice_bars, local_total_voice_bars))
+        local_meter_duration.append(
+            local_duration_closeness_sum / local_total_voice_bars if local_total_voice_bars > 0 else 0.0
+        )
+        local_bar_meter.append(1.0 if local_populated > 0 and local_aligned > 0 else 0.0)
+
+    if global_used_voices:
+        voice_declaration_reward = _safe_fraction(len(global_used_voices & declared_voices), len(global_used_voices))
+        score_voice_reward = (
+            _safe_fraction(len(global_used_voices & header.score_voices), len(global_used_voices))
+            if header.has_score
+            else 1.0
+        )
+    else:
+        voice_declaration_reward = 1.0
+        score_voice_reward = 1.0
+
+    meter_metrics = MeterValidationMetrics(
+        meter_alignment_reward=_safe_fraction(global_aligned_voice_bars, global_total_voice_bars),
+        meter_duration_closeness_reward=(
+            global_duration_closeness_sum / global_total_voice_bars if global_total_voice_bars > 0 else 0.0
+        ),
+        validated_bars=global_validated_bars,
+        strict_validated_bars=global_strict_validated_bars,
+        bar_meter_consistency_reward=_safe_fraction(global_validated_bars, global_total_stream_bars),
+        strict_bar_meter_consistency_reward=_safe_fraction(global_strict_validated_bars, global_total_stream_bars),
+    )
+    grammar_metrics = AbcGrammarMetrics(
+        voice_declaration_reward=voice_declaration_reward,
+        score_voice_reward=score_voice_reward,
+    )
+    local_metrics = StreamLineLocalMetrics(
+        meter_alignment_reward=local_meter_alignment,
+        meter_duration_closeness_reward=local_meter_duration,
+        bar_meter_consistency_reward=local_bar_meter,
+        voice_declaration_reward=local_voice_declaration,
+        score_voice_reward=local_score_voice,
+    )
+    return StreamLineMetricBundle(
+        meter_metrics=meter_metrics,
+        grammar_metrics=grammar_metrics,
+        local_metrics=local_metrics,
+    )
+
+
+def _stream_line_local_metrics(stream_lines: list[StreamLineFeatures], header: HeaderContext) -> StreamLineLocalMetrics:
+    return _stream_line_metric_bundle(stream_lines, header).local_metrics
 
 
 def _countdown_reward(stream_lines: list[StreamLineFeatures]) -> float:
@@ -646,6 +802,74 @@ def score_candidate_text(
         voice_declaration_reward=grammar_metrics.voice_declaration_reward,
         score_voice_reward=grammar_metrics.score_voice_reward,
         total_reward=total_reward,
+    )
+
+
+def score_candidate_text_with_local_metrics(
+    abc_text: str,
+    target: StructuralTarget,
+    config: GoldbergRewardConfig | None = None,
+    candidate_name: str = "<memory>",
+) -> CandidateStructuralScore:
+    config = config or GoldbergRewardConfig()
+    stream_lines = _extract_stream_line_features(abc_text)
+    header = _extract_header_context(abc_text)
+    parse_valid = _extract_music21_candidate_features(abc_text, stream_lines, config)
+    metric_bundle = _stream_line_metric_bundle(stream_lines, header)
+
+    observed_stream_lines = len(stream_lines)
+    meter_metrics = metric_bundle.meter_metrics
+    grammar_metrics = metric_bundle.grammar_metrics
+    meter_alignment_reward = meter_metrics.meter_alignment_reward
+    primary_validated_bars = meter_metrics.validated_bars
+    validated_bars = primary_validated_bars
+    observed_bars = validated_bars
+    parse_reward = 1.0 if parse_valid else 0.0
+    countdown_reward = _countdown_reward(stream_lines)
+    line_closure_reward = _line_closure_reward(stream_lines)
+    bar_token_reward = _bar_token_reward(stream_lines)
+    expected_reward_bars = target.expected_reward_bars
+    bar_count_reward = _bar_count_reward(observed_stream_lines, expected_reward_bars)
+
+    total_reward = _total_reward(
+        config=config,
+        parse_reward=parse_reward,
+        countdown_reward=countdown_reward,
+        line_closure_reward=line_closure_reward,
+        bar_token_reward=bar_token_reward,
+        meter_alignment_reward=meter_alignment_reward,
+        meter_duration_closeness_reward=meter_metrics.meter_duration_closeness_reward,
+        bar_meter_consistency_reward=meter_metrics.bar_meter_consistency_reward,
+        bar_count_reward=bar_count_reward,
+        voice_declaration_reward=grammar_metrics.voice_declaration_reward,
+        score_voice_reward=grammar_metrics.score_voice_reward,
+    )
+
+    breakdown = RewardBreakdown(
+        candidate_path=candidate_name,
+        parse_valid=parse_valid,
+        observed_stream_lines=observed_stream_lines,
+        observed_bars=observed_bars,
+        primary_validated_bars=primary_validated_bars,
+        validated_bars=validated_bars,
+        strict_validated_bars=meter_metrics.strict_validated_bars,
+        parse_reward=parse_reward,
+        countdown_reward=countdown_reward,
+        line_closure_reward=line_closure_reward,
+        bar_token_reward=bar_token_reward,
+        meter_alignment_reward=meter_alignment_reward,
+        meter_duration_closeness_reward=meter_metrics.meter_duration_closeness_reward,
+        bar_meter_consistency_reward=meter_metrics.bar_meter_consistency_reward,
+        strict_bar_meter_consistency_reward=meter_metrics.strict_bar_meter_consistency_reward,
+        bar_count_reward=bar_count_reward,
+        voice_declaration_reward=grammar_metrics.voice_declaration_reward,
+        score_voice_reward=grammar_metrics.score_voice_reward,
+        total_reward=total_reward,
+    )
+    return CandidateStructuralScore(
+        breakdown=breakdown,
+        stream_lines=stream_lines,
+        local_metrics=metric_bundle.local_metrics,
     )
 
 

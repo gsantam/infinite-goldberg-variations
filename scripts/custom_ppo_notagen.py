@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import argparse
 import bisect
+import multiprocessing as mp
 import json
 import re
 import time
+from concurrent.futures import ProcessPoolExecutor
 from contextlib import nullcontext
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -20,10 +22,10 @@ from evaluation.harmony_similarity import (
     token_similarity,
 )
 from evaluation.rewards import (
-    _abc_grammar_metrics,
     _extract_header_context,
     _extract_stream_line_features,
-    _validated_bar_metrics,
+    _stream_line_local_metrics,
+    score_candidate_text_with_local_metrics,
 )
 from grpo.notagen_cached_generation_batch import sample_completions_cached_batch
 from scripts.custom_grpo_notagen import (
@@ -62,6 +64,7 @@ from scripts.custom_grpo_notagen import (
 )
 from scripts.notagen_ppo_diagnostics import (
     aggregate_component_sums,
+    advantage_distribution_summary,
     component_group_rewards,
     component_group_sums,
     component_lambda_return_tensors,
@@ -119,6 +122,21 @@ class PatchRewardTrace:
     final_score: RewardScore
     component_rewards: dict[str, list[float]]
     component_prefix_totals: dict[str, list[float]]
+
+
+@dataclass
+class ScoredRolloutBatch:
+    trajectory_logs: list[dict]
+    reward_traces: list[PatchRewardTrace]
+    reward_summary: dict
+
+
+@dataclass(frozen=True)
+class PPORewardScoringOptions:
+    similarity_chroma_bins: int
+    similarity_band_ratio: float
+    similarity_timeout_s: float
+    max_similarity_reward: float
 
 
 @dataclass
@@ -957,6 +975,32 @@ def score_total_reward(
         config=reward_config,
         candidate_name=candidate_name,
     )
+    return _score_total_reward_from_structural_breakdown(
+        prompt_text=prompt_text,
+        completion_text=completion_text,
+        structural_breakdown=breakdown,
+        similarity_weights=similarity_weights,
+        aria_similarity_ref=aria_similarity_ref,
+        similarity_chroma_bins=similarity_chroma_bins,
+        similarity_band_ratio=similarity_band_ratio,
+        similarity_timeout_s=similarity_timeout_s,
+        max_similarity_reward=max_similarity_reward,
+    )
+
+
+def _score_total_reward_from_structural_breakdown(
+    *,
+    prompt_text: str,
+    completion_text: str,
+    structural_breakdown,
+    similarity_weights: SimilarityRewardWeights,
+    aria_similarity_ref: SimilarityReference | None,
+    similarity_chroma_bins: int,
+    similarity_band_ratio: float,
+    similarity_timeout_s: float,
+    max_similarity_reward: float,
+) -> RewardScore:
+    breakdown = structural_breakdown
     reward_breakdown = breakdown.to_json()
     structural_total_reward = breakdown.total_reward
     similarity_payload = score_similarity_reward(
@@ -1016,6 +1060,130 @@ def _stream_line_spans(completion_text: str) -> list[tuple[int, int]]:
     if not starts:
         return []
     return [(start, end) for start, end in zip(starts, starts[1:] + [len(completion_text)], strict=True) if end > start]
+
+
+def _safe_float_or_none(value: float | None) -> float | None:
+    if value is None:
+        return None
+    return float(value)
+
+
+def _rollout_length_diagnostics(
+    *,
+    full_text: str,
+    completion_text: str,
+    generated_patch_count: int,
+    prompt_stream_lines: int,
+    target_stream_lines: int,
+    stop_reason: str | None,
+) -> dict:
+    completion_spans = _stream_line_spans(completion_text)
+    completion_line_chars = [end - start for start, end in completion_spans]
+    completion_stream_lines = len(completion_spans)
+    full_stream_lines = count_stream_lines(full_text)
+    target_generated_stream_lines = max(0, int(target_stream_lines) - int(prompt_stream_lines))
+    patches_per_stream_line = (
+        float(generated_patch_count) / float(completion_stream_lines)
+        if completion_stream_lines > 0
+        else None
+    )
+    chars_per_stream_line_mean = (
+        float(np.mean(completion_line_chars))
+        if completion_line_chars
+        else None
+    )
+    chars_per_stream_line_max = (
+        int(max(completion_line_chars))
+        if completion_line_chars
+        else None
+    )
+    chars_per_stream_line_p95 = (
+        float(np.percentile(completion_line_chars, 95))
+        if completion_line_chars
+        else None
+    )
+    return {
+        "stop_reason": stop_reason,
+        "full_stream_lines": int(full_stream_lines),
+        "completion_stream_lines": int(completion_stream_lines),
+        "prompt_stream_lines": int(prompt_stream_lines),
+        "target_stream_lines": int(target_stream_lines),
+        "target_generated_stream_lines": int(target_generated_stream_lines),
+        "target_stream_lines_reached": bool(full_stream_lines >= target_stream_lines),
+        "extra_stream_lines_after_target": int(max(0, full_stream_lines - target_stream_lines)),
+        "missing_stream_lines_to_target": int(max(0, target_stream_lines - full_stream_lines)),
+        "completion_missing_stream_lines_to_target": int(
+            max(0, target_generated_stream_lines - completion_stream_lines)
+        ),
+        "generated_patches": int(generated_patch_count),
+        "completion_chars": int(len(completion_text)),
+        "patches_per_stream_line": _safe_float_or_none(patches_per_stream_line),
+        "chars_per_stream_line_mean": _safe_float_or_none(chars_per_stream_line_mean),
+        "chars_per_stream_line_max": chars_per_stream_line_max,
+        "chars_per_stream_line_p95": _safe_float_or_none(chars_per_stream_line_p95),
+        "max_generated_patches_hit": stop_reason == "max_generated_patches",
+    }
+
+
+def _rollout_length_summary(trajectory_logs: list[dict]) -> dict:
+    if not trajectory_logs:
+        return {}
+
+    diagnostics = [
+        log.get("rollout_length_diagnostics")
+        or log.get("reward_breakdown", {})
+        for log in trajectory_logs
+    ]
+
+    def values(key: str) -> list[float]:
+        return [
+            float(item[key])
+            for item in diagnostics
+            if isinstance(item, dict) and item.get(key) is not None
+        ]
+
+    def summary(key: str) -> dict | None:
+        vals = values(key)
+        if not vals:
+            return None
+        return {
+            "mean": float(np.mean(vals)),
+            "std": float(np.std(vals)),
+            "min": float(np.min(vals)),
+            "max": float(np.max(vals)),
+        }
+
+    return {
+        "target_reached_count": int(
+            sum(1 for item in diagnostics if isinstance(item, dict) and item.get("target_stream_lines_reached"))
+        ),
+        "max_generated_patches_hit_count": int(
+            sum(1 for item in diagnostics if isinstance(item, dict) and item.get("max_generated_patches_hit"))
+        ),
+        "stop_reasons": {
+            str(reason): int(
+                sum(
+                    1
+                    for item in diagnostics
+                    if isinstance(item, dict) and item.get("stop_reason") == reason
+                )
+            )
+            for reason in sorted(
+                {
+                    item.get("stop_reason")
+                    for item in diagnostics
+                    if isinstance(item, dict) and item.get("stop_reason") is not None
+                },
+                key=str,
+            )
+        },
+        "generated_patch_count": summary("generated_patches"),
+        "completion_stream_lines": summary("completion_stream_lines"),
+        "missing_stream_lines_to_target": summary("missing_stream_lines_to_target"),
+        "patches_per_stream_line": summary("patches_per_stream_line"),
+        "chars_per_stream_line_mean": summary("chars_per_stream_line_mean"),
+        "chars_per_stream_line_max": summary("chars_per_stream_line_max"),
+    }
 
 
 def _stream_line_end_patch_indices(completion_text: str, patch_texts: list[str]) -> list[int]:
@@ -1227,25 +1395,35 @@ def _single_pass_line_reward_components(
     if not stream_lines:
         return {}
 
-    n = len(stream_lines)
     header = _extract_header_context(full_text)
+    local_metrics = _stream_line_local_metrics(stream_lines, header)
+    return _line_reward_components_from_metrics(
+        stream_lines=stream_lines,
+        local_metrics=local_metrics,
+        target=target,
+        reward_config=reward_config,
+    )
+
+
+def _line_reward_components_from_metrics(
+    *,
+    stream_lines,
+    local_metrics,
+    target,
+    reward_config: GoldbergRewardConfig,
+) -> dict[str, list[float]]:
+    if not stream_lines:
+        return {}
+
+    n = len(stream_lines)
     closure = np.array([1.0 if line.closed else 0.0 for line in stream_lines], dtype=np.float32)
     bar_token = np.array([1.0 if line.has_bar_token else 0.0 for line in stream_lines], dtype=np.float32)
     countdown = _countdown_local_rewards(stream_lines)
-    meter_alignment = np.zeros(n, dtype=np.float32)
-    meter_duration = np.zeros(n, dtype=np.float32)
-    bar_meter = np.zeros(n, dtype=np.float32)
-    voice_decl = np.zeros(n, dtype=np.float32)
-    score_voice = np.zeros(n, dtype=np.float32)
-
-    for idx, line in enumerate(stream_lines):
-        meter_metrics = _validated_bar_metrics([line], header)
-        grammar_metrics = _abc_grammar_metrics([line], header)
-        meter_alignment[idx] = meter_metrics.meter_alignment_reward
-        meter_duration[idx] = meter_metrics.meter_duration_closeness_reward
-        bar_meter[idx] = meter_metrics.bar_meter_consistency_reward
-        voice_decl[idx] = grammar_metrics.voice_declaration_reward
-        score_voice[idx] = grammar_metrics.score_voice_reward
+    meter_alignment = np.array(local_metrics.meter_alignment_reward, dtype=np.float32)
+    meter_duration = np.array(local_metrics.meter_duration_closeness_reward, dtype=np.float32)
+    bar_meter = np.array(local_metrics.bar_meter_consistency_reward, dtype=np.float32)
+    voice_decl = np.array(local_metrics.voice_declaration_reward, dtype=np.float32)
+    score_voice = np.array(local_metrics.score_voice_reward, dtype=np.float32)
 
     line_denominator = float(max(1, n))
     components: dict[str, np.ndarray] = {
@@ -1311,12 +1489,16 @@ def patch_rewards_single_pass(
     patch_texts = _generated_patch_texts(generated_patches)
     completion_text = "".join(patch_texts)
     if generated_patches:
-        final_score = score_total_reward(
+        structural_score = score_candidate_text_with_local_metrics(
+            abc_text=prompt_text + completion_text,
+            target=target,
+            config=reward_config,
+            candidate_name=f"{candidate_name}_final",
+        )
+        final_score = _score_total_reward_from_structural_breakdown(
             prompt_text=prompt_text,
             completion_text=completion_text,
-            target=target,
-            reward_config=reward_config,
-            candidate_name=f"{candidate_name}_final",
+            structural_breakdown=structural_score.breakdown,
             similarity_weights=similarity_weights,
             aria_similarity_ref=aria_similarity_ref,
             similarity_chroma_bins=similarity_chroma_bins,
@@ -1346,8 +1528,9 @@ def patch_rewards_single_pass(
             component_prefix_totals={},
         )
 
-    line_reward_components = _single_pass_line_reward_components(
-        full_text=prompt_text + completion_text,
+    line_reward_components = _line_reward_components_from_metrics(
+        stream_lines=structural_score.stream_lines,
+        local_metrics=structural_score.local_metrics,
         target=target,
         reward_config=reward_config,
     )
@@ -1620,6 +1803,7 @@ def compact_logprob_advantage_diagnostics(
     return {
         "post_epoch_available": True,
         "patch_count": int(log_ratio.numel()),
+        "advantage_summary": advantage_distribution_summary(raw_advantages_f, normalized_advantages_f),
         "approx_kl": float((((old_logprobs_f - current_logprobs_f) ** 2).mean() * 0.5).detach().cpu()),
         "clip_fraction": float(any_clipped.float().mean().detach().cpu()),
         "active_clip_fraction_nonzero_advantage": masked_tensor_mean(
@@ -1927,6 +2111,391 @@ def sample_ppo_rollouts(
     return rollout_payloads
 
 
+def _reward_summary_from_logs(trajectory_logs: list[dict]) -> dict:
+    if not trajectory_logs:
+        return {
+            "reward_mean": None,
+            "reward_std": None,
+            "reward_min": None,
+            "reward_max": None,
+            "reward_sum": 0.0,
+            "sample_rewards": [],
+        }
+    sample_rewards = np.array([float(log["reward"]) for log in trajectory_logs], dtype=np.float32)
+    return {
+        "reward_mean": float(sample_rewards.mean()),
+        "reward_std": float(sample_rewards.std()),
+        "reward_min": float(sample_rewards.min()),
+        "reward_max": float(sample_rewards.max()),
+        "reward_sum": float(sample_rewards.sum()),
+        "sample_rewards": sample_rewards.astype(float).tolist(),
+    }
+
+
+_PPO_REWARD_WORKER_CONTEXT: dict | None = None
+
+
+def _init_ppo_reward_worker(context: dict) -> None:
+    global _PPO_REWARD_WORKER_CONTEXT
+    _PPO_REWARD_WORKER_CONTEXT = context
+
+
+def _score_ppo_rollout_payload_worker(payload: PPORolloutPayload) -> tuple[PatchRewardTrace, dict]:
+    if _PPO_REWARD_WORKER_CONTEXT is None:
+        raise RuntimeError("PPO reward worker context was not initialized")
+    return _score_ppo_rollout_payload(payload=payload, **_PPO_REWARD_WORKER_CONTEXT)
+
+
+def _score_ppo_rollout_payload(
+    *,
+    prompt: str,
+    prompt_idx: int,
+    prompt_name: str,
+    prompt_target: PromptStructuralTarget,
+    target,
+    target_stream_lines: int,
+    payload: PPORolloutPayload,
+    prompt_stream_lines: int,
+    reward_config: GoldbergRewardConfig,
+    similarity_weights: SimilarityRewardWeights,
+    aria_similarity_ref: SimilarityReference | None,
+    scoring_options: PPORewardScoringOptions,
+    candidate_name_prefix: str,
+) -> tuple[PatchRewardTrace, dict]:
+    patchilizer = Patchilizer(stream=PATCH_STREAM)
+    reward_trace = patch_rewards_from_prefix_deltas(
+        prompt_text=prompt,
+        generated_patches=payload.generated_patches,
+        target=target,
+        reward_config=reward_config,
+        candidate_name=f"{candidate_name_prefix}_sample{payload.trajectory_index}",
+        similarity_weights=similarity_weights,
+        aria_similarity_ref=aria_similarity_ref,
+        similarity_chroma_bins=scoring_options.similarity_chroma_bins,
+        similarity_band_ratio=scoring_options.similarity_band_ratio,
+        similarity_timeout_s=scoring_options.similarity_timeout_s,
+        max_similarity_reward=scoring_options.max_similarity_reward,
+    )
+    total_reward = reward_trace.final_score.total
+    reward_breakdown = reward_trace.final_score.breakdown
+    completion_text = "".join(patchilizer.decode(payload.generated_patches))
+    stop_reason = (payload.meta or {}).get("stop_reason")
+    length_diagnostics = _rollout_length_diagnostics(
+        full_text=payload.full_text,
+        completion_text=completion_text,
+        generated_patch_count=len(payload.generated_patches),
+        prompt_stream_lines=prompt_stream_lines,
+        target_stream_lines=target_stream_lines,
+        stop_reason=stop_reason,
+    )
+    reward_breakdown["generated_patches"] = len(payload.generated_patches)
+    reward_breakdown["generated_token_slots"] = generated_token_slots(payload.generated_patches)
+    reward_breakdown["prompt_index"] = prompt_idx
+    reward_breakdown["prompt_name"] = prompt_name
+    reward_breakdown["target_structure_path"] = prompt_target.structure_path
+    reward_breakdown["target_structure_source_key"] = prompt_target.source_key
+    reward_breakdown["target_expected_reward_bars"] = int(target.expected_reward_bars)
+    reward_breakdown["target_stream_lines"] = target_stream_lines
+    reward_breakdown["trajectory_index"] = payload.trajectory_index
+    reward_breakdown["rollout_seed"] = payload.rollout_seed
+    reward_breakdown["rollout_prefix_stream_lines"] = prompt_stream_lines
+    reward_breakdown.update(payload.meta)
+    reward_breakdown.update(length_diagnostics)
+    reward_breakdown["patch_reward_mode"] = "single_pass_events_plus_terminal_residual"
+    reward_breakdown["patch_reward_count"] = len(reward_trace.rewards)
+    reward_breakdown["patch_reward_sum"] = float(sum(reward_trace.rewards))
+    patch_reward_component_sums = component_reward_sums(reward_trace.component_rewards)
+    patch_reward_groups = component_group_rewards(reward_trace.component_rewards, len(reward_trace.rewards))
+    reward_breakdown["patch_reward_component_sums"] = patch_reward_component_sums
+    reward_breakdown["patch_reward_group_sums"] = component_group_sums(patch_reward_component_sums)
+    trajectory_log = {
+        "trajectory_index": payload.trajectory_index,
+        "rollout_seed": payload.rollout_seed,
+        "reward": total_reward,
+        "full_text": payload.full_text,
+        "completion_text": completion_text,
+        "generated_patches": payload.generated_patches,
+        "generated_patch_count": len(payload.generated_patches),
+        "generated_token_slots": generated_token_slots(payload.generated_patches),
+        "rollout_length_diagnostics": length_diagnostics,
+        "patch_reward_mean": float(np.mean(reward_trace.rewards)) if reward_trace.rewards else 0.0,
+        "patch_reward_std": float(np.std(reward_trace.rewards)) if reward_trace.rewards else 0.0,
+        "patch_rewards": reward_trace.rewards,
+        "patch_reward_prefix_totals": reward_trace.prefix_totals,
+        "patch_reward_components": reward_trace.component_rewards,
+        "patch_reward_component_prefix_totals": reward_trace.component_prefix_totals,
+        "patch_reward_component_sums": patch_reward_component_sums,
+        "patch_reward_groups": patch_reward_groups,
+        "patch_reward_group_prefix_totals": component_prefix_totals(patch_reward_groups),
+        "patch_reward_group_sums": component_group_sums(patch_reward_component_sums),
+        "reward_breakdown": reward_breakdown,
+    }
+    return reward_trace, trajectory_log
+
+
+def _default_reward_worker_start_method() -> str:
+    available = mp.get_all_start_methods()
+    if "forkserver" in available:
+        return "forkserver"
+    if "spawn" in available:
+        return "spawn"
+    return available[0]
+
+
+def _score_ppo_rollouts_parallel(
+    *,
+    rollout_payloads: list[PPORolloutPayload],
+    max_workers: int,
+    start_method: str,
+    context: dict,
+) -> list[tuple[PatchRewardTrace, dict]]:
+    if start_method not in mp.get_all_start_methods():
+        raise RuntimeError(f"unsupported reward worker start method: {start_method}")
+    worker_count = min(max_workers, len(rollout_payloads))
+    mp_context = mp.get_context(start_method)
+    with ProcessPoolExecutor(
+        max_workers=worker_count,
+        mp_context=mp_context,
+        initializer=_init_ppo_reward_worker,
+        initargs=(context,),
+    ) as executor:
+        return list(executor.map(_score_ppo_rollout_payload_worker, rollout_payloads, chunksize=1))
+
+
+def score_ppo_rollout_payloads(
+    *,
+    prompt: str,
+    prompt_idx: int,
+    prompt_name: str,
+    prompt_target: PromptStructuralTarget,
+    target,
+    target_stream_lines: int,
+    rollout_payloads: list[PPORolloutPayload],
+    reward_config: GoldbergRewardConfig,
+    similarity_weights: SimilarityRewardWeights,
+    aria_similarity_ref: SimilarityReference | None,
+    args,
+    step_idx: int,
+    candidate_name_prefix: str,
+) -> ScoredRolloutBatch:
+    prompt_stream_lines = count_stream_lines(build_rollout_prefix(prompt, target_stream_lines))
+    scoring_options = PPORewardScoringOptions(
+        similarity_chroma_bins=int(args.similarity_chroma_bins),
+        similarity_band_ratio=float(args.similarity_band_ratio),
+        similarity_timeout_s=float(args.similarity_timeout_s),
+        max_similarity_reward=float(args.max_similarity_reward),
+    )
+    context = {
+        "prompt": prompt,
+        "prompt_idx": prompt_idx,
+        "prompt_name": prompt_name,
+        "prompt_target": prompt_target,
+        "target": target,
+        "target_stream_lines": target_stream_lines,
+        "prompt_stream_lines": prompt_stream_lines,
+        "reward_config": reward_config,
+        "similarity_weights": similarity_weights,
+        "aria_similarity_ref": aria_similarity_ref,
+        "scoring_options": scoring_options,
+        "candidate_name_prefix": candidate_name_prefix,
+    }
+
+    reward_workers = int(getattr(args, "reward_workers", 0) or 0)
+    if reward_workers > 1 and len(rollout_payloads) > 1:
+        start_method = getattr(args, "reward_worker_start_method", None) or _default_reward_worker_start_method()
+        scored_items = _score_ppo_rollouts_parallel(
+            rollout_payloads=rollout_payloads,
+            max_workers=reward_workers,
+            start_method=start_method,
+            context=context,
+        )
+    else:
+        scored_items = [
+            _score_ppo_rollout_payload(payload=payload, **context)
+            for payload in rollout_payloads
+        ]
+
+    reward_traces = [reward_trace for reward_trace, _trajectory_log in scored_items]
+    trajectory_logs = [trajectory_log for _reward_trace, trajectory_log in scored_items]
+    return ScoredRolloutBatch(
+        trajectory_logs=trajectory_logs,
+        reward_traces=reward_traces,
+        reward_summary=_reward_summary_from_logs(trajectory_logs),
+    )
+
+
+def fixed_eval_output_path(args) -> Path:
+    if args.fixed_eval_output_jsonl:
+        return Path(args.fixed_eval_output_jsonl)
+    return Path(args.output_json).with_name("fixed_eval.jsonl")
+
+
+def compact_eval_trajectory_log(trajectory_log: dict, *, include_trajectories: bool) -> dict:
+    record = {
+        "trajectory_index": trajectory_log["trajectory_index"],
+        "rollout_seed": trajectory_log["rollout_seed"],
+        "reward": trajectory_log["reward"],
+        "generated_patch_count": trajectory_log["generated_patch_count"],
+        "generated_token_slots": trajectory_log["generated_token_slots"],
+        "patch_reward_mean": trajectory_log["patch_reward_mean"],
+        "patch_reward_std": trajectory_log["patch_reward_std"],
+        "reward_breakdown": trajectory_log["reward_breakdown"],
+    }
+    if include_trajectories:
+        record.update(
+            {
+                "full_text": trajectory_log["full_text"],
+                "completion_text": trajectory_log["completion_text"],
+                "generated_patches": trajectory_log["generated_patches"],
+            }
+        )
+    return record
+
+
+def run_fixed_eval_batch(
+    *,
+    policy_model: NotaGenLMHeadModel,
+    policy_shape: ModelShape,
+    prompt: str,
+    prompt_idx: int,
+    prompt_name: str,
+    prompt_target: PromptStructuralTarget,
+    target,
+    target_stream_lines: int,
+    reward_config: GoldbergRewardConfig,
+    similarity_weights: SimilarityRewardWeights,
+    aria_similarity_ref: SimilarityReference | None,
+    args,
+    step_idx: int,
+    label: str,
+) -> dict | None:
+    if args.fixed_eval_trajectories <= 0:
+        return None
+    eval_args = argparse.Namespace(**vars(args))
+    eval_args.trajectories_per_step = args.fixed_eval_trajectories
+    eval_args.rollout_batch_size = (
+        args.fixed_eval_rollout_batch_size
+        if args.fixed_eval_rollout_batch_size > 0
+        else min(args.rollout_batch_size, args.fixed_eval_trajectories)
+    )
+    eval_args.rollout_retries = args.fixed_eval_rollout_retries
+    eval_args.seed = args.seed + args.fixed_eval_seed_offset
+
+    eval_start = time.perf_counter()
+    rollout_start = time.perf_counter()
+    try:
+        with torch.no_grad():
+            rollout_payloads = sample_ppo_rollouts(
+                policy_model=policy_model,
+                policy_shape=policy_shape,
+                prompt=prompt,
+                target_stream_lines=target_stream_lines,
+                step_idx=args.fixed_eval_seed_step,
+                args=eval_args,
+            )
+    except RuntimeError as exc:
+        summary = {
+            "event": "ppo_fixed_eval_complete",
+            "label": label,
+            "step": step_idx,
+            "prompt_index": prompt_idx,
+            "prompt_name": prompt_name,
+            "ok": False,
+            "error": str(exc),
+            "trajectory_count": args.fixed_eval_trajectories,
+            "rollout_batch_size": eval_args.rollout_batch_size,
+            "fixed_eval_seed_offset": args.fixed_eval_seed_offset,
+            "fixed_eval_seed_step": args.fixed_eval_seed_step,
+            "timings": {
+                "fixed_eval_total_s": time.perf_counter() - eval_start,
+                "fixed_eval_rollout_s": time.perf_counter() - rollout_start,
+                "fixed_eval_reward_s": 0.0,
+            },
+        }
+        output_path = fixed_eval_output_path(args)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with output_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(summary) + "\n")
+        print(json.dumps(summary), flush=True)
+        return summary
+    rollout_s = time.perf_counter() - rollout_start
+
+    reward_start = time.perf_counter()
+    scored = score_ppo_rollout_payloads(
+        prompt=prompt,
+        prompt_idx=prompt_idx,
+        prompt_name=prompt_name,
+        prompt_target=prompt_target,
+        target=target,
+        target_stream_lines=target_stream_lines,
+        rollout_payloads=rollout_payloads,
+        reward_config=reward_config,
+        similarity_weights=similarity_weights,
+        aria_similarity_ref=aria_similarity_ref,
+        args=args,
+        step_idx=step_idx,
+        candidate_name_prefix=f"fixed_eval_{label}_step{step_idx}",
+    )
+    reward_s = time.perf_counter() - reward_start
+    patch_reward_component_sums = aggregate_component_sums(scored.reward_traces)
+    rollout_length = _rollout_length_summary(scored.trajectory_logs)
+    summary = {
+        "event": "ppo_fixed_eval_complete",
+        "label": label,
+        "step": step_idx,
+        "ok": True,
+        "prompt_index": prompt_idx,
+        "prompt_name": prompt_name,
+        "target_structure_path": prompt_target.structure_path,
+        "target_structure_source_key": prompt_target.source_key,
+        "target_expected_reward_bars": int(target.expected_reward_bars),
+        "target_stream_lines": target_stream_lines,
+        "trajectory_count": len(rollout_payloads),
+        "rollout_batch_size": eval_args.rollout_batch_size,
+        "fixed_eval_seed_offset": args.fixed_eval_seed_offset,
+        "fixed_eval_seed_step": args.fixed_eval_seed_step,
+        "reward_mean": scored.reward_summary["reward_mean"],
+        "reward_std": scored.reward_summary["reward_std"],
+        "reward_min": scored.reward_summary["reward_min"],
+        "reward_max": scored.reward_summary["reward_max"],
+        "reward_sum": scored.reward_summary["reward_sum"],
+        "sample_rewards": scored.reward_summary["sample_rewards"],
+        "patch_reward_component_sums": patch_reward_component_sums,
+        "patch_reward_group_sums": component_group_sums(patch_reward_component_sums),
+        "rollout_length": rollout_length,
+        "generated_patch_count_mean": float(
+            np.mean([log["generated_patch_count"] for log in scored.trajectory_logs])
+        ),
+        "generated_patch_count_min": int(min(log["generated_patch_count"] for log in scored.trajectory_logs)),
+        "generated_patch_count_max": int(max(log["generated_patch_count"] for log in scored.trajectory_logs)),
+        "generated_token_slots_mean": float(
+            np.mean([log["generated_token_slots"] for log in scored.trajectory_logs])
+        ),
+        "timings": {
+            "fixed_eval_total_s": time.perf_counter() - eval_start,
+            "fixed_eval_rollout_s": rollout_s,
+            "fixed_eval_reward_s": reward_s,
+            "fixed_eval_rollout_per_trajectory_s": rollout_s / max(1, len(rollout_payloads)),
+            "fixed_eval_reward_per_trajectory_s": reward_s / max(1, len(rollout_payloads)),
+        },
+    }
+    record = dict(summary)
+    if args.fixed_eval_save_trajectories:
+        record["trajectories"] = [
+            compact_eval_trajectory_log(
+                trajectory_log,
+                include_trajectories=True,
+            )
+            for trajectory_log in scored.trajectory_logs
+        ]
+    output_path = fixed_eval_output_path(args)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(record) + "\n")
+    print(json.dumps(summary), flush=True)
+    return summary
+
+
 def train_value_head_on_returns(
     *,
     policy_model: NotaGenLMHeadModel,
@@ -2073,8 +2642,42 @@ def run_ppo_smoke(
         raise ValueError(f"value_loss_eps must be positive, got {args.value_loss_eps}")
     if args.value_loss_scale_min <= 0:
         raise ValueError(f"value_loss_scale_min must be positive, got {args.value_loss_scale_min}")
+    if args.fixed_eval_trajectories < 0:
+        raise ValueError(f"fixed_eval_trajectories must be non-negative, got {args.fixed_eval_trajectories}")
+    if args.fixed_eval_rollout_batch_size < 0:
+        raise ValueError(
+            f"fixed_eval_rollout_batch_size must be non-negative, got {args.fixed_eval_rollout_batch_size}"
+        )
+    if args.fixed_eval_rollout_retries <= 0:
+        raise ValueError(f"fixed_eval_rollout_retries must be positive, got {args.fixed_eval_rollout_retries}")
 
     logs: list[dict] = []
+    fixed_eval_logs: list[dict] = []
+    if args.fixed_eval_trajectories > 0 and args.fixed_eval_before_training:
+        prompt_idx = args.step_offset % len(prompts)
+        row = prompts[prompt_idx]
+        prompt_target = prompt_targets[prompt_idx]
+        target = prompt_target.target
+        target_stream_lines = int(target.expected_reward_bars)
+        prompt_name = prompt_row_name(row, prompt_idx)
+        fixed_eval_log = run_fixed_eval_batch(
+            policy_model=policy_model,
+            policy_shape=policy_shape,
+            prompt=row["prompt"],
+            prompt_idx=prompt_idx,
+            prompt_name=prompt_name,
+            prompt_target=prompt_target,
+            target=target,
+            target_stream_lines=target_stream_lines,
+            reward_config=reward_config,
+            similarity_weights=similarity_weights,
+            aria_similarity_ref=aria_similarity_ref,
+            args=args,
+            step_idx=args.step_offset,
+            label="before_training",
+        )
+        if fixed_eval_log is not None:
+            fixed_eval_logs.append(fixed_eval_log)
     for local_step_idx in range(1, args.max_steps + 1):
         step_start = time.perf_counter()
         timings: dict[str, float] = {}
@@ -2100,68 +2703,23 @@ def run_ppo_smoke(
         timings["rollout_per_trajectory_s"] = timings["rollout_s"] / max(1, len(rollout_payloads))
 
         reward_start = time.perf_counter()
-        trajectory_logs: list[dict] = []
-        reward_traces: list[PatchRewardTrace] = []
-        prompt_stream_lines = count_stream_lines(build_rollout_prefix(prompt, target_stream_lines))
-        for payload in rollout_payloads:
-            reward_trace = patch_rewards_from_prefix_deltas(
-                prompt_text=prompt,
-                generated_patches=payload.generated_patches,
-                target=target,
-                reward_config=reward_config,
-                candidate_name=f"step{step_idx}_sample{payload.trajectory_index}",
-                similarity_weights=similarity_weights,
-                aria_similarity_ref=aria_similarity_ref,
-                similarity_chroma_bins=args.similarity_chroma_bins,
-                similarity_band_ratio=args.similarity_band_ratio,
-                similarity_timeout_s=args.similarity_timeout_s,
-                max_similarity_reward=args.max_similarity_reward,
-            )
-            total_reward = reward_trace.final_score.total
-            reward_breakdown = reward_trace.final_score.breakdown
-            reward_breakdown["generated_patches"] = len(payload.generated_patches)
-            reward_breakdown["generated_token_slots"] = generated_token_slots(payload.generated_patches)
-            reward_breakdown["prompt_index"] = prompt_idx
-            reward_breakdown["prompt_name"] = prompt_name
-            reward_breakdown["target_structure_path"] = prompt_target.structure_path
-            reward_breakdown["target_structure_source_key"] = prompt_target.source_key
-            reward_breakdown["target_expected_reward_bars"] = int(target.expected_reward_bars)
-            reward_breakdown["target_stream_lines"] = target_stream_lines
-            reward_breakdown["trajectory_index"] = payload.trajectory_index
-            reward_breakdown["rollout_seed"] = payload.rollout_seed
-            reward_breakdown["rollout_prefix_stream_lines"] = prompt_stream_lines
-            reward_breakdown.update(payload.meta)
-            reward_breakdown["patch_reward_mode"] = "single_pass_events_plus_terminal_residual"
-            reward_breakdown["patch_reward_count"] = len(reward_trace.rewards)
-            reward_breakdown["patch_reward_sum"] = float(sum(reward_trace.rewards))
-            patch_reward_component_sums = component_reward_sums(reward_trace.component_rewards)
-            patch_reward_groups = component_group_rewards(reward_trace.component_rewards, len(reward_trace.rewards))
-            reward_breakdown["patch_reward_component_sums"] = patch_reward_component_sums
-            reward_breakdown["patch_reward_group_sums"] = component_group_sums(patch_reward_component_sums)
-            reward_traces.append(reward_trace)
-            trajectory_logs.append(
-                {
-                    "trajectory_index": payload.trajectory_index,
-                    "rollout_seed": payload.rollout_seed,
-                    "reward": total_reward,
-                    "full_text": payload.full_text,
-                    "completion_text": "".join(patchilizer.decode(payload.generated_patches)),
-                    "generated_patches": payload.generated_patches,
-                    "generated_patch_count": len(payload.generated_patches),
-                    "generated_token_slots": generated_token_slots(payload.generated_patches),
-                    "patch_reward_mean": float(np.mean(reward_trace.rewards)) if reward_trace.rewards else 0.0,
-                    "patch_reward_std": float(np.std(reward_trace.rewards)) if reward_trace.rewards else 0.0,
-                    "patch_rewards": reward_trace.rewards,
-                    "patch_reward_prefix_totals": reward_trace.prefix_totals,
-                    "patch_reward_components": reward_trace.component_rewards,
-                    "patch_reward_component_prefix_totals": reward_trace.component_prefix_totals,
-                    "patch_reward_component_sums": patch_reward_component_sums,
-                    "patch_reward_groups": patch_reward_groups,
-                    "patch_reward_group_prefix_totals": component_prefix_totals(patch_reward_groups),
-                    "patch_reward_group_sums": component_group_sums(patch_reward_component_sums),
-                    "reward_breakdown": reward_breakdown,
-                }
-            )
+        scored_rollouts = score_ppo_rollout_payloads(
+            prompt=prompt,
+            prompt_idx=prompt_idx,
+            prompt_name=prompt_name,
+            prompt_target=prompt_target,
+            target=target,
+            target_stream_lines=target_stream_lines,
+            rollout_payloads=rollout_payloads,
+            reward_config=reward_config,
+            similarity_weights=similarity_weights,
+            aria_similarity_ref=aria_similarity_ref,
+            args=args,
+            step_idx=step_idx,
+            candidate_name_prefix=f"step{step_idx}",
+        )
+        trajectory_logs = scored_rollouts.trajectory_logs
+        reward_traces = scored_rollouts.reward_traces
         timings["reward_s"] = time.perf_counter() - reward_start
         timings["reward_per_trajectory_s"] = timings["reward_s"] / max(1, len(rollout_payloads))
 
@@ -2295,6 +2853,11 @@ def run_ppo_smoke(
             batch_tensors,
             args,
         )
+        advantage_summary = advantage_distribution_summary(
+            batch_tensors.advantages,
+            normalized_advantages,
+            trajectory_lengths=trajectory_lengths,
+        )
         for ppo_epoch_idx in range(1, args.ppo_epochs + 1):
             ppo_epoch_start = time.perf_counter()
             epoch_result = run_ppo_replay_epoch_microbatched(
@@ -2354,6 +2917,7 @@ def run_ppo_smoke(
                     "grad_norm": epoch_result.grad_norm,
                     "replay_microbatch_size": epoch_result.microbatch_size,
                     "replay_microbatch_count": epoch_result.microbatch_count,
+                    "advantage_summary": advantage_summary,
                     "post_epoch_logprob_advantage_diagnostics": post_epoch_logprob_advantage_diag,
                     "duration_s": time.perf_counter() - ppo_epoch_start,
                 }
@@ -2372,6 +2936,7 @@ def run_ppo_smoke(
                             "clip_fraction": epoch_log["clip_fraction"],
                             "grad_norm": epoch_log["grad_norm"],
                             "duration_s": epoch_log["duration_s"],
+                            "advantage_summary": epoch_log["advantage_summary"],
                             "post_epoch_logprob_advantage_diagnostics": (
                                 epoch_log["post_epoch_logprob_advantage_diagnostics"]
                             ),
@@ -2421,10 +2986,29 @@ def run_ppo_smoke(
                 args.checkpoint_dir,
                 step_idx,
                 lora_r=args.lora_r,
-            )
+        )
         timings["checkpoint_s"] = time.perf_counter() - checkpoint_start
 
         timings["ppo_replay_backward_s"] = time.perf_counter() - replay_start
+        fixed_eval_log = run_fixed_eval_batch(
+            policy_model=policy_model,
+            policy_shape=policy_shape,
+            prompt=prompt,
+            prompt_idx=prompt_idx,
+            prompt_name=prompt_name,
+            prompt_target=prompt_target,
+            target=target,
+            target_stream_lines=target_stream_lines,
+            reward_config=reward_config,
+            similarity_weights=similarity_weights,
+            aria_similarity_ref=aria_similarity_ref,
+            args=args,
+            step_idx=step_idx,
+            label="after_step",
+        )
+        if fixed_eval_log is not None:
+            fixed_eval_logs.append(fixed_eval_log)
+            timings["fixed_eval_s"] = fixed_eval_log["timings"]["fixed_eval_total_s"]
         timings["total_step_s"] = time.perf_counter() - step_start
 
         sample_rewards = [float(log["reward"]) for log in trajectory_logs]
@@ -2433,6 +3017,7 @@ def run_ppo_smoke(
         returns = batch_tensors.returns
         value_targets = batch_tensors.value_targets
         patch_reward_component_sums = aggregate_component_sums(reward_traces)
+        rollout_length = _rollout_length_summary(trajectory_logs)
         logprob_advantage_diag = logprob_advantage_diagnostics(
             old_logprobs=old_logprobs,
             post_step_logprobs=post_step_logprobs,
@@ -2478,6 +3063,7 @@ def run_ppo_smoke(
                 None if post_step_log_ratio is None else float(post_step_log_ratio.abs().max().detach().cpu())
             ),
             "logprob_advantage_diagnostics": logprob_advantage_diag,
+            "advantage_summary": advantage_summary,
             "advantages_mean": float(loss_payload.advantages_mean.detach().cpu()),
             "advantages_std": float(loss_payload.advantages_std.detach().cpu()),
             "return_mean": float(returns.mean().detach().cpu()),
@@ -2505,6 +3091,7 @@ def run_ppo_smoke(
             "patch_rewards": patch_rewards.detach().cpu().tolist(),
             "patch_reward_component_sums": patch_reward_component_sums,
             "patch_reward_group_sums": component_group_sums(patch_reward_component_sums),
+            "rollout_length": rollout_length,
             "patch_reward_prefix_totals": (
                 trajectory_logs[0]["patch_reward_prefix_totals"] if len(trajectory_logs) == 1 else None
             ),
@@ -2519,6 +3106,7 @@ def run_ppo_smoke(
             "reward_sum": float(sample_rewards_array.sum()),
             "sample_rewards": sample_rewards,
             "reward_breakdown": trajectory_logs[0]["reward_breakdown"] if len(trajectory_logs) == 1 else None,
+            "fixed_eval": fixed_eval_log,
             "checkpoint": checkpoint_payload,
             "trajectories": trajectory_logs,
             "timings": timings,
@@ -2569,6 +3157,7 @@ def run_ppo_smoke(
 
     return {
         "steps": logs,
+        "fixed_eval_logs": fixed_eval_logs,
         "policy_dropout_modules_disabled": dropout_modules_disabled,
         "behavior_policy_dropout_modules_disabled": behavior_dropout_modules_disabled,
         "value_head": {
@@ -2591,6 +3180,18 @@ def main() -> int:
     parser.add_argument("--similarity-chroma-bins", type=int, default=128)
     parser.add_argument("--similarity-band-ratio", type=float, default=0.25)
     parser.add_argument("--similarity-timeout-s", type=float, default=20.0)
+    parser.add_argument(
+        "--parse-validation-mode",
+        choices=("music21", "abc-tokenize", "none"),
+        default="music21",
+        help=(
+            "Parse-validity check used by the structural parse reward. "
+            "music21 is exact but slow; abc-tokenize is much faster but only checks ABC tokenization; "
+            "none treats parse validity as true for speed/debug runs."
+        ),
+    )
+    parser.add_argument("--music21-parse-timeout-s", type=float, default=5.0)
+    parser.add_argument("--parse-reward-weight", type=float, default=0.25)
     parser.add_argument("--output-json", required=True)
     parser.add_argument("--prompt-limit", type=int, default=1)
     parser.add_argument("--max-steps", type=int, default=1)
@@ -2608,6 +3209,26 @@ def main() -> int:
     parser.add_argument("--max-generated-patches", type=int, default=256)
     parser.add_argument("--timeout-s", type=int, default=900)
     parser.add_argument("--rollout-retries", type=int, default=1)
+    parser.add_argument(
+        "--reward-workers",
+        "--workers",
+        dest="reward_workers",
+        type=int,
+        default=0,
+        help=(
+            "Number of CPU worker processes used to score rollout rewards. "
+            "Use 0 or 1 for serial scoring."
+        ),
+    )
+    parser.add_argument(
+        "--reward-worker-start-method",
+        choices=tuple(mp.get_all_start_methods()),
+        default=_default_reward_worker_start_method(),
+        help=(
+            "Multiprocessing start method for --reward-workers. forkserver/spawn avoid forking "
+            "a live CUDA process; fork is useful for fast local tests without CUDA."
+        ),
+    )
     parser.add_argument(
         "--rollout-batch-size",
         type=int,
@@ -2705,6 +3326,56 @@ def main() -> int:
             "and relative position. Useful for local slicing, but can make result.json large."
         ),
     )
+    parser.add_argument(
+        "--fixed-eval-trajectories",
+        type=int,
+        default=0,
+        help=(
+            "After each PPO step, sample this many trajectories from a fixed prompt/seed and score them "
+            "with the same reward path. Use 0 to disable fixed-policy evaluation."
+        ),
+    )
+    parser.add_argument(
+        "--fixed-eval-rollout-batch-size",
+        type=int,
+        default=0,
+        help=(
+            "Rollout batch size for fixed evaluation. Use 0 to reuse the smaller of --rollout-batch-size "
+            "and --fixed-eval-trajectories."
+        ),
+    )
+    parser.add_argument(
+        "--fixed-eval-rollout-retries",
+        type=int,
+        default=1,
+        help="Retry count for fixed-eval sampling failures. Fixed-eval failures are logged and do not abort PPO.",
+    )
+    parser.add_argument(
+        "--fixed-eval-seed-offset",
+        type=int,
+        default=1_000_000,
+        help="Offset added to --seed for the fixed eval batch so train and eval rollouts use distinct seeds.",
+    )
+    parser.add_argument(
+        "--fixed-eval-seed-step",
+        type=int,
+        default=0,
+        help="Synthetic step index used for fixed-eval rollout seeds. Keep constant for repeated eval comparability.",
+    )
+    parser.add_argument(
+        "--fixed-eval-before-training",
+        action="store_true",
+        help="Run the fixed eval batch once before the first PPO update to establish a baseline.",
+    )
+    parser.add_argument(
+        "--fixed-eval-output-jsonl",
+        help="Optional JSONL path for fixed-eval records. Defaults to fixed_eval.jsonl beside --output-json.",
+    )
+    parser.add_argument(
+        "--fixed-eval-save-trajectories",
+        action="store_true",
+        help="Persist fixed-eval generated text and patches in the fixed-eval JSONL sidecar.",
+    )
     args = parser.parse_args()
 
     set_seed(args.seed)
@@ -2741,7 +3412,11 @@ def main() -> int:
     value_head, value_head_load = build_value_head(policy_shape, args, device)
     prompts = load_prompt_rows(args.prompts_jsonl, limit=args.prompt_limit)
     prompt_targets = load_prompt_structural_targets(prompts, args)
-    reward_config = GoldbergRewardConfig()
+    reward_config = GoldbergRewardConfig(
+        parse_weight=args.parse_reward_weight,
+        parse_validation_mode=args.parse_validation_mode,
+        music21_parse_timeout_s=args.music21_parse_timeout_s,
+    )
     payload = run_ppo_smoke(
         policy_model=policy_model,
         policy_shape=policy_shape,

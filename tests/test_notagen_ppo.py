@@ -1,3 +1,5 @@
+import json
+import multiprocessing as mp
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,6 +12,8 @@ try:
     from scripts.custom_ppo_notagen import (
         PatchRewardTrace,
         PatchValueHead,
+        PPORolloutPayload,
+        PromptStructuralTarget,
         RewardEvent,
         RewardScore,
         _dtw_metric_reward_events,
@@ -24,6 +28,7 @@ try:
         normalize_advantages,
         ppo_clipped_loss,
         save_value_head_checkpoint,
+        score_ppo_rollout_payloads,
         terminal_returns,
         trajectory_patch_hidden_states,
         trajectory_patch_logprobs_values,
@@ -32,13 +37,16 @@ try:
         value_prediction_metrics,
     )
     from scripts.notagen_ppo_diagnostics import (
+        advantage_distribution_summary,
         component_lambda_return_tensors,
         component_reward_tensors,
         logprob_advantage_diagnostics,
         per_patch_diagnostic_records,
     )
-    from scripts.custom_grpo_notagen import PATCH_SIZE
-    from utils import NotaGenLMHeadModel
+    from scripts.summarize_ppo_advantages import summarize_steps
+    from scripts.custom_grpo_notagen import PATCH_SIZE, GoldbergRewardConfig, SimilarityRewardWeights
+    from evaluation.rewards import StructuralTarget
+    from utils import NotaGenLMHeadModel, Patchilizer
 except ModuleNotFoundError as exc:
     torch = None
     IMPORT_ERROR = exc
@@ -66,6 +74,11 @@ def _tiny_notagen():
     model = NotaGenLMHeadModel(encoder_config=patch_config, decoder_config=byte_config)
     model.eval()
     return model
+
+
+def _generated_patches_from_text(text: str) -> list[list[int]]:
+    patchilizer = Patchilizer(stream=True)
+    return [[ord(char) for char in patch] for patch in patchilizer.split_patches(text, patch_size=PATCH_SIZE)]
 
 
 @unittest.skipIf(torch is None, f"NotaGen torch dependencies unavailable: {IMPORT_ERROR}")
@@ -98,6 +111,78 @@ class NotaGenPPOTests(unittest.TestCase):
         self.assertEqual(prompt_targets[0].target.expected_reward_bars, 2)
         self.assertEqual(prompt_targets[1].source_key, "fallback_target_structure_abc")
         self.assertEqual(prompt_targets[1].target.expected_reward_bars, 1)
+
+    def test_parallel_rollout_scoring_matches_serial_exactly(self):
+        if "fork" not in mp.get_all_start_methods():
+            self.skipTest("fork multiprocessing context is unavailable")
+
+        prompt = "X:1\nT:Parallel reward test\nM:3/4\nL:1/8\nK:C\nV:1\n%%score 1\n"
+        completions = [
+            "[r:0/1][V:1]C2 D2 E2|\n[r:1/0][V:1]F2 G2 A2|\n",
+            "[r:0/1][V:1]G2 A2 B2|\n[r:1/0][V:1]c2 B2 A2|\n",
+        ]
+        rollout_payloads = [
+            PPORolloutPayload(
+                trajectory_index=index,
+                rollout_seed=100 + index,
+                full_text=prompt + completion,
+                generated_patches=_generated_patches_from_text(completion),
+                meta={
+                    "cached_rollout": False,
+                    "batched_rollout": False,
+                    "rollout_batch_size": 1,
+                    "rollout_target_stream_lines": 2,
+                    "stop_reason": "target_stream_lines",
+                },
+            )
+            for index, completion in enumerate(completions)
+        ]
+        target = StructuralTarget(expected_bars=2, expected_structure_bars=2)
+        prompt_target = PromptStructuralTarget(
+            target=target,
+            structure_path="<test>",
+            source_key="parallel_test",
+        )
+        common_args = {
+            "similarity_chroma_bins": 8,
+            "similarity_band_ratio": 0.25,
+            "similarity_timeout_s": 5.0,
+            "max_similarity_reward": 2.0,
+        }
+        serial = score_ppo_rollout_payloads(
+            prompt=prompt,
+            prompt_idx=0,
+            prompt_name="parallel_test",
+            prompt_target=prompt_target,
+            target=target,
+            target_stream_lines=2,
+            rollout_payloads=rollout_payloads,
+            reward_config=GoldbergRewardConfig(parse_validation_mode="abc-tokenize"),
+            similarity_weights=SimilarityRewardWeights(),
+            aria_similarity_ref=None,
+            args=SimpleNamespace(**common_args, reward_workers=0),
+            step_idx=0,
+            candidate_name_prefix="parallel_exact",
+        )
+        parallel = score_ppo_rollout_payloads(
+            prompt=prompt,
+            prompt_idx=0,
+            prompt_name="parallel_test",
+            prompt_target=prompt_target,
+            target=target,
+            target_stream_lines=2,
+            rollout_payloads=rollout_payloads,
+            reward_config=GoldbergRewardConfig(parse_validation_mode="abc-tokenize"),
+            similarity_weights=SimilarityRewardWeights(),
+            aria_similarity_ref=None,
+            args=SimpleNamespace(**common_args, reward_workers=2, reward_worker_start_method="fork"),
+            step_idx=0,
+            candidate_name_prefix="parallel_exact",
+        )
+
+        self.assertEqual(parallel.reward_summary, serial.reward_summary)
+        self.assertEqual(parallel.trajectory_logs, serial.trajectory_logs)
+        self.assertEqual(parallel.reward_traces, serial.reward_traces)
 
     def test_patch_replay_returns_one_logprob_and_value_per_aligned_patch(self):
         torch.manual_seed(0)
@@ -262,6 +347,9 @@ class NotaGenPPOTests(unittest.TestCase):
             diagnostics["per_trajectory"][1]["negative_advantage_negative_log_ratio_fraction"],
             1.0 / 3.0,
         )
+        self.assertIn("advantage_summary", diagnostics)
+        self.assertAlmostEqual(diagnostics["advantage_summary"]["positive_fraction"], 0.4)
+        self.assertAlmostEqual(diagnostics["advantage_summary"]["negative_fraction"], 0.6)
 
     def test_logprob_advantage_diagnostics_reports_relative_patch_position_bins(self):
         diagnostics = logprob_advantage_diagnostics(
@@ -287,6 +375,66 @@ class NotaGenPPOTests(unittest.TestCase):
         self.assertAlmostEqual(bins[0]["negative_advantage_negative_log_ratio_fraction"], 0.0)
         self.assertAlmostEqual(bins[1]["positive_advantage_positive_log_ratio_fraction"], 0.0)
         self.assertAlmostEqual(bins[1]["negative_advantage_negative_log_ratio_fraction"], 0.5)
+
+    def test_advantage_distribution_summary_reports_trajectory_sums(self):
+        summary = advantage_distribution_summary(
+            raw_advantages=torch.tensor([1.0, 2.0, -1.0, -3.0]),
+            normalized_advantages=torch.tensor([0.5, 1.0, -0.5, -1.0]),
+            trajectory_lengths=[2, 2],
+        )
+
+        self.assertAlmostEqual(summary["positive_fraction"], 0.5)
+        self.assertAlmostEqual(summary["negative_fraction"], 0.5)
+        self.assertAlmostEqual(summary["positive_mean"], 1.5)
+        self.assertAlmostEqual(summary["negative_mean"], -2.0)
+        self.assertAlmostEqual(summary["by_trajectory"]["raw_sum"]["mean"], -0.5)
+        self.assertAlmostEqual(summary["by_trajectory"]["raw_sum"]["min"], -4.0)
+        self.assertAlmostEqual(summary["by_trajectory"]["raw_sum"]["max"], 3.0)
+
+    def test_summarize_ppo_advantages_reads_result_json(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result_path = Path(tmpdir) / "result.json"
+            result_path.write_text(
+                json.dumps(
+                    {
+                        "steps": [
+                            {
+                                "step": 1,
+                                "reward_mean": 6.0,
+                                "fixed_eval": {"reward_mean": 6.1},
+                                "post_step_approx_kl": 0.01,
+                                "post_step_clip_fraction": 0.02,
+                                "advantage_summary": {
+                                    "raw": {"mean": 0.5, "std": 0.25, "min": -1.0, "p05": -0.5, "p50": 0.4, "p95": 1.1, "max": 1.2},
+                                    "normalized": {"mean": 0.0, "std": 1.0},
+                                    "positive_fraction": 0.75,
+                                    "negative_fraction": 0.25,
+                                    "zero_fraction": 0.0,
+                                    "positive_mean": 0.8,
+                                    "negative_mean": -0.4,
+                                    "abs_mean": 0.7,
+                                    "by_trajectory": {
+                                        "raw_mean": {"mean": 0.2, "std": 0.1},
+                                        "raw_sum": {"mean": 1.0, "std": 0.5},
+                                    },
+                                },
+                                "logprob_advantage_diagnostics": {
+                                    "advantage_log_ratio_correlation": 0.3,
+                                    "sign_alignment_fraction": 0.6,
+                                },
+                            }
+                        ]
+                    }
+                )
+            )
+
+            rows = summarize_steps(result_path)
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["step"], 1)
+        self.assertAlmostEqual(rows[0]["raw_advantage_mean"], 0.5)
+        self.assertAlmostEqual(rows[0]["positive_advantage_fraction"], 0.75)
+        self.assertAlmostEqual(rows[0]["trajectory_raw_advantage_sum_mean"], 1.0)
 
     def test_per_patch_diagnostic_records_include_position_and_raw_fields(self):
         records = per_patch_diagnostic_records(
