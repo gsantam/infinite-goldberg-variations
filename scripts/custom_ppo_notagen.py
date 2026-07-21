@@ -28,23 +28,26 @@ from evaluation.rewards import (
     score_candidate_text_with_local_metrics,
 )
 from grpo.notagen_cached_generation_batch import sample_completions_cached_batch
-from scripts.custom_grpo_notagen import (
+from grpo.notagen_replay import (
     PATCH_SIZE,
+    _encoded_last_patch,
+    autocast_context,
+    batched_tail_encoded_targets,
+    char_patch_logprob_sums,
+    normalize_patch_for_context,
+    split_tensor_by_counts,
+    tail_encoded_targets,
+)
+from scripts.custom_grpo_notagen import (
     PATCH_STREAM,
     GoldbergRewardConfig,
     ModelShape,
     RolloutSample,
     SimilarityReference,
     SimilarityRewardWeights,
-    _encoded_last_patch,
-    _pad_generated_patch,
-    _replay_start_patch,
     _rollout_seed,
-    _split_flat_logprobs,
-    autocast_context,
     build_model,
     build_rollout_prefix,
-    char_patch_logprobs,
     count_stream_lines,
     disable_dropout_modules,
     generated_token_slots,
@@ -54,7 +57,6 @@ from scripts.custom_grpo_notagen import (
     load_prompt_rows,
     load_similarity_reference,
     load_structural_target,
-    normalize_patch_for_context,
     prompt_row_name,
     sample_completion,
     score_prompt_completion_pair,
@@ -461,29 +463,6 @@ def patch_logprob_sum_and_value(
     )
 
 
-def char_patch_logprob_sums(
-    model: NotaGenLMHeadModel,
-    encoded_patches: torch.Tensor,
-    target_patches: list[list[int]],
-    precision: str,
-) -> torch.Tensor:
-    special_token_id = model.special_token_id
-    target_tensor = torch.tensor(
-        [_pad_generated_patch(patch, special_token_id) for patch in target_patches],
-        device=encoded_patches.device,
-        dtype=torch.long,
-    )
-    token_counts = [sum(1 for token in patch if token != special_token_id) for patch in target_tensor.tolist()]
-    flat_logprobs = char_patch_logprobs(model, encoded_patches, target_tensor, precision)
-    per_patch = _split_flat_logprobs(flat_logprobs, token_counts)
-    return torch.stack(
-        [
-            item.sum() if item.numel() > 0 else torch.zeros((), device=encoded_patches.device, dtype=flat_logprobs.dtype)
-            for item in per_patch
-        ]
-    )
-
-
 def tail_patch_logprob_value_chunk(
     model: NotaGenLMHeadModel,
     value_head: PatchValueHead,
@@ -494,42 +473,100 @@ def tail_patch_logprob_value_chunk(
     precision: str,
     replay_context_patches: int | None = None,
 ) -> PatchReplayChunk:
-    normalized_prefix = [
-        normalize_patch_for_context(
-            patch,
-            eos_token_id=model.eos_token_id,
-            special_token_id=model.special_token_id,
-        )
-        for patch in remaining_patches[:chunk_end]
-    ]
-    all_ids = current_ids[:]
-    for patch in normalized_prefix:
-        all_ids.extend(patch)
-
-    if len(all_ids) % PATCH_SIZE != 0:
-        raise RuntimeError("PPO replay expected full-patch alignment before chunked tail scoring")
-
-    total_patches = len(all_ids) // PATCH_SIZE
-    context_patch_count = len(current_ids) // PATCH_SIZE
-    start_patch = _replay_start_patch(total_patches, context_patch_count, replay_context_patches)
-
-    trimmed_ids = all_ids[start_patch * PATCH_SIZE :]
-    device = next(model.parameters()).device
-    patches_tensor = torch.tensor(trimmed_ids, device=device, dtype=torch.long).reshape(1, -1, PATCH_SIZE)
-    first_target_local = context_patch_count - start_patch
-    if first_target_local <= 0:
-        raise RuntimeError("PPO replay window dropped all context before generated target patches")
-
-    with autocast_context(device, precision):
-        encoded = model.patch_level_decoder(patches_tensor)["last_hidden_state"][0]
-    encoded_start = first_target_local + chunk_start - 1
-    encoded_end = first_target_local + chunk_end - 1
-    encoded_targets = encoded[encoded_start:encoded_end]
-    target_patches = remaining_patches[chunk_start:chunk_end]
+    encoded_targets, target_patches = tail_encoded_targets(
+        model=model,
+        current_ids=current_ids,
+        remaining_patches=remaining_patches,
+        chunk_start=chunk_start,
+        chunk_end=chunk_end,
+        precision=precision,
+        replay_context_patches=replay_context_patches,
+        error_context="PPO replay",
+    )
     return PatchReplayChunk(
         logprobs=char_patch_logprob_sums(model, encoded_targets, target_patches, precision),
         values=value_head(encoded_targets),
     )
+
+
+def batched_tail_patch_logprob_value_chunk(
+    model: NotaGenLMHeadModel,
+    value_head: PatchValueHead,
+    current_ids_batch: list[list[int]],
+    remaining_patches_batch: list[list[list[int]]],
+    chunk_start: int,
+    target_chunk_patches: int,
+    precision: str,
+    replay_context_patches: int | None = None,
+    replay_batch_size: int = 0,
+    detach_policy: bool = False,
+) -> dict[int, PatchReplayChunk]:
+    payload = batched_tail_encoded_targets(
+        model=model,
+        current_ids_batch=current_ids_batch,
+        remaining_patches_batch=remaining_patches_batch,
+        chunk_start=chunk_start,
+        target_chunk_patches=target_chunk_patches,
+        precision=precision,
+        replay_context_patches=replay_context_patches,
+        replay_batch_size=replay_batch_size,
+        detach_policy=detach_policy,
+        error_context="batched PPO replay",
+    )
+    if not payload:
+        return {}
+
+    sample_indices: list[int] = []
+    encoded_targets: list[torch.Tensor] = []
+    target_patches: list[list[int]] = []
+    patch_counts: list[int] = []
+    for sample_idx, (encoded, targets) in payload.items():
+        sample_indices.append(sample_idx)
+        encoded_targets.append(encoded)
+        target_patches.extend(targets)
+        patch_counts.append(len(targets))
+
+    encoded_target_tensor = torch.cat(encoded_targets, dim=0)
+    logprob_sums = char_patch_logprob_sums(model, encoded_target_tensor, target_patches, precision)
+    values = value_head(encoded_target_tensor)
+    split_logprobs = split_tensor_by_counts(logprob_sums, patch_counts)
+    split_values = split_tensor_by_counts(values, patch_counts)
+    return {
+        sample_idx: PatchReplayChunk(logprobs=logprobs, values=sample_values)
+        for sample_idx, logprobs, sample_values in zip(sample_indices, split_logprobs, split_values, strict=True)
+    }
+
+
+def batched_tail_patch_value_chunk(
+    model: NotaGenLMHeadModel,
+    value_head: PatchValueHead,
+    current_ids_batch: list[list[int]],
+    remaining_patches_batch: list[list[list[int]]],
+    chunk_start: int,
+    target_chunk_patches: int,
+    precision: str,
+    replay_context_patches: int | None = None,
+    replay_batch_size: int = 0,
+    detach_policy: bool = True,
+) -> dict[int, torch.Tensor]:
+    payload = batched_tail_encoded_targets(
+        model=model,
+        current_ids_batch=current_ids_batch,
+        remaining_patches_batch=remaining_patches_batch,
+        chunk_start=chunk_start,
+        target_chunk_patches=target_chunk_patches,
+        precision=precision,
+        replay_context_patches=replay_context_patches,
+        replay_batch_size=replay_batch_size,
+        detach_policy=detach_policy,
+        error_context="batched PPO replay",
+    )
+    if not payload:
+        return {}
+    return {
+        sample_idx: value_head(encoded)
+        for sample_idx, (encoded, _targets) in payload.items()
+    }
 
 
 def tail_patch_value_chunk(
@@ -543,41 +580,17 @@ def tail_patch_value_chunk(
     replay_context_patches: int | None = None,
     detach_policy: bool = True,
 ) -> torch.Tensor:
-    normalized_prefix = [
-        normalize_patch_for_context(
-            patch,
-            eos_token_id=model.eos_token_id,
-            special_token_id=model.special_token_id,
-        )
-        for patch in remaining_patches[:chunk_end]
-    ]
-    all_ids = current_ids[:]
-    for patch in normalized_prefix:
-        all_ids.extend(patch)
-
-    if len(all_ids) % PATCH_SIZE != 0:
-        raise RuntimeError("PPO value replay expected full-patch alignment before chunked tail scoring")
-
-    total_patches = len(all_ids) // PATCH_SIZE
-    context_patch_count = len(current_ids) // PATCH_SIZE
-    start_patch = _replay_start_patch(total_patches, context_patch_count, replay_context_patches)
-
-    trimmed_ids = all_ids[start_patch * PATCH_SIZE :]
-    device = next(model.parameters()).device
-    patches_tensor = torch.tensor(trimmed_ids, device=device, dtype=torch.long).reshape(1, -1, PATCH_SIZE)
-    first_target_local = context_patch_count - start_patch
-    if first_target_local <= 0:
-        raise RuntimeError("PPO value replay window dropped all context before generated target patches")
-
-    context = torch.no_grad() if detach_policy else nullcontext()
-    with context:
-        with autocast_context(device, precision):
-            encoded = model.patch_level_decoder(patches_tensor)["last_hidden_state"][0]
-        encoded_start = first_target_local + chunk_start - 1
-        encoded_end = first_target_local + chunk_end - 1
-        encoded_targets = encoded[encoded_start:encoded_end]
-    if detach_policy:
-        encoded_targets = encoded_targets.detach()
+    encoded_targets, _target_patches = tail_encoded_targets(
+        model=model,
+        current_ids=current_ids,
+        remaining_patches=remaining_patches,
+        chunk_start=chunk_start,
+        chunk_end=chunk_end,
+        precision=precision,
+        replay_context_patches=replay_context_patches,
+        detach_policy=detach_policy,
+        error_context="PPO value replay",
+    )
     return value_head(encoded_targets)
 
 
@@ -591,41 +604,17 @@ def tail_patch_hidden_state_chunk(
     replay_context_patches: int | None = None,
     detach_policy: bool = True,
 ) -> torch.Tensor:
-    normalized_prefix = [
-        normalize_patch_for_context(
-            patch,
-            eos_token_id=model.eos_token_id,
-            special_token_id=model.special_token_id,
-        )
-        for patch in remaining_patches[:chunk_end]
-    ]
-    all_ids = current_ids[:]
-    for patch in normalized_prefix:
-        all_ids.extend(patch)
-
-    if len(all_ids) % PATCH_SIZE != 0:
-        raise RuntimeError("PPO hidden-state replay expected full-patch alignment before chunked tail scoring")
-
-    total_patches = len(all_ids) // PATCH_SIZE
-    context_patch_count = len(current_ids) // PATCH_SIZE
-    start_patch = _replay_start_patch(total_patches, context_patch_count, replay_context_patches)
-
-    trimmed_ids = all_ids[start_patch * PATCH_SIZE :]
-    device = next(model.parameters()).device
-    patches_tensor = torch.tensor(trimmed_ids, device=device, dtype=torch.long).reshape(1, -1, PATCH_SIZE)
-    first_target_local = context_patch_count - start_patch
-    if first_target_local <= 0:
-        raise RuntimeError("PPO hidden-state replay window dropped all context before generated target patches")
-
-    context = torch.no_grad() if detach_policy else nullcontext()
-    with context:
-        with autocast_context(device, precision):
-            encoded = model.patch_level_decoder(patches_tensor)["last_hidden_state"][0]
-        encoded_start = first_target_local + chunk_start - 1
-        encoded_end = first_target_local + chunk_end - 1
-        encoded_targets = encoded[encoded_start:encoded_end]
-    if detach_policy:
-        encoded_targets = encoded_targets.detach()
+    encoded_targets, _target_patches = tail_encoded_targets(
+        model=model,
+        current_ids=current_ids,
+        remaining_patches=remaining_patches,
+        chunk_start=chunk_start,
+        chunk_end=chunk_end,
+        precision=precision,
+        replay_context_patches=replay_context_patches,
+        detach_policy=detach_policy,
+        error_context="PPO hidden-state replay",
+    )
     return encoded_targets
 
 
@@ -713,6 +702,85 @@ def trajectory_patch_logprobs_values(
     )
 
 
+def batched_trajectory_patch_logprobs_values(
+    model: NotaGenLMHeadModel,
+    value_head: PatchValueHead,
+    flat_prompt_ids: list[int],
+    generated_patches_batch: list[list[list[int]]],
+    precision: str,
+    replay_context_patches: int | None = None,
+    target_chunk_patches: int = 0,
+    replay_batch_size: int = 0,
+) -> list[PatchReplayChunk]:
+    device = next(model.parameters()).device
+    current_ids_batch = [list(flat_prompt_ids) for _idx in generated_patches_batch]
+    remaining_batch: list[list[list[int]]] = []
+    outputs: list[list[PatchReplayChunk]] = [[] for _idx in generated_patches_batch]
+
+    for sample_idx, generated_patches in enumerate(generated_patches_batch):
+        current_ids = current_ids_batch[sample_idx]
+        start_idx = 0
+        while start_idx < len(generated_patches) and len(current_ids) % PATCH_SIZE != 0:
+            patch = generated_patches[start_idx]
+            outputs[sample_idx].append(
+                patch_logprob_sum_and_value(
+                    model,
+                    value_head,
+                    current_ids,
+                    patch,
+                    precision,
+                    replay_context_patches=replay_context_patches,
+                )
+            )
+            current_ids.extend(
+                normalize_patch_for_context(
+                    patch,
+                    eos_token_id=model.eos_token_id,
+                    special_token_id=model.special_token_id,
+                )
+            )
+            start_idx += 1
+        current_ids_batch[sample_idx] = current_ids
+        remaining_batch.append(generated_patches[start_idx:])
+
+    max_remaining = max((len(remaining) for remaining in remaining_batch), default=0)
+    chunk_size = max_remaining if target_chunk_patches <= 0 else target_chunk_patches
+    if chunk_size > 0:
+        for chunk_start in range(0, max_remaining, chunk_size):
+            chunk_payload = batched_tail_patch_logprob_value_chunk(
+                model,
+                value_head,
+                current_ids_batch,
+                remaining_batch,
+                chunk_start,
+                target_chunk_patches,
+                precision,
+                replay_context_patches=replay_context_patches,
+                replay_batch_size=replay_batch_size,
+            )
+            for sample_idx, replay_chunk in chunk_payload.items():
+                if replay_chunk.logprobs.numel() > 0:
+                    outputs[sample_idx].append(replay_chunk)
+
+    result: list[PatchReplayChunk] = []
+    for chunks in outputs:
+        if chunks:
+            result.append(
+                PatchReplayChunk(
+                    logprobs=torch.cat([chunk.logprobs for chunk in chunks]),
+                    values=torch.cat([chunk.values for chunk in chunks]),
+                )
+            )
+        else:
+            result.append(
+                PatchReplayChunk(
+                    logprobs=torch.empty(0, device=device),
+                    values=torch.empty(0, device=device),
+                )
+            )
+    return result
+
+
 def trajectory_patch_value_chunks(
     model: NotaGenLMHeadModel,
     value_head: PatchValueHead,
@@ -793,6 +861,77 @@ def trajectory_patch_values(
     if not chunks:
         return torch.empty(0, device=device)
     return torch.cat(chunks)
+
+
+def batched_trajectory_patch_values(
+    model: NotaGenLMHeadModel,
+    value_head: PatchValueHead,
+    flat_prompt_ids: list[int],
+    generated_patches_batch: list[list[list[int]]],
+    precision: str,
+    replay_context_patches: int | None = None,
+    target_chunk_patches: int = 0,
+    replay_batch_size: int = 0,
+    detach_policy: bool = True,
+) -> list[torch.Tensor]:
+    device = next(model.parameters()).device
+    current_ids_batch = [list(flat_prompt_ids) for _idx in generated_patches_batch]
+    remaining_batch: list[list[list[int]]] = []
+    outputs: list[list[torch.Tensor]] = [[] for _idx in generated_patches_batch]
+
+    for sample_idx, generated_patches in enumerate(generated_patches_batch):
+        current_ids = current_ids_batch[sample_idx]
+        start_idx = 0
+        while start_idx < len(generated_patches) and len(current_ids) % PATCH_SIZE != 0:
+            patch = generated_patches[start_idx]
+            outputs[sample_idx].append(
+                value_from_last_patch(
+                    model,
+                    value_head,
+                    current_ids,
+                    precision,
+                    replay_context_patches=replay_context_patches,
+                    detach_policy=detach_policy,
+                ).reshape(1)
+            )
+            current_ids.extend(
+                normalize_patch_for_context(
+                    patch,
+                    eos_token_id=model.eos_token_id,
+                    special_token_id=model.special_token_id,
+                )
+            )
+            start_idx += 1
+        current_ids_batch[sample_idx] = current_ids
+        remaining_batch.append(generated_patches[start_idx:])
+
+    max_remaining = max((len(remaining) for remaining in remaining_batch), default=0)
+    chunk_size = max_remaining if target_chunk_patches <= 0 else target_chunk_patches
+    if chunk_size > 0:
+        for chunk_start in range(0, max_remaining, chunk_size):
+            chunk_payload = batched_tail_patch_value_chunk(
+                model,
+                value_head,
+                current_ids_batch,
+                remaining_batch,
+                chunk_start,
+                target_chunk_patches,
+                precision,
+                replay_context_patches=replay_context_patches,
+                replay_batch_size=replay_batch_size,
+                detach_policy=detach_policy,
+            )
+            for sample_idx, values in chunk_payload.items():
+                if values.numel() > 0:
+                    outputs[sample_idx].append(values)
+
+    result: list[torch.Tensor] = []
+    for chunks in outputs:
+        if chunks:
+            result.append(torch.cat(chunks))
+        else:
+            result.append(torch.empty(0, device=device))
+    return result
 
 
 def trajectory_patch_hidden_state_chunks(
@@ -1876,19 +2015,17 @@ def run_ppo_replay_epoch_microbatched(
         patch_start = offsets[trajectory_start][0]
         patch_end = offsets[trajectory_end - 1][1]
         expected_patches = patch_end - patch_start
-        chunk_replays: list[PatchReplayChunk] = []
-        for payload in rollout_payloads[trajectory_start:trajectory_end]:
-            chunk_replays.append(
-                trajectory_patch_logprobs_values(
-                    policy_model,
-                    value_head,
-                    flat_prompt_ids,
-                    payload.generated_patches,
-                    args.precision,
-                    replay_context_patches=args.replay_context_patches,
-                    target_chunk_patches=args.score_chunk_patches,
-                )
-            )
+        trajectory_batch = rollout_payloads[trajectory_start:trajectory_end]
+        chunk_replays = batched_trajectory_patch_logprobs_values(
+            policy_model,
+            value_head,
+            flat_prompt_ids,
+            [payload.generated_patches for payload in trajectory_batch],
+            args.precision,
+            replay_context_patches=args.replay_context_patches,
+            target_chunk_patches=args.score_chunk_patches,
+            replay_batch_size=0,
+        )
         new_logprobs = torch.cat([replay.logprobs.float() for replay in chunk_replays])
         new_values = torch.cat([replay.values.float() for replay in chunk_replays])
         if new_logprobs.numel() != expected_patches:
@@ -1974,16 +2111,18 @@ def post_step_replay_logprobs_microbatched(
     with torch.no_grad():
         for trajectory_start in range(0, len(rollout_payloads), microbatch_size):
             trajectory_end = min(len(rollout_payloads), trajectory_start + microbatch_size)
-            for payload in rollout_payloads[trajectory_start:trajectory_end]:
-                replay = trajectory_patch_logprobs_values(
-                    policy_model,
-                    value_head,
-                    flat_prompt_ids,
-                    payload.generated_patches,
-                    args.precision,
-                    replay_context_patches=args.replay_context_patches,
-                    target_chunk_patches=args.score_chunk_patches,
-                )
+            trajectory_batch = rollout_payloads[trajectory_start:trajectory_end]
+            replay_batch = batched_trajectory_patch_logprobs_values(
+                policy_model,
+                value_head,
+                flat_prompt_ids,
+                [payload.generated_patches for payload in trajectory_batch],
+                args.precision,
+                replay_context_patches=args.replay_context_patches,
+                target_chunk_patches=args.score_chunk_patches,
+                replay_batch_size=0,
+            )
+            for replay in replay_batch:
                 logprobs.append(replay.logprobs.detach().float())
             if next(policy_model.parameters()).device.type == "cuda":
                 torch.cuda.empty_cache()
@@ -2519,24 +2658,30 @@ def train_value_head_on_returns(
 
     def collect_values() -> list[torch.Tensor]:
         values_by_trajectory: list[torch.Tensor] = []
-        for payload, returns in zip(rollout_payloads, return_tensors, strict=True):
-            values = trajectory_patch_values(
+        microbatch_size = _effective_microbatch_size(args.ppo_replay_microbatch_size, len(rollout_payloads))
+        for trajectory_start in range(0, len(rollout_payloads), microbatch_size):
+            trajectory_end = min(len(rollout_payloads), trajectory_start + microbatch_size)
+            trajectory_batch = rollout_payloads[trajectory_start:trajectory_end]
+            return_batch = return_tensors[trajectory_start:trajectory_end]
+            value_batch = batched_trajectory_patch_values(
                 policy_model,
                 value_head,
                 flat_prompt_ids,
-                payload.generated_patches,
+                [payload.generated_patches for payload in trajectory_batch],
                 args.precision,
                 replay_context_patches=args.replay_context_patches,
                 target_chunk_patches=args.score_chunk_patches,
+                replay_batch_size=0,
                 detach_policy=True,
             )
-            if values.shape != returns.shape:
-                raise RuntimeError(
-                    "value warmup shape mismatch: "
-                    f"trajectory={payload.trajectory_index} values={tuple(values.shape)} "
-                    f"returns={tuple(returns.shape)}"
-                )
-            values_by_trajectory.append(values)
+            for payload, returns, values in zip(trajectory_batch, return_batch, value_batch, strict=True):
+                if values.shape != returns.shape:
+                    raise RuntimeError(
+                        "value warmup shape mismatch: "
+                        f"trajectory={payload.trajectory_index} values={tuple(values.shape)} "
+                        f"returns={tuple(returns.shape)}"
+                    )
+                values_by_trajectory.append(values)
         return values_by_trajectory
 
     for epoch_idx in range(1, args.value_warmup_epochs + 1):
@@ -2771,26 +2916,39 @@ def run_ppo_smoke(
         old_replays: list[PatchReplayChunk] = []
         reward_tensors: list[torch.Tensor] = []
         with torch.no_grad():
-            for payload, reward_trace in zip(rollout_payloads, reward_traces, strict=True):
-                old_replay = trajectory_patch_logprobs_values(
+            microbatch_size = _effective_microbatch_size(args.ppo_replay_microbatch_size, len(rollout_payloads))
+            for trajectory_start in range(0, len(rollout_payloads), microbatch_size):
+                trajectory_end = min(len(rollout_payloads), trajectory_start + microbatch_size)
+                trajectory_batch = rollout_payloads[trajectory_start:trajectory_end]
+                reward_trace_batch = reward_traces[trajectory_start:trajectory_end]
+                old_replay_batch = batched_trajectory_patch_logprobs_values(
                     old_logprob_model,
                     value_head,
                     prompt_flat,
-                    payload.generated_patches,
+                    [payload.generated_patches for payload in trajectory_batch],
                     args.precision,
                     replay_context_patches=args.replay_context_patches,
                     target_chunk_patches=args.score_chunk_patches,
+                    replay_batch_size=0,
                 )
-                if old_replay.logprobs.numel() == 0:
-                    raise RuntimeError(f"PPO rollout {payload.trajectory_index} produced no scorable patches")
-                if len(reward_trace.rewards) != old_replay.logprobs.numel():
-                    raise RuntimeError(
-                        "PPO patch reward/logprob count mismatch: "
-                        f"trajectory={payload.trajectory_index} rewards={len(reward_trace.rewards)} "
-                        f"logprobs={old_replay.logprobs.numel()}"
-                    )
-                old_replays.append(old_replay)
-                reward_tensors.append(torch.tensor(reward_trace.rewards, device=device, dtype=torch.float32))
+                for payload, reward_trace, old_replay in zip(
+                    trajectory_batch,
+                    reward_trace_batch,
+                    old_replay_batch,
+                    strict=True,
+                ):
+                    if old_replay.logprobs.numel() == 0:
+                        raise RuntimeError(f"PPO rollout {payload.trajectory_index} produced no scorable patches")
+                    if len(reward_trace.rewards) != old_replay.logprobs.numel():
+                        raise RuntimeError(
+                            "PPO patch reward/logprob count mismatch: "
+                            f"trajectory={payload.trajectory_index} rewards={len(reward_trace.rewards)} "
+                            f"logprobs={old_replay.logprobs.numel()}"
+                        )
+                    old_replays.append(old_replay)
+                    reward_tensors.append(torch.tensor(reward_trace.rewards, device=device, dtype=torch.float32))
+                if device.type == "cuda":
+                    torch.cuda.empty_cache()
         timings["old_replay_s"] = time.perf_counter() - old_replay_start
         old_logprobs = torch.cat([replay.logprobs.detach().float() for replay in old_replays])
         initial_old_value_tensors = [replay.values.detach().float() for replay in old_replays]
@@ -2816,19 +2974,27 @@ def run_ppo_smoke(
         if args.value_warmup_epochs > 0:
             old_value_refresh_start = time.perf_counter()
             with torch.no_grad():
-                old_value_tensors = [
-                    trajectory_patch_values(
-                        policy_model,
-                        value_head,
-                        prompt_flat,
-                        payload.generated_patches,
-                        args.precision,
-                        replay_context_patches=args.replay_context_patches,
-                        target_chunk_patches=args.score_chunk_patches,
-                        detach_policy=True,
-                    ).detach().float()
-                    for payload in rollout_payloads
-                ]
+                old_value_tensors = []
+                microbatch_size = _effective_microbatch_size(args.ppo_replay_microbatch_size, len(rollout_payloads))
+                for trajectory_start in range(0, len(rollout_payloads), microbatch_size):
+                    trajectory_end = min(len(rollout_payloads), trajectory_start + microbatch_size)
+                    trajectory_batch = rollout_payloads[trajectory_start:trajectory_end]
+                    old_value_tensors.extend(
+                        batched_trajectory_patch_values(
+                            policy_model,
+                            value_head,
+                            prompt_flat,
+                            [payload.generated_patches for payload in trajectory_batch],
+                            args.precision,
+                            replay_context_patches=args.replay_context_patches,
+                            target_chunk_patches=args.score_chunk_patches,
+                            replay_batch_size=0,
+                            detach_policy=True,
+                        )
+                    )
+                    if device.type == "cuda":
+                        torch.cuda.empty_cache()
+                old_value_tensors = [values.detach().float() for values in old_value_tensors]
             timings["old_value_refresh_s"] = time.perf_counter() - old_value_refresh_start
         else:
             old_value_tensors = initial_old_value_tensors

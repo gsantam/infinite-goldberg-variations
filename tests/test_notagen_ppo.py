@@ -20,6 +20,8 @@ try:
         _project_reward_events_to_patches,
         _stream_line_end_patch_indices,
         _stream_line_spans,
+        batched_trajectory_patch_logprobs_values,
+        batched_trajectory_patch_values,
         batch_trajectory_returns_advantages,
         discounted_returns,
         generalized_advantage_estimates,
@@ -289,6 +291,148 @@ class NotaGenPPOTests(unittest.TestCase):
         self.assertEqual(replay.values.shape, (3,))
         self.assertTrue(torch.isfinite(replay.logprobs).all())
         self.assertTrue(torch.isfinite(replay.values).all())
+
+    def test_batched_patch_replay_matches_serial_for_multiple_trajectories(self):
+        torch.manual_seed(0)
+        model = _tiny_notagen()
+        value_head = PatchValueHead(32)
+        model.eval()
+        value_head.eval()
+        prompt_ids = [3 + (i % 80) for i in range(PATCH_SIZE * 4)]
+        generated_batch = [
+            [
+                [11 + ((patch_idx * 17 + i) % 50) for i in range(PATCH_SIZE)]
+                for patch_idx in range(3)
+            ],
+            [
+                [19 + ((patch_idx * 13 + i) % 45) for i in range(PATCH_SIZE)]
+                for patch_idx in range(5)
+            ],
+            [],
+        ]
+
+        serial = [
+            trajectory_patch_logprobs_values(
+                model,
+                value_head,
+                prompt_ids,
+                generated_patches,
+                precision="fp32",
+                replay_context_patches=4,
+                target_chunk_patches=2,
+            )
+            for generated_patches in generated_batch
+        ]
+        batched = batched_trajectory_patch_logprobs_values(
+            model,
+            value_head,
+            prompt_ids,
+            generated_batch,
+            precision="fp32",
+            replay_context_patches=4,
+            target_chunk_patches=2,
+        )
+
+        self.assertEqual(len(batched), len(serial))
+        for serial_replay, batched_replay in zip(serial, batched, strict=True):
+            self.assertEqual(batched_replay.logprobs.shape, serial_replay.logprobs.shape)
+            self.assertEqual(batched_replay.values.shape, serial_replay.values.shape)
+            self.assertTrue(torch.allclose(batched_replay.logprobs, serial_replay.logprobs, atol=1e-5))
+            self.assertTrue(torch.allclose(batched_replay.values, serial_replay.values, atol=1e-6))
+
+    def test_batched_value_replay_matches_serial_for_multiple_trajectories(self):
+        torch.manual_seed(0)
+        model = _tiny_notagen()
+        value_head = PatchValueHead(32, value_hidden_size=16)
+        model.eval()
+        value_head.eval()
+        prompt_ids = [3 + (i % 80) for i in range(PATCH_SIZE * 4)]
+        generated_batch = [
+            [
+                [11 + ((patch_idx * 17 + i) % 50) for i in range(PATCH_SIZE)]
+                for patch_idx in range(3)
+            ],
+            [
+                [19 + ((patch_idx * 13 + i) % 45) for i in range(PATCH_SIZE)]
+                for patch_idx in range(5)
+            ],
+            [],
+        ]
+
+        serial = [
+            trajectory_patch_values(
+                model,
+                value_head,
+                prompt_ids,
+                generated_patches,
+                precision="fp32",
+                replay_context_patches=4,
+                target_chunk_patches=2,
+            )
+            for generated_patches in generated_batch
+        ]
+        batched = batched_trajectory_patch_values(
+            model,
+            value_head,
+            prompt_ids,
+            generated_batch,
+            precision="fp32",
+            replay_context_patches=4,
+            target_chunk_patches=2,
+        )
+
+        self.assertEqual(len(batched), len(serial))
+        for serial_values, batched_values in zip(serial, batched, strict=True):
+            self.assertEqual(batched_values.shape, serial_values.shape)
+            self.assertTrue(torch.allclose(batched_values, serial_values, atol=1e-6))
+
+    def test_batched_patch_replay_matches_serial_with_unaligned_prompt_prefix(self):
+        torch.manual_seed(0)
+        model = _tiny_notagen()
+        value_head = PatchValueHead(32)
+        model.eval()
+        value_head.eval()
+        prompt_ids = [3 + (i % 80) for i in range(PATCH_SIZE * 3 + 5)]
+        first_patch_len = PATCH_SIZE - 5
+        generated_batch = [
+            [
+                [11 + (i % 50) for i in range(first_patch_len)],
+                [23 + (i % 50) for i in range(PATCH_SIZE)],
+                [31 + (i % 40) for i in range(PATCH_SIZE)],
+            ],
+            [
+                [17 + (i % 45) for i in range(first_patch_len)],
+                [29 + (i % 35) for i in range(PATCH_SIZE)],
+            ],
+        ]
+
+        serial = [
+            trajectory_patch_logprobs_values(
+                model,
+                value_head,
+                prompt_ids,
+                generated_patches,
+                precision="fp32",
+                replay_context_patches=4,
+                target_chunk_patches=1,
+            )
+            for generated_patches in generated_batch
+        ]
+        batched = batched_trajectory_patch_logprobs_values(
+            model,
+            value_head,
+            prompt_ids,
+            generated_batch,
+            precision="fp32",
+            replay_context_patches=4,
+            target_chunk_patches=1,
+        )
+
+        for serial_replay, batched_replay in zip(serial, batched, strict=True):
+            self.assertEqual(batched_replay.logprobs.shape, serial_replay.logprobs.shape)
+            self.assertEqual(batched_replay.values.shape, serial_replay.values.shape)
+            self.assertTrue(torch.allclose(batched_replay.logprobs, serial_replay.logprobs, atol=1e-5))
+            self.assertTrue(torch.allclose(batched_replay.values, serial_replay.values, atol=1e-6))
 
     def test_ppo_clipped_loss_is_finite(self):
         old_logprobs = torch.tensor([-4.0, -3.0, -2.0])
