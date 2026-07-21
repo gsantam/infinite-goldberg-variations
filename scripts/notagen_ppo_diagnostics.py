@@ -37,6 +37,7 @@ STRUCTURAL_REWARD_COMPONENTS = (
     "bar_count_reward",
     "voice_declaration_reward",
     "score_voice_reward",
+    "structural_validity_gate_adjustment",
 )
 
 

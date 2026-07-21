@@ -70,6 +70,9 @@ class RewardBreakdown:
     bar_count_reward: float
     voice_declaration_reward: float
     score_voice_reward: float
+    structural_validity_gate_reward: float
+    ungated_total_reward: float
+    structural_validity_gate_adjustment: float
     total_reward: float
 
     def to_json(self) -> dict:
@@ -355,10 +358,23 @@ def _music21_parse_guard_tripped(
             return True
 
     token_pattern = re.compile(r"(\[[^\]]+\]|[_=^]*[A-Ga-gxz][,']*)(\d+(?:/\d*)?|/\d+|/)?")
+    bracket_token_pattern = re.compile(r"\[([^\]\n]+)\](\d+(?:/\d*)?|/\d+|/)?")
+    bracket_note_pattern = re.compile(r"[_=^]*[A-Ga-gxz][,']*(\d+(?:/\d*)?|/\d+|/)?")
     for line in stream_lines:
         cleaned = re.sub(r'"[^"\n]*"', " ", line.body)
         cleaned = re.sub(r"![^!\n]*!", " ", cleaned)
         cleaned = re.sub(r"\[[A-Za-z]:[^\]]*\]", " ", cleaned)
+        for match in bracket_token_pattern.finditer(cleaned):
+            content = match.group(1)
+            outer_multiplier = _parse_length_multiplier(match.group(2))
+            if _fraction_component_too_large(outer_multiplier, config.max_music21_duration_component):
+                return True
+            if not re.search(r"[_=^]*[A-Ga-gxz]", content):
+                continue
+            for note_match in bracket_note_pattern.finditer(content):
+                multiplier = _parse_length_multiplier(note_match.group(1))
+                if _fraction_component_too_large(multiplier, config.max_music21_duration_component):
+                    return True
         for match in token_pattern.finditer(cleaned):
             multiplier = _parse_length_multiplier(match.group(2))
             if _fraction_component_too_large(multiplier, config.max_music21_duration_component):
@@ -636,7 +652,7 @@ def _bar_count_reward(observed_bars: int, expected_bars: int) -> float:
     return max(0.0, 1.0 - abs(observed_bars - expected_bars) / expected_bars)
 
 
-def _total_reward(
+def _ungated_total_reward(
     *,
     config: GoldbergRewardConfig,
     parse_reward: float,
@@ -662,6 +678,35 @@ def _total_reward(
         + config.voice_declaration_weight * voice_declaration_reward
         + config.score_voice_weight * score_voice_reward
     )
+
+
+def _total_reward(
+    *,
+    config: GoldbergRewardConfig,
+    parse_reward: float,
+    countdown_reward: float,
+    line_closure_reward: float,
+    bar_token_reward: float,
+    meter_alignment_reward: float,
+    meter_duration_closeness_reward: float,
+    bar_meter_consistency_reward: float,
+    bar_count_reward: float,
+    voice_declaration_reward: float,
+    score_voice_reward: float,
+) -> float:
+    return _ungated_total_reward(
+        config=config,
+        parse_reward=parse_reward,
+        countdown_reward=countdown_reward,
+        line_closure_reward=line_closure_reward,
+        bar_token_reward=bar_token_reward,
+        meter_alignment_reward=meter_alignment_reward,
+        meter_duration_closeness_reward=meter_duration_closeness_reward,
+        bar_meter_consistency_reward=bar_meter_consistency_reward,
+        bar_count_reward=bar_count_reward,
+        voice_declaration_reward=voice_declaration_reward,
+        score_voice_reward=score_voice_reward,
+    ) * parse_reward
 
 
 def score_candidate_file(
@@ -690,7 +735,7 @@ def score_candidate_file(
     expected_reward_bars = target.expected_reward_bars
     bar_count_reward = _bar_count_reward(observed_stream_lines, expected_reward_bars)
 
-    total_reward = _total_reward(
+    ungated_total_reward = _ungated_total_reward(
         config=config,
         parse_reward=parse_reward,
         countdown_reward=countdown_reward,
@@ -703,6 +748,9 @@ def score_candidate_file(
         voice_declaration_reward=grammar_metrics.voice_declaration_reward,
         score_voice_reward=grammar_metrics.score_voice_reward,
     )
+    structural_validity_gate_reward = parse_reward
+    total_reward = ungated_total_reward * structural_validity_gate_reward
+    structural_validity_gate_adjustment = total_reward - ungated_total_reward
 
     return RewardBreakdown(
         candidate_path=str(candidate_path),
@@ -723,6 +771,9 @@ def score_candidate_file(
         bar_count_reward=bar_count_reward,
         voice_declaration_reward=grammar_metrics.voice_declaration_reward,
         score_voice_reward=grammar_metrics.score_voice_reward,
+        structural_validity_gate_reward=structural_validity_gate_reward,
+        ungated_total_reward=ungated_total_reward,
+        structural_validity_gate_adjustment=structural_validity_gate_adjustment,
         total_reward=total_reward,
     )
 
@@ -768,7 +819,7 @@ def score_candidate_text(
     expected_reward_bars = target.expected_reward_bars
     bar_count_reward = _bar_count_reward(observed_stream_lines, expected_reward_bars)
 
-    total_reward = _total_reward(
+    ungated_total_reward = _ungated_total_reward(
         config=config,
         parse_reward=parse_reward,
         countdown_reward=countdown_reward,
@@ -781,6 +832,9 @@ def score_candidate_text(
         voice_declaration_reward=grammar_metrics.voice_declaration_reward,
         score_voice_reward=grammar_metrics.score_voice_reward,
     )
+    structural_validity_gate_reward = parse_reward
+    total_reward = ungated_total_reward * structural_validity_gate_reward
+    structural_validity_gate_adjustment = total_reward - ungated_total_reward
 
     return RewardBreakdown(
         candidate_path=candidate_name,
@@ -801,6 +855,9 @@ def score_candidate_text(
         bar_count_reward=bar_count_reward,
         voice_declaration_reward=grammar_metrics.voice_declaration_reward,
         score_voice_reward=grammar_metrics.score_voice_reward,
+        structural_validity_gate_reward=structural_validity_gate_reward,
+        ungated_total_reward=ungated_total_reward,
+        structural_validity_gate_adjustment=structural_validity_gate_adjustment,
         total_reward=total_reward,
     )
 
@@ -831,7 +888,7 @@ def score_candidate_text_with_local_metrics(
     expected_reward_bars = target.expected_reward_bars
     bar_count_reward = _bar_count_reward(observed_stream_lines, expected_reward_bars)
 
-    total_reward = _total_reward(
+    ungated_total_reward = _ungated_total_reward(
         config=config,
         parse_reward=parse_reward,
         countdown_reward=countdown_reward,
@@ -844,6 +901,9 @@ def score_candidate_text_with_local_metrics(
         voice_declaration_reward=grammar_metrics.voice_declaration_reward,
         score_voice_reward=grammar_metrics.score_voice_reward,
     )
+    structural_validity_gate_reward = parse_reward
+    total_reward = ungated_total_reward * structural_validity_gate_reward
+    structural_validity_gate_adjustment = total_reward - ungated_total_reward
 
     breakdown = RewardBreakdown(
         candidate_path=candidate_name,
@@ -864,6 +924,9 @@ def score_candidate_text_with_local_metrics(
         bar_count_reward=bar_count_reward,
         voice_declaration_reward=grammar_metrics.voice_declaration_reward,
         score_voice_reward=grammar_metrics.score_voice_reward,
+        structural_validity_gate_reward=structural_validity_gate_reward,
+        ungated_total_reward=ungated_total_reward,
+        structural_validity_gate_adjustment=structural_validity_gate_adjustment,
         total_reward=total_reward,
     )
     return CandidateStructuralScore(
