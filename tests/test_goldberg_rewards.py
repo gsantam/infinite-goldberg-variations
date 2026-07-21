@@ -15,9 +15,12 @@ from evaluation.rewards import (
     _extract_header_context,
     _extract_stream_line_features,
     _abc_grammar_metrics,
+    _stream_line_local_metrics,
+    _stream_line_metric_bundle,
     count_notagen_structure_lines,
     _parse_length_multiplier,
     score_candidate_text,
+    score_candidate_text_with_local_metrics,
     _total_reward,
     _validated_bar_metrics,
 )
@@ -183,6 +186,97 @@ class GoldbergRewardTests(unittest.TestCase):
 
         self.assertEqual(metrics.voice_declaration_reward, 0.5)
         self.assertEqual(metrics.score_voice_reward, 0.5)
+
+    def test_stream_line_local_metrics_match_old_per_line_calls(self):
+        text = "\n".join(
+            [
+                "%%score ( 1 2 )",
+                "M:3/4",
+                "L:1/8",
+                "V:1 treble",
+                "V:2 treble",
+                "[r:0/4][V:1]C2D2E2|[V:2]x6|",
+                "[r:1/3][V:1][M:12/8]C2D2E2F2G2A2|[V:2]x12|",
+                "[r:2/2][V:1]C2D2E2|[V:2]x4|",
+                "[r:3/1][V:4]G,6|",
+                "[r:4/0]plain text without a bar",
+            ]
+        )
+        header = _extract_header_context(text)
+        stream_lines = _extract_stream_line_features(text)
+
+        optimized_bundle = _stream_line_metric_bundle(stream_lines, header)
+        optimized = _stream_line_local_metrics(stream_lines, header)
+        old_full_meter_metrics = _validated_bar_metrics(stream_lines, header)
+        old_full_grammar_metrics = _abc_grammar_metrics(stream_lines, header)
+        old_meter_metrics = [_validated_bar_metrics([line], header) for line in stream_lines]
+        old_grammar_metrics = [_abc_grammar_metrics([line], header) for line in stream_lines]
+
+        self.assertEqual(optimized_bundle.meter_metrics, old_full_meter_metrics)
+        self.assertEqual(optimized_bundle.grammar_metrics, old_full_grammar_metrics)
+        self.assertEqual(
+            optimized.meter_alignment_reward,
+            [metrics.meter_alignment_reward for metrics in old_meter_metrics],
+        )
+        self.assertEqual(
+            optimized.meter_duration_closeness_reward,
+            [metrics.meter_duration_closeness_reward for metrics in old_meter_metrics],
+        )
+        self.assertEqual(
+            optimized.bar_meter_consistency_reward,
+            [metrics.bar_meter_consistency_reward for metrics in old_meter_metrics],
+        )
+        self.assertEqual(
+            optimized.voice_declaration_reward,
+            [metrics.voice_declaration_reward for metrics in old_grammar_metrics],
+        )
+        self.assertEqual(
+            optimized.score_voice_reward,
+            [metrics.score_voice_reward for metrics in old_grammar_metrics],
+        )
+
+    def test_score_candidate_text_with_local_metrics_matches_default_scorer(self):
+        target = StructuralTarget(expected_bars=2, expected_structure_bars=2)
+        text = "\n".join(
+            [
+                "%%score ( 1 2 )",
+                "M:3/4",
+                "L:1/8",
+                "V:1 treble",
+                "V:2 treble",
+                "[r:0/1][V:1]C2D2E2|[V:2]x6|",
+                "[r:1/0][V:1]E2D2C2|[V:2]x6|",
+            ]
+        )
+
+        direct = score_candidate_text(text, target, GoldbergRewardConfig(music21_parse_timeout_s=1.0))
+        bundled = score_candidate_text_with_local_metrics(
+            text,
+            target,
+            GoldbergRewardConfig(music21_parse_timeout_s=1.0),
+        )
+
+        self.assertEqual(bundled.breakdown, direct)
+        self.assertEqual(len(bundled.stream_lines), 2)
+        self.assertEqual(len(bundled.local_metrics.meter_alignment_reward), 2)
+
+    def test_abc_tokenize_parse_validation_mode_scores_without_full_stream_parse(self):
+        target = StructuralTarget(expected_bars=1, expected_structure_bars=1)
+        text = "\n".join(
+            [
+                "M:3/4",
+                "L:1/8",
+                "[r:0/0][V:1]C2D2E2|",
+            ]
+        )
+
+        breakdown = score_candidate_text(
+            text,
+            target,
+            GoldbergRewardConfig(parse_validation_mode="abc-tokenize", music21_parse_timeout_s=1.0),
+        )
+
+        self.assertTrue(breakdown.parse_valid)
 
     def test_expand_notagen_rest_omitted_voice_segments_adds_missing_declared_voices(self):
         text = "\n".join(

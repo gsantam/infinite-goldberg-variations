@@ -306,6 +306,78 @@ def tensor_distribution_summary(values: torch.Tensor) -> dict:
     }
 
 
+def advantage_distribution_summary(
+    raw_advantages: torch.Tensor,
+    normalized_advantages: torch.Tensor,
+    *,
+    trajectory_lengths: list[int] | None = None,
+) -> dict:
+    raw_advantages_f = raw_advantages.detach().float().reshape(-1)
+    normalized_advantages_f = normalized_advantages.detach().float().reshape(-1)
+    if raw_advantages_f.shape != normalized_advantages_f.shape:
+        raise RuntimeError(
+            "advantage summary shape mismatch: "
+            f"raw={tuple(raw_advantages_f.shape)} normalized={tuple(normalized_advantages_f.shape)}"
+        )
+
+    finite = torch.isfinite(raw_advantages_f) & torch.isfinite(normalized_advantages_f)
+    raw_finite = raw_advantages_f[finite]
+    normalized_finite = normalized_advantages_f[finite]
+    positive = raw_finite > 0
+    negative = raw_finite < 0
+    zero = raw_finite == 0
+    summary = {
+        "raw": tensor_distribution_summary(raw_finite),
+        "normalized": tensor_distribution_summary(normalized_finite),
+        "positive_fraction": masked_tensor_mean(positive.float(), torch.ones_like(positive, dtype=torch.bool)),
+        "negative_fraction": masked_tensor_mean(negative.float(), torch.ones_like(negative, dtype=torch.bool)),
+        "zero_fraction": masked_tensor_mean(zero.float(), torch.ones_like(zero, dtype=torch.bool)),
+        "positive_mean": masked_tensor_mean(raw_finite, positive),
+        "negative_mean": masked_tensor_mean(raw_finite, negative),
+        "abs_mean": _safe_float(raw_finite.abs().mean()) if raw_finite.numel() else None,
+    }
+    if trajectory_lengths is None:
+        return summary
+
+    total_patches = int(sum(trajectory_lengths))
+    if raw_advantages_f.numel() != total_patches:
+        raise RuntimeError(
+            "advantage trajectory summary length mismatch: "
+            f"advantages={raw_advantages_f.numel()} trajectory_patches={total_patches}"
+        )
+
+    raw_means: list[torch.Tensor] = []
+    raw_sums: list[torch.Tensor] = []
+    normalized_means: list[torch.Tensor] = []
+    normalized_sums: list[torch.Tensor] = []
+    for start, end in _trajectory_patch_offsets(trajectory_lengths):
+        raw_slice = raw_advantages_f[start:end]
+        normalized_slice = normalized_advantages_f[start:end]
+        if raw_slice.numel() == 0:
+            continue
+        raw_means.append(raw_slice.mean())
+        raw_sums.append(raw_slice.sum())
+        normalized_means.append(normalized_slice.mean())
+        normalized_sums.append(normalized_slice.sum())
+
+    if raw_means:
+        summary["by_trajectory"] = {
+            "raw_mean": tensor_distribution_summary(torch.stack(raw_means)),
+            "raw_sum": tensor_distribution_summary(torch.stack(raw_sums)),
+            "normalized_mean": tensor_distribution_summary(torch.stack(normalized_means)),
+            "normalized_sum": tensor_distribution_summary(torch.stack(normalized_sums)),
+        }
+    else:
+        empty = tensor_distribution_summary(torch.empty(0))
+        summary["by_trajectory"] = {
+            "raw_mean": empty,
+            "raw_sum": empty,
+            "normalized_mean": empty,
+            "normalized_sum": empty,
+        }
+    return summary
+
+
 def tensor_correlation(left: torch.Tensor, right: torch.Tensor, *, eps: float = 1e-8) -> float | None:
     left_f = left.detach().float().reshape(-1)
     right_f = right.detach().float().reshape(-1)
@@ -577,6 +649,11 @@ def logprob_advantage_diagnostics(
         "old_logprob": tensor_distribution_summary(old_logprobs_f),
         "raw_advantage": tensor_distribution_summary(raw_advantages_f),
         "normalized_advantage": tensor_distribution_summary(normalized_advantages_f),
+        "advantage_summary": advantage_distribution_summary(
+            raw_advantages_f,
+            normalized_advantages_f,
+            trajectory_lengths=trajectory_lengths,
+        ),
         "patch_reward": tensor_distribution_summary(patch_rewards_f),
         "return": tensor_distribution_summary(returns_f),
         "value_target": tensor_distribution_summary(value_targets_f),
@@ -689,11 +766,28 @@ def logprob_advantage_diagnostics(
         trajectory_advantages = raw_advantages_f[start:end]
         trajectory_normalized_advantages = normalized_advantages_f[start:end]
         trajectory_nonzero_advantage = trajectory_advantages != 0
+        rollout_length = trajectory_log.get("rollout_length_diagnostics") or trajectory_log.get("reward_breakdown", {})
         per_trajectory.append(
             {
                 "trajectory_index": trajectory_log.get("trajectory_index"),
                 "reward": trajectory_log.get("reward"),
                 "patch_count": int(end - start),
+                "stop_reason": rollout_length.get("stop_reason") if isinstance(rollout_length, dict) else None,
+                "target_stream_lines_reached": (
+                    rollout_length.get("target_stream_lines_reached") if isinstance(rollout_length, dict) else None
+                ),
+                "completion_stream_lines": (
+                    rollout_length.get("completion_stream_lines") if isinstance(rollout_length, dict) else None
+                ),
+                "missing_stream_lines_to_target": (
+                    rollout_length.get("missing_stream_lines_to_target") if isinstance(rollout_length, dict) else None
+                ),
+                "patches_per_stream_line": (
+                    rollout_length.get("patches_per_stream_line") if isinstance(rollout_length, dict) else None
+                ),
+                "chars_per_stream_line_max": (
+                    rollout_length.get("chars_per_stream_line_max") if isinstance(rollout_length, dict) else None
+                ),
                 "old_logprob_sum": _safe_float(trajectory_old.sum()),
                 "post_step_logprob_sum": _safe_float(trajectory_post.sum()),
                 "log_ratio_sum": _safe_float(trajectory_ratio.sum()),
