@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import bisect
+import math
 import multiprocessing as mp
 import json
 import re
@@ -1325,6 +1326,56 @@ def _rollout_length_summary(trajectory_logs: list[dict]) -> dict:
     }
 
 
+def _rollout_sampling_summary(rollout_payloads: list[PPORolloutPayload]) -> dict:
+    if not rollout_payloads:
+        return {
+            "sampled_candidates": 0,
+            "kept_trajectories": 0,
+            "success_candidates": 0,
+            "failed_candidates": 0,
+            "dropped_candidates": 0,
+            "dropped_success_candidates": 0,
+        }
+
+    metas = [payload.meta or {} for payload in rollout_payloads]
+
+    def max_meta_int(key: str, default: int) -> int:
+        values = [int(meta[key]) for meta in metas if meta.get(key) is not None]
+        return max(values) if values else default
+
+    def max_meta_float(key: str, default: float) -> float:
+        values = [float(meta[key]) for meta in metas if meta.get(key) is not None]
+        return max(values) if values else default
+
+    failed_kept = int(sum(1 for meta in metas if meta.get("rollout_failed")))
+    sampled_candidates = max_meta_int("rollout_sampled_candidates", len(rollout_payloads))
+    success_candidates = max_meta_int("rollout_success_candidates", len(rollout_payloads) - failed_kept)
+    failed_candidates = max_meta_int("rollout_failed_candidates", failed_kept)
+    dropped_candidates = max_meta_int("rollout_dropped_candidates", sampled_candidates - len(rollout_payloads))
+    dropped_success_candidates = max_meta_int("rollout_dropped_success_candidates", 0)
+    effective_batch_size = max_meta_int(
+        "rollout_effective_batch_size",
+        max_meta_int("rollout_batch_size", len(rollout_payloads)),
+    )
+    requested_batch_size = max_meta_int("rollout_requested_batch_size", effective_batch_size)
+    failure_policy = next(
+        (str(meta["rollout_failure_policy"]) for meta in metas if meta.get("rollout_failure_policy") is not None),
+        None,
+    )
+    return {
+        "sampled_candidates": int(sampled_candidates),
+        "kept_trajectories": int(len(rollout_payloads)),
+        "success_candidates": int(success_candidates),
+        "failed_candidates": int(failed_candidates),
+        "dropped_candidates": int(dropped_candidates),
+        "dropped_success_candidates": int(dropped_success_candidates),
+        "spares_percent": max_meta_float("rollout_spares_percent", 0.0),
+        "effective_batch_size": int(effective_batch_size),
+        "requested_batch_size": int(requested_batch_size),
+        "failure_policy": failure_policy,
+    }
+
+
 def _stream_line_end_patch_indices(completion_text: str, patch_texts: list[str]) -> list[int]:
     patch_spans = _patch_char_spans(patch_texts)
     if not patch_spans:
@@ -2145,18 +2196,55 @@ def sample_ppo_rollouts(
     if args.rollout_batch_size <= 0:
         raise ValueError(f"rollout_batch_size must be positive, got {args.rollout_batch_size}")
 
-    rollout_payloads: list[PPORolloutPayload] = []
-    if args.rollout_batch_size > 1:
-        if not args.cached_rollout:
-            raise RuntimeError("--rollout-batch-size > 1 requires --cached-rollout")
+    failure_policy = getattr(args, "rollout_failure_policy", "error")
+    if failure_policy not in {"error", "zero", "spares"}:
+        raise ValueError(f"unknown rollout_failure_policy: {failure_policy}")
+    spares_percent = float(getattr(args, "rollout_spares_percent", 10.0))
+    if spares_percent < 0:
+        raise ValueError(f"rollout_spares_percent must be non-negative, got {spares_percent}")
+    max_attempts = 1 if failure_policy in {"zero", "spares"} else args.rollout_retries
 
-        pending = list(range(args.trajectories_per_step))
-        last_errors: dict[int, str] = {}
-        for retry_idx in range(args.rollout_retries):
-            next_pending: list[int] = []
-            for batch_start in range(0, len(pending), args.rollout_batch_size):
-                batch_indices = pending[batch_start : batch_start + args.rollout_batch_size]
-                seeds = [_rollout_seed(args.seed, step_idx, trajectory_idx, retry_idx) for trajectory_idx in batch_indices]
+    def failed_payload(
+        trajectory_idx: int,
+        rollout_seed: int,
+        error: str,
+        *,
+        batched_rollout: bool,
+    ) -> PPORolloutPayload:
+        return PPORolloutPayload(
+            trajectory_index=trajectory_idx,
+            rollout_seed=rollout_seed,
+            full_text=prompt,
+            generated_patches=[],
+            meta={
+                "cached_rollout": bool(args.cached_rollout),
+                "batched_rollout": bool(batched_rollout),
+                "rollout_batch_size": args.rollout_batch_size if batched_rollout else 1,
+                "rollout_target_stream_lines": target_stream_lines,
+                "rollout_failed": True,
+                "zero_contribution_rollout": True,
+                "rollout_failure_policy": failure_policy,
+                "stop_reason": "rollout_failed",
+                "error": error,
+            },
+        )
+
+    if failure_policy == "spares":
+        if args.rollout_batch_size <= 1 or not args.cached_rollout:
+            raise RuntimeError("--rollout-failure-policy spares requires cached batched rollout")
+        requested_successes = args.trajectories_per_step
+        extra_candidates = int(math.ceil(requested_successes * spares_percent / 100.0))
+        candidate_count = requested_successes + extra_candidates
+        effective_batch_size = args.rollout_batch_size
+        if args.rollout_batch_size == requested_successes:
+            effective_batch_size = candidate_count
+
+        successes: list[PPORolloutPayload] = []
+        candidate_errors: dict[int, str] = {}
+        for batch_start in range(0, candidate_count, effective_batch_size):
+            batch_indices = list(range(batch_start, min(candidate_count, batch_start + effective_batch_size)))
+            seeds = [_rollout_seed(args.seed, step_idx, candidate_idx, 0) for candidate_idx in batch_indices]
+            try:
                 batch_results = sample_completions_cached_batch(
                     model=policy_model,
                     model_shape=policy_shape,
@@ -2172,6 +2260,102 @@ def sample_ppo_rollouts(
                     timeout_s=args.timeout_s,
                     precision=args.precision,
                 )
+            except RuntimeError as exc:
+                for candidate_idx in batch_indices:
+                    candidate_errors[candidate_idx] = str(exc)
+                continue
+            for candidate_idx, rollout_seed, result in zip(batch_indices, seeds, batch_results, strict=True):
+                if result.ok and result.full_text is not None and result.generated_patches is not None:
+                    successes.append(
+                        PPORolloutPayload(
+                            trajectory_index=candidate_idx,
+                            rollout_seed=rollout_seed,
+                            full_text=result.full_text,
+                            generated_patches=result.generated_patches,
+                            meta={
+                                "cached_rollout": True,
+                                "batched_rollout": True,
+                                "rollout_batch_size": effective_batch_size,
+                                "rollout_requested_batch_size": args.rollout_batch_size,
+                                "rollout_target_stream_lines": target_stream_lines,
+                                "rollout_candidate_index": candidate_idx,
+                                "rollout_sampled_candidates": candidate_count,
+                                "rollout_spares_percent": spares_percent,
+                                **(result.meta or {}),
+                            },
+                        )
+                    )
+                else:
+                    candidate_errors[candidate_idx] = result.error or "unknown batch rollout error"
+
+        if len(successes) < requested_successes:
+            raise RuntimeError(
+                "failed to fill PPO rollout batch with spares: "
+                f"requested_successes={requested_successes} successes={len(successes)} "
+                f"sampled_candidates={candidate_count} failures={len(candidate_errors)} "
+                f"errors={candidate_errors}"
+            )
+
+        kept_payloads = successes[:requested_successes]
+        rollout_meta = {
+            "rollout_failure_policy": "spares",
+            "rollout_sampled_candidates": candidate_count,
+            "rollout_success_candidates": len(successes),
+            "rollout_failed_candidates": candidate_count - len(successes),
+            "rollout_dropped_success_candidates": len(successes) - requested_successes,
+            "rollout_dropped_candidates": candidate_count - requested_successes,
+            "rollout_spares_percent": spares_percent,
+            "rollout_effective_batch_size": effective_batch_size,
+            "rollout_requested_batch_size": args.rollout_batch_size,
+        }
+        for kept_idx, payload in enumerate(kept_payloads):
+            candidate_idx = payload.trajectory_index
+            payload.trajectory_index = kept_idx
+            payload.meta.update(rollout_meta)
+            payload.meta["rollout_candidate_index"] = candidate_idx
+        return kept_payloads
+
+    rollout_payloads: list[PPORolloutPayload] = []
+    if args.rollout_batch_size > 1:
+        if not args.cached_rollout:
+            raise RuntimeError("--rollout-batch-size > 1 requires --cached-rollout")
+
+        pending = list(range(args.trajectories_per_step))
+        last_errors: dict[int, str] = {}
+        for retry_idx in range(max_attempts):
+            next_pending: list[int] = []
+            for batch_start in range(0, len(pending), args.rollout_batch_size):
+                batch_indices = pending[batch_start : batch_start + args.rollout_batch_size]
+                seeds = [_rollout_seed(args.seed, step_idx, trajectory_idx, retry_idx) for trajectory_idx in batch_indices]
+                try:
+                    batch_results = sample_completions_cached_batch(
+                        model=policy_model,
+                        model_shape=policy_shape,
+                        prompts=[prompt] * len(batch_indices),
+                        seeds=seeds,
+                        temperature=args.temperature,
+                        top_k=args.top_k,
+                        top_p=args.top_p,
+                        target_stream_lines=target_stream_lines,
+                        target_new_stream_lines=False,
+                        max_chars=args.max_chars,
+                        max_generated_patches=args.max_generated_patches,
+                        timeout_s=args.timeout_s,
+                        precision=args.precision,
+                    )
+                except RuntimeError as exc:
+                    if failure_policy != "zero":
+                        raise
+                    for trajectory_idx, rollout_seed in zip(batch_indices, seeds, strict=True):
+                        rollout_payloads.append(
+                            failed_payload(
+                                trajectory_idx,
+                                rollout_seed,
+                                str(exc),
+                                batched_rollout=True,
+                            )
+                        )
+                    continue
                 for trajectory_idx, rollout_seed, result in zip(batch_indices, seeds, batch_results, strict=True):
                     if result.ok and result.full_text is not None and result.generated_patches is not None:
                         rollout_payloads.append(
@@ -2185,13 +2369,24 @@ def sample_ppo_rollouts(
                                     "batched_rollout": True,
                                     "rollout_batch_size": args.rollout_batch_size,
                                     "rollout_target_stream_lines": target_stream_lines,
+                                    "rollout_failure_policy": failure_policy,
                                     **(result.meta or {}),
                                 },
                             )
                         )
                     else:
                         last_errors[trajectory_idx] = result.error or "unknown batch rollout error"
-                        next_pending.append(trajectory_idx)
+                        if failure_policy == "zero":
+                            rollout_payloads.append(
+                                failed_payload(
+                                    trajectory_idx,
+                                    rollout_seed,
+                                    last_errors[trajectory_idx],
+                                    batched_rollout=True,
+                                )
+                            )
+                        else:
+                            next_pending.append(trajectory_idx)
             if not next_pending:
                 pending = []
                 break
@@ -2202,8 +2397,10 @@ def sample_ppo_rollouts(
         for trajectory_idx in range(args.trajectories_per_step):
             sample_built = False
             last_error: Exception | None = None
-            for retry_idx in range(args.rollout_retries):
+            last_rollout_seed = _rollout_seed(args.seed, step_idx, trajectory_idx, 0)
+            for retry_idx in range(max_attempts):
                 rollout_seed = _rollout_seed(args.seed, step_idx, trajectory_idx, retry_idx)
+                last_rollout_seed = rollout_seed
                 set_seed(rollout_seed)
                 try:
                     full_text, generated_patches = sample_completion(
@@ -2231,6 +2428,7 @@ def sample_ppo_rollouts(
                                 "batched_rollout": False,
                                 "rollout_batch_size": 1,
                                 "rollout_target_stream_lines": target_stream_lines,
+                                "rollout_failure_policy": failure_policy,
                             },
                         )
                     )
@@ -2240,6 +2438,16 @@ def sample_ppo_rollouts(
                     last_error = exc
                     continue
             if not sample_built:
+                if failure_policy == "zero":
+                    rollout_payloads.append(
+                        failed_payload(
+                            trajectory_idx,
+                            last_rollout_seed,
+                            str(last_error) if last_error is not None else "unknown rollout error",
+                            batched_rollout=False,
+                        )
+                    )
+                    continue
                 raise RuntimeError(f"failed to sample PPO rollout {trajectory_idx} after retries: {last_error}")
 
     rollout_payloads.sort(key=lambda item: item.trajectory_index)
@@ -2302,6 +2510,72 @@ def _score_ppo_rollout_payload(
     candidate_name_prefix: str,
 ) -> tuple[PatchRewardTrace, dict]:
     patchilizer = Patchilizer(stream=PATCH_STREAM)
+    if (payload.meta or {}).get("rollout_failed"):
+        completion_text = ""
+        stop_reason = (payload.meta or {}).get("stop_reason", "rollout_failed")
+        length_diagnostics = _rollout_length_diagnostics(
+            full_text=payload.full_text,
+            completion_text=completion_text,
+            generated_patch_count=0,
+            prompt_stream_lines=prompt_stream_lines,
+            target_stream_lines=target_stream_lines,
+            stop_reason=stop_reason,
+        )
+        reward_breakdown = {
+            "reward": 0.0,
+            "total_reward": 0.0,
+            "rollout_failed": True,
+            "zero_contribution_rollout": True,
+            "generated_patches": 0,
+            "generated_token_slots": 0,
+            "prompt_index": prompt_idx,
+            "prompt_name": prompt_name,
+            "target_structure_path": prompt_target.structure_path,
+            "target_structure_source_key": prompt_target.source_key,
+            "target_expected_reward_bars": int(target.expected_reward_bars),
+            "target_stream_lines": target_stream_lines,
+            "trajectory_index": payload.trajectory_index,
+            "rollout_seed": payload.rollout_seed,
+            "rollout_prefix_stream_lines": prompt_stream_lines,
+            "patch_reward_mode": "zero_contribution_failed_rollout",
+            "patch_reward_count": 0,
+            "patch_reward_sum": 0.0,
+            "patch_reward_component_sums": {},
+            "patch_reward_group_sums": {},
+        }
+        reward_breakdown.update(payload.meta)
+        reward_breakdown.update(length_diagnostics)
+        reward_trace = PatchRewardTrace(
+            rewards=[],
+            prefix_totals=[],
+            final_score=RewardScore(total=0.0, breakdown=reward_breakdown),
+            component_rewards={},
+            component_prefix_totals={},
+        )
+        trajectory_log = {
+            "trajectory_index": payload.trajectory_index,
+            "rollout_seed": payload.rollout_seed,
+            "reward": 0.0,
+            "full_text": payload.full_text,
+            "completion_text": completion_text,
+            "generated_patches": [],
+            "generated_patch_count": 0,
+            "generated_token_slots": 0,
+            "rollout_length_diagnostics": length_diagnostics,
+            "patch_reward_mean": 0.0,
+            "patch_reward_std": 0.0,
+            "patch_rewards": [],
+            "patch_reward_prefix_totals": [],
+            "patch_reward_components": {},
+            "patch_reward_component_prefix_totals": {},
+            "patch_reward_component_sums": {},
+            "patch_reward_groups": {},
+            "patch_reward_group_prefix_totals": {},
+            "patch_reward_group_sums": {},
+            "reward_breakdown": reward_breakdown,
+        }
+        return reward_trace, trajectory_log
+
     reward_trace = patch_rewards_from_prefix_deltas(
         prompt_text=prompt,
         generated_patches=payload.generated_patches,
@@ -2558,6 +2832,7 @@ def run_fixed_eval_batch(
         print(json.dumps(summary), flush=True)
         return summary
     rollout_s = time.perf_counter() - rollout_start
+    rollout_sampling = _rollout_sampling_summary(rollout_payloads)
 
     reward_start = time.perf_counter()
     scored = score_ppo_rollout_payloads(
@@ -2591,6 +2866,7 @@ def run_fixed_eval_batch(
         "target_stream_lines": target_stream_lines,
         "trajectory_count": len(rollout_payloads),
         "rollout_batch_size": eval_args.rollout_batch_size,
+        "rollout_sampling": rollout_sampling,
         "fixed_eval_seed_offset": args.fixed_eval_seed_offset,
         "fixed_eval_seed_step": args.fixed_eval_seed_step,
         "reward_mean": scored.reward_summary["reward_mean"],
@@ -2779,6 +3055,8 @@ def run_ppo_smoke(
         raise ValueError(f"gae_lambda must be in [0, 1], got {args.gae_lambda}")
     if args.rollout_retries <= 0:
         raise ValueError(f"rollout_retries must be positive, got {args.rollout_retries}")
+    if args.rollout_spares_percent < 0:
+        raise ValueError(f"rollout_spares_percent must be non-negative, got {args.rollout_spares_percent}")
     if args.ppo_epochs <= 0:
         raise ValueError(f"ppo_epochs must be positive, got {args.ppo_epochs}")
     if args.value_warmup_epochs < 0:
@@ -2846,6 +3124,7 @@ def run_ppo_smoke(
         )
         timings["rollout_s"] = time.perf_counter() - rollout_start
         timings["rollout_per_trajectory_s"] = timings["rollout_s"] / max(1, len(rollout_payloads))
+        rollout_sampling = _rollout_sampling_summary(rollout_payloads)
 
         reward_start = time.perf_counter()
         scored_rollouts = score_ppo_rollout_payloads(
@@ -2867,6 +3146,30 @@ def run_ppo_smoke(
         reward_traces = scored_rollouts.reward_traces
         timings["reward_s"] = time.perf_counter() - reward_start
         timings["reward_per_trajectory_s"] = timings["reward_s"] / max(1, len(rollout_payloads))
+        update_items = [
+            (payload, reward_trace, trajectory_log)
+            for payload, reward_trace, trajectory_log in zip(
+                rollout_payloads,
+                reward_traces,
+                trajectory_logs,
+                strict=True,
+            )
+            if not (payload.meta or {}).get("rollout_failed") and len(reward_trace.rewards) > 0
+        ]
+        skipped_update_logs = [
+            trajectory_log
+            for payload, reward_trace, trajectory_log in zip(
+                rollout_payloads,
+                reward_traces,
+                trajectory_logs,
+                strict=True,
+            )
+            if (payload.meta or {}).get("rollout_failed") or len(reward_trace.rewards) == 0
+        ]
+        failed_rollout_count = int(
+            sum(1 for payload in rollout_payloads if (payload.meta or {}).get("rollout_failed"))
+        )
+        zero_contribution_count = len(skipped_update_logs)
 
         if args.rollout_only:
             timings["total_step_s"] = time.perf_counter() - step_start
@@ -2887,7 +3190,12 @@ def run_ppo_smoke(
                 "target_expected_reward_bars": int(target.expected_reward_bars),
                 "target_stream_lines": target_stream_lines,
                 "trajectories_per_step": len(rollout_payloads),
+                "ppo_update_trajectories": len(update_items),
+                "zero_contribution_trajectories": zero_contribution_count,
+                "failed_rollout_count": failed_rollout_count,
                 "rollout_batch_size": args.rollout_batch_size,
+                "rollout_sampling": rollout_sampling,
+                "rollout_failure_policy": args.rollout_failure_policy,
                 "rollout_only": True,
                 "patch_reward_mean": float(np.mean(flattened_patch_rewards)) if flattened_patch_rewards else 0.0,
                 "patch_reward_std": float(np.std(flattened_patch_rewards)) if flattened_patch_rewards else 0.0,
@@ -2909,6 +3217,15 @@ def run_ppo_smoke(
             logs.append(step_log)
             continue
 
+        if not update_items:
+            raise RuntimeError(
+                "PPO step has no successful scorable rollouts; "
+                f"failed_rollouts={failed_rollout_count} zero_contribution={zero_contribution_count}"
+            )
+        update_rollout_payloads = [item[0] for item in update_items]
+        update_reward_traces = [item[1] for item in update_items]
+        update_trajectory_logs = [item[2] for item in update_items]
+
         replay_start = time.perf_counter()
         rollout_prompt = build_rollout_prefix(prompt, target_stream_lines)
         prompt_flat = [item for sublist in patchilizer.encode_generate(rollout_prompt) for item in sublist]
@@ -2916,11 +3233,11 @@ def run_ppo_smoke(
         old_replays: list[PatchReplayChunk] = []
         reward_tensors: list[torch.Tensor] = []
         with torch.no_grad():
-            microbatch_size = _effective_microbatch_size(args.ppo_replay_microbatch_size, len(rollout_payloads))
-            for trajectory_start in range(0, len(rollout_payloads), microbatch_size):
-                trajectory_end = min(len(rollout_payloads), trajectory_start + microbatch_size)
-                trajectory_batch = rollout_payloads[trajectory_start:trajectory_end]
-                reward_trace_batch = reward_traces[trajectory_start:trajectory_end]
+            microbatch_size = _effective_microbatch_size(args.ppo_replay_microbatch_size, len(update_rollout_payloads))
+            for trajectory_start in range(0, len(update_rollout_payloads), microbatch_size):
+                trajectory_end = min(len(update_rollout_payloads), trajectory_start + microbatch_size)
+                trajectory_batch = update_rollout_payloads[trajectory_start:trajectory_end]
+                reward_trace_batch = update_reward_traces[trajectory_start:trajectory_end]
                 old_replay_batch = batched_trajectory_patch_logprobs_values(
                     old_logprob_model,
                     value_head,
@@ -2966,7 +3283,7 @@ def run_ppo_smoke(
             value_head=value_head,
             value_optimizer=value_optimizer,
             flat_prompt_ids=prompt_flat,
-            rollout_payloads=rollout_payloads,
+            rollout_payloads=update_rollout_payloads,
             return_tensors=return_tensors,
             args=args,
         )
@@ -2975,10 +3292,13 @@ def run_ppo_smoke(
             old_value_refresh_start = time.perf_counter()
             with torch.no_grad():
                 old_value_tensors = []
-                microbatch_size = _effective_microbatch_size(args.ppo_replay_microbatch_size, len(rollout_payloads))
-                for trajectory_start in range(0, len(rollout_payloads), microbatch_size):
-                    trajectory_end = min(len(rollout_payloads), trajectory_start + microbatch_size)
-                    trajectory_batch = rollout_payloads[trajectory_start:trajectory_end]
+                microbatch_size = _effective_microbatch_size(
+                    args.ppo_replay_microbatch_size,
+                    len(update_rollout_payloads),
+                )
+                for trajectory_start in range(0, len(update_rollout_payloads), microbatch_size):
+                    trajectory_end = min(len(update_rollout_payloads), trajectory_start + microbatch_size)
+                    trajectory_batch = update_rollout_payloads[trajectory_start:trajectory_end]
                     old_value_tensors.extend(
                         batched_trajectory_patch_values(
                             policy_model,
@@ -3031,7 +3351,7 @@ def run_ppo_smoke(
                 value_head=value_head,
                 optimizer=optimizer,
                 flat_prompt_ids=prompt_flat,
-                rollout_payloads=rollout_payloads,
+                rollout_payloads=update_rollout_payloads,
                 trajectory_lengths=trajectory_lengths,
                 old_logprobs=old_logprobs,
                 old_values=old_values,
@@ -3055,7 +3375,7 @@ def run_ppo_smoke(
                     policy_model=policy_model,
                     value_head=value_head,
                     flat_prompt_ids=prompt_flat,
-                    rollout_payloads=rollout_payloads,
+                    rollout_payloads=update_rollout_payloads,
                     args=args,
                 )
                 post_epoch_logprob_advantage_diag = compact_logprob_advantage_diagnostics(
@@ -3113,10 +3433,14 @@ def run_ppo_smoke(
         if loss_payload is None:
             raise RuntimeError("PPO update produced no loss payload")
 
-        for trajectory_log, new_replay in zip(trajectory_logs, new_replays, strict=True):
+        for trajectory_log, new_replay in zip(update_trajectory_logs, new_replays, strict=True):
             trajectory_log["value_mean"] = float(new_replay.values.mean().detach().cpu())
             trajectory_log["value_std"] = float(new_replay.values.std(unbiased=False).detach().cpu())
             trajectory_log["scored_patches"] = int(new_replay.logprobs.numel())
+        for trajectory_log in skipped_update_logs:
+            trajectory_log["value_mean"] = None
+            trajectory_log["value_std"] = None
+            trajectory_log["scored_patches"] = 0
 
         if not args.no_step and args.post_step_kl_check:
             post_step_kl_start = time.perf_counter()
@@ -3124,7 +3448,7 @@ def run_ppo_smoke(
                 policy_model=policy_model,
                 value_head=value_head,
                 flat_prompt_ids=prompt_flat,
-                rollout_payloads=rollout_payloads,
+                rollout_payloads=update_rollout_payloads,
                 args=args,
             )
             post_step_log_ratio = post_step_logprobs - old_logprobs
@@ -3182,7 +3506,8 @@ def run_ppo_smoke(
         patch_rewards = batch_tensors.patch_rewards
         returns = batch_tensors.returns
         value_targets = batch_tensors.value_targets
-        patch_reward_component_sums = aggregate_component_sums(reward_traces)
+        patch_reward_component_sums = aggregate_component_sums(update_reward_traces)
+        all_patch_reward_component_sums = aggregate_component_sums(reward_traces)
         rollout_length = _rollout_length_summary(trajectory_logs)
         logprob_advantage_diag = logprob_advantage_diagnostics(
             old_logprobs=old_logprobs,
@@ -3194,7 +3519,7 @@ def run_ppo_smoke(
             value_targets=value_targets,
             old_values=old_values,
             trajectory_lengths=trajectory_lengths,
-            trajectory_logs=trajectory_logs,
+            trajectory_logs=update_trajectory_logs,
             clip_range=args.ppo_clip_range,
             position_bins=args.position_diagnostic_bins,
         )
@@ -3207,7 +3532,12 @@ def run_ppo_smoke(
             "target_expected_reward_bars": int(target.expected_reward_bars),
             "target_stream_lines": target_stream_lines,
             "trajectories_per_step": len(rollout_payloads),
+            "ppo_update_trajectories": len(update_rollout_payloads),
+            "zero_contribution_trajectories": zero_contribution_count,
+            "failed_rollout_count": failed_rollout_count,
             "rollout_batch_size": args.rollout_batch_size,
+            "rollout_sampling": rollout_sampling,
+            "rollout_failure_policy": args.rollout_failure_policy,
             "loss": float(loss_payload.loss.detach().cpu()),
             "policy_loss": float(loss_payload.policy_loss.detach().cpu()),
             "value_loss": float(loss_payload.value_loss.detach().cpu()),
@@ -3240,7 +3570,7 @@ def run_ppo_smoke(
             "ppo_epochs": args.ppo_epochs,
             "ppo_replay_microbatch_size": _effective_microbatch_size(
                 args.ppo_replay_microbatch_size,
-                len(rollout_payloads),
+                len(update_rollout_payloads),
             ),
             "frozen_behavior_policy": bool(behavior_policy_model is not None),
             "ppo_epoch_logs": ppo_epoch_logs,
@@ -3256,10 +3586,14 @@ def run_ppo_smoke(
             "patch_reward_std": float(patch_rewards.std(unbiased=False).detach().cpu()),
             "patch_rewards": patch_rewards.detach().cpu().tolist(),
             "patch_reward_component_sums": patch_reward_component_sums,
+            "all_patch_reward_component_sums": all_patch_reward_component_sums,
             "patch_reward_group_sums": component_group_sums(patch_reward_component_sums),
+            "all_patch_reward_group_sums": component_group_sums(all_patch_reward_component_sums),
             "rollout_length": rollout_length,
             "patch_reward_prefix_totals": (
-                trajectory_logs[0]["patch_reward_prefix_totals"] if len(trajectory_logs) == 1 else None
+                update_trajectory_logs[0]["patch_reward_prefix_totals"]
+                if len(update_trajectory_logs) == 1
+                else None
             ),
             "value_mean": float(new_values.mean().detach().cpu()),
             "value_std": float(new_values.std(unbiased=False).detach().cpu()),
@@ -3271,6 +3605,10 @@ def run_ppo_smoke(
             "reward_max": float(sample_rewards_array.max()),
             "reward_sum": float(sample_rewards_array.sum()),
             "sample_rewards": sample_rewards,
+            "update_sample_rewards": [float(log["reward"]) for log in update_trajectory_logs],
+            "skipped_update_trajectory_indices": [
+                int(log["trajectory_index"]) for log in skipped_update_logs
+            ],
             "reward_breakdown": trajectory_logs[0]["reward_breakdown"] if len(trajectory_logs) == 1 else None,
             "fixed_eval": fixed_eval_log,
             "checkpoint": checkpoint_payload,
@@ -3278,9 +3616,9 @@ def run_ppo_smoke(
             "timings": timings,
         }
         if args.save_patch_diagnostics:
-            diagnostic_component_rewards = component_reward_tensors(reward_traces, device=device)
+            diagnostic_component_rewards = component_reward_tensors(update_reward_traces, device=device)
             diagnostic_component_lambda_returns = component_lambda_return_tensors(
-                reward_traces,
+                update_reward_traces,
                 gamma=args.gamma,
                 gae_lambda=args.gae_lambda,
                 device=device,
@@ -3375,6 +3713,28 @@ def main() -> int:
     parser.add_argument("--max-generated-patches", type=int, default=256)
     parser.add_argument("--timeout-s", type=int, default=900)
     parser.add_argument("--rollout-retries", type=int, default=1)
+    parser.add_argument(
+        "--rollout-failure-policy",
+        choices=("error", "zero", "spares"),
+        default="error",
+        help=(
+            "How PPO handles rollout sampling failures. 'error' preserves strict retry/abort "
+            "behavior. 'zero' records failed trajectories with zero reward and no generated "
+            "patches, then excludes them from the PPO loss after one attempt. 'spares' "
+            "oversamples candidates in the batched rollout and keeps the first successful "
+            "trajectories_per_step candidates."
+        ),
+    )
+    parser.add_argument(
+        "--rollout-spares-percent",
+        type=float,
+        default=10.0,
+        help=(
+            "Extra rollout candidates to sample in --rollout-failure-policy spares mode, "
+            "as a percentage of --trajectories-per-step. For example, 10 with 16 "
+            "trajectories samples 18 candidates and keeps 16 successes."
+        ),
+    )
     parser.add_argument(
         "--reward-workers",
         "--workers",
