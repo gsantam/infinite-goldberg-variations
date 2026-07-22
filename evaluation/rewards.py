@@ -34,7 +34,7 @@ class StructuralTarget:
 
 @dataclass
 class GoldbergRewardConfig:
-    parse_weight: float = 0.25
+    parse_weight: float = 1.0
     countdown_weight: float = 0.25
     line_closure_weight: float = 0.25
     bar_token_weight: float = 0.10
@@ -769,7 +769,7 @@ def _total_reward(
         bar_count_reward=bar_count_reward,
         voice_declaration_reward=voice_declaration_reward,
         score_voice_reward=score_voice_reward,
-    ) * parse_reward
+    )
 
 
 def score_candidate_file(
@@ -812,8 +812,8 @@ def score_candidate_file(
         score_voice_reward=grammar_metrics.score_voice_reward,
     )
     structural_validity_gate_reward = parse_reward
-    total_reward = ungated_total_reward * structural_validity_gate_reward
-    structural_validity_gate_adjustment = total_reward - ungated_total_reward
+    total_reward = ungated_total_reward
+    structural_validity_gate_adjustment = 0.0
 
     return RewardBreakdown(
         candidate_path=str(candidate_path),
@@ -896,8 +896,8 @@ def score_candidate_text(
         score_voice_reward=grammar_metrics.score_voice_reward,
     )
     structural_validity_gate_reward = parse_reward
-    total_reward = ungated_total_reward * structural_validity_gate_reward
-    structural_validity_gate_adjustment = total_reward - ungated_total_reward
+    total_reward = ungated_total_reward
+    structural_validity_gate_adjustment = 0.0
 
     return RewardBreakdown(
         candidate_path=candidate_name,
@@ -965,8 +965,8 @@ def score_candidate_text_with_local_metrics(
         score_voice_reward=grammar_metrics.score_voice_reward,
     )
     structural_validity_gate_reward = parse_reward
-    total_reward = ungated_total_reward * structural_validity_gate_reward
-    structural_validity_gate_adjustment = total_reward - ungated_total_reward
+    total_reward = ungated_total_reward
+    structural_validity_gate_adjustment = 0.0
 
     breakdown = RewardBreakdown(
         candidate_path=candidate_name,

@@ -10,28 +10,6 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from scripts.custom_grpo_notagen import (
-    PATCH_STREAM,
-    build_model,
-    build_rollout_prefix,
-    disable_dropout_modules,
-    infer_model_shape,
-    load_prompt_rows,
-    prompt_row_name,
-    select_device,
-    set_seed,
-)
-from scripts.custom_ppo_notagen import (
-    PatchValueHead,
-    discounted_returns,
-    load_value_head_checkpoint,
-    save_value_head_checkpoint,
-    trajectory_patch_hidden_states,
-    value_mse_loss,
-    value_prediction_metrics,
-)
-from utils import Patchilizer
-
 
 @dataclass(frozen=True)
 class OfflineRolloutSample:
@@ -54,9 +32,62 @@ class PreparedValueSample:
     meta: dict
 
 
+class PatchValueHead(torch.nn.Module):
+    def __init__(self, hidden_size: int, value_hidden_size: int = 512, dropout: float = 0.0) -> None:
+        super().__init__()
+        self.hidden_size = int(hidden_size)
+        self.value_hidden_size = int(value_hidden_size)
+        self.dropout = float(dropout)
+        if value_hidden_size > 0:
+            self.net = torch.nn.Sequential(
+                torch.nn.LayerNorm(hidden_size),
+                torch.nn.Linear(hidden_size, value_hidden_size),
+                torch.nn.GELU(),
+                torch.nn.Dropout(dropout),
+                torch.nn.Linear(value_hidden_size, 1),
+            )
+        else:
+            self.net = torch.nn.Sequential(
+                torch.nn.LayerNorm(hidden_size),
+                torch.nn.Linear(hidden_size, 1),
+            )
+
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        return self.net(hidden_states.float()).squeeze(-1)
+
+    def config(self) -> dict:
+        return {
+            "hidden_size": self.hidden_size,
+            "value_hidden_size": self.value_hidden_size,
+            "dropout": self.dropout,
+        }
+
+
+def _safe_float(value: torch.Tensor | float | None) -> float | None:
+    if value is None:
+        return None
+    if torch.is_tensor(value):
+        if not torch.isfinite(value).item():
+            return None
+        return float(value.detach().cpu())
+    return float(value)
+
+
+def _set_seed(seed: int) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
 def _select_device(name: str) -> torch.device:
     if name == "auto":
-        return select_device()
+        if torch.cuda.is_available():
+            return torch.device("cuda")
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            return torch.device("mps")
+        return torch.device("cpu")
     device = torch.device(name)
     if device.type == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("--device cuda requested but CUDA is not available")
@@ -75,12 +106,154 @@ def _json_safe(value):
     return value
 
 
+def discounted_returns(rewards: torch.Tensor, gamma: float) -> torch.Tensor:
+    returns = torch.empty_like(rewards, dtype=torch.float32)
+    running = torch.zeros((), device=rewards.device, dtype=torch.float32)
+    discount = torch.tensor(float(gamma), device=rewards.device, dtype=torch.float32)
+    for idx in range(rewards.numel() - 1, -1, -1):
+        running = rewards[idx].float() + discount * running
+        returns[idx] = running
+    return returns
+
+
+def value_mse_loss(
+    values: torch.Tensor,
+    value_targets: torch.Tensor,
+    *,
+    normalize_value_loss: bool = False,
+    eps: float = 1e-6,
+    scale_min: float = 1e-6,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    raw_value_loss = torch.nn.functional.mse_loss(values.float(), value_targets.detach().float())
+    if not normalize_value_loss:
+        return raw_value_loss, raw_value_loss, torch.ones((), device=values.device, dtype=torch.float32)
+
+    target_std = value_targets.detach().float().std(unbiased=False)
+    scale = torch.clamp(target_std, min=max(float(eps), float(scale_min)))
+    scaled_loss = torch.nn.functional.mse_loss(
+        values.float() / scale,
+        value_targets.detach().float() / scale,
+    )
+    return scaled_loss, raw_value_loss, scale
+
+
+def value_prediction_metrics(
+    values: torch.Tensor,
+    targets: torch.Tensor,
+    *,
+    eps: float = 1e-8,
+) -> dict:
+    values_f = values.detach().float().reshape(-1)
+    targets_f = targets.detach().float().reshape(-1)
+    if values_f.shape != targets_f.shape:
+        raise RuntimeError(
+            f"value metric shape mismatch: values={tuple(values_f.shape)} targets={tuple(targets_f.shape)}"
+        )
+    if values_f.numel() == 0:
+        return {
+            "count": 0,
+            "mse": None,
+            "mae": None,
+            "bias": None,
+            "explained_variance": None,
+            "correlation": None,
+            "value_mean": None,
+            "value_std": None,
+            "target_mean": None,
+            "target_std": None,
+            "residual_mean": None,
+            "residual_std": None,
+        }
+
+    residual = targets_f - values_f
+    mse = torch.mean(residual.square())
+    mae = torch.mean(residual.abs())
+    bias = torch.mean(values_f - targets_f)
+    value_std = values_f.std(unbiased=False)
+    target_std = targets_f.std(unbiased=False)
+    residual_std = residual.std(unbiased=False)
+    target_var = target_std.square()
+    residual_var = residual_std.square()
+    explained_variance = None
+    correlation = None
+    if target_var > eps:
+        explained_variance = 1.0 - residual_var / target_var
+    if values_f.numel() > 1 and value_std > eps and target_std > eps:
+        centered_values = values_f - values_f.mean()
+        centered_targets = targets_f - targets_f.mean()
+        correlation = torch.mean(centered_values * centered_targets) / (value_std * target_std)
+
+    return {
+        "count": int(values_f.numel()),
+        "mse": _safe_float(mse),
+        "mae": _safe_float(mae),
+        "bias": _safe_float(bias),
+        "explained_variance": _safe_float(explained_variance),
+        "correlation": _safe_float(correlation),
+        "value_mean": _safe_float(values_f.mean()),
+        "value_std": _safe_float(value_std),
+        "target_mean": _safe_float(targets_f.mean()),
+        "target_std": _safe_float(target_std),
+        "residual_mean": _safe_float(residual.mean()),
+        "residual_std": _safe_float(residual_std),
+    }
+
+
+def save_value_head_checkpoint(value_head: PatchValueHead, path: str | Path) -> None:
+    checkpoint_path = Path(path)
+    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save(
+        {
+            "config": value_head.config(),
+            "state_dict": value_head.state_dict(),
+        },
+        checkpoint_path,
+    )
+
+
+def _clone_state_dict_cpu(value_head: PatchValueHead) -> dict[str, torch.Tensor]:
+    return {key: value.detach().cpu().clone() for key, value in value_head.state_dict().items()}
+
+
+def _value_selection_metrics(
+    train_metrics: dict | None,
+    eval_metrics: dict | None,
+) -> tuple[str, dict | None, float]:
+    if eval_metrics and eval_metrics.get("mse") is not None:
+        return "eval", eval_metrics, float(eval_metrics["mse"])
+    if train_metrics and train_metrics.get("mse") is not None:
+        return "train", train_metrics, float(train_metrics["mse"])
+    return "none", None, float("inf")
+
+
+def load_value_head_checkpoint(value_head: PatchValueHead, path: str | Path, device: torch.device) -> dict:
+    payload = torch.load(Path(path), map_location=device)
+    if isinstance(payload, dict) and "state_dict" in payload:
+        config = payload.get("config", {})
+        if config and int(config.get("hidden_size", value_head.hidden_size)) != value_head.hidden_size:
+            raise RuntimeError(
+                f"value head hidden size mismatch: checkpoint={config.get('hidden_size')} "
+                f"current={value_head.hidden_size}"
+            )
+        state_dict = payload["state_dict"]
+    elif isinstance(payload, dict):
+        config = {}
+        state_dict = payload
+    else:
+        raise RuntimeError(f"unsupported value head checkpoint payload type: {type(payload)!r}")
+    value_head.load_state_dict(state_dict)
+    return {"path": str(path), "config": config}
+
+
 def _load_rollout_samples(
     *,
     ppo_json_paths: list[Path],
     prompts_jsonl: Path,
     target_stream_lines: int,
 ) -> list[OfflineRolloutSample]:
+    from scripts.custom_grpo_notagen import PATCH_STREAM, build_rollout_prefix, load_prompt_rows, prompt_row_name
+    from utils import Patchilizer
+
     prompts = load_prompt_rows(prompts_jsonl, limit=None)
     if not prompts:
         raise ValueError(f"no prompts loaded from {prompts_jsonl}")
@@ -157,6 +330,8 @@ def _prepare_hidden_state_samples(
     gamma: float,
     device: torch.device,
 ) -> list[PreparedValueSample]:
+    from scripts.custom_ppo_notagen import trajectory_patch_hidden_states
+
     prepared: list[PreparedValueSample] = []
     start = time.perf_counter()
     for idx, sample in enumerate(rollout_samples, start=1):
@@ -245,6 +420,125 @@ def _save_hidden_cache(path: Path, samples: list[PreparedValueSample], config: d
     )
 
 
+def _rollout_key_from_fields(
+    *,
+    step: int | str,
+    prompt_index: int | str,
+    trajectory_index: int | str,
+    rollout_seed,
+) -> tuple[int, int, int, int | None]:
+    return (
+        int(step),
+        int(prompt_index),
+        int(trajectory_index),
+        None if rollout_seed is None else int(rollout_seed),
+    )
+
+
+def _fallback_rollout_key(key: tuple[int, int, int, int | None]) -> tuple[int, int, int, None]:
+    return key[0], key[1], key[2], None
+
+
+def _load_patch_rewards_by_rollout_key(ppo_json_paths: list[Path]) -> dict[tuple[int, int, int, int | None], list[float]]:
+    rewards_by_key: dict[tuple[int, int, int, int | None], list[float]] = {}
+    for json_path in ppo_json_paths:
+        payload = json.loads(json_path.read_text(encoding="utf-8"))
+        for step in payload.get("steps", []):
+            step_idx = int(step["step"])
+            prompt_idx = int(step.get("prompt_index", 0))
+            for trajectory in step.get("trajectories", []):
+                trajectory_index = int(trajectory["trajectory_index"])
+                patch_rewards = trajectory.get("patch_rewards")
+                if patch_rewards is None:
+                    raise RuntimeError(
+                        f"{json_path}: step {step_idx} trajectory {trajectory_index} has no patch_rewards"
+                    )
+                rewards = [float(item) for item in patch_rewards]
+                key = _rollout_key_from_fields(
+                    step=step_idx,
+                    prompt_index=prompt_idx,
+                    trajectory_index=trajectory_index,
+                    rollout_seed=trajectory.get("rollout_seed"),
+                )
+                if key in rewards_by_key:
+                    raise RuntimeError(f"duplicate rollout key in retarget JSONs: {key}")
+                rewards_by_key[key] = rewards
+                fallback_key = _fallback_rollout_key(key)
+                if fallback_key not in rewards_by_key:
+                    rewards_by_key[fallback_key] = rewards
+    return rewards_by_key
+
+
+def _retarget_hidden_cache_samples(
+    samples: list[PreparedValueSample],
+    *,
+    ppo_json_paths: list[Path],
+    gamma: float,
+) -> dict:
+    rewards_by_key = _load_patch_rewards_by_rollout_key(ppo_json_paths)
+    retargeted = 0
+    total_patches = 0
+    missing: list[dict] = []
+    mismatched: list[dict] = []
+    old_reward_values: list[float] = []
+    new_reward_values: list[float] = []
+
+    for sample in samples:
+        meta = sample.meta
+        key = _rollout_key_from_fields(
+            step=meta["step"],
+            prompt_index=meta.get("prompt_index", 0),
+            trajectory_index=meta["trajectory_index"],
+            rollout_seed=meta.get("rollout_seed"),
+        )
+        patch_rewards = rewards_by_key.get(key) or rewards_by_key.get(_fallback_rollout_key(key))
+        if patch_rewards is None:
+            missing.append(meta)
+            continue
+        if len(patch_rewards) != int(sample.hidden_states.shape[0]):
+            mismatched.append(
+                {
+                    **meta,
+                    "hidden_patch_count": int(sample.hidden_states.shape[0]),
+                    "patch_reward_count": len(patch_rewards),
+                }
+            )
+            continue
+        old_reward_values.append(float(sample.meta["reward"]) if sample.meta.get("reward") is not None else float("nan"))
+        new_reward = float(sum(patch_rewards))
+        new_reward_values.append(new_reward)
+        rewards = torch.tensor(patch_rewards, dtype=torch.float32)
+        sample.targets = discounted_returns(rewards, gamma=gamma).detach().float().cpu()
+        sample.meta = {
+            **meta,
+            "reward": new_reward,
+            "retargeted_from_reward": meta.get("reward"),
+            "retargeted_patch_rewards_source": [str(path) for path in ppo_json_paths],
+            "retargeted_gamma": gamma,
+        }
+        retargeted += 1
+        total_patches += len(patch_rewards)
+
+    if missing or mismatched:
+        raise RuntimeError(
+            "could not retarget all cached hidden-state samples: "
+            f"missing={len(missing)} mismatched={len(mismatched)} "
+            f"missing_preview={missing[:3]} mismatched_preview={mismatched[:3]}"
+        )
+
+    finite_old = [value for value in old_reward_values if np.isfinite(value)]
+    return {
+        "ppo_json_paths": [str(path) for path in ppo_json_paths],
+        "samples": retargeted,
+        "patches": total_patches,
+        "gamma": gamma,
+        "old_reward_mean": None if not finite_old else float(np.mean(finite_old)),
+        "new_reward_mean": None if not new_reward_values else float(np.mean(new_reward_values)),
+        "new_reward_min": None if not new_reward_values else float(np.min(new_reward_values)),
+        "new_reward_max": None if not new_reward_values else float(np.max(new_reward_values)),
+    }
+
+
 def _split_samples(
     samples: list[PreparedValueSample],
     *,
@@ -312,7 +606,7 @@ def _train_value_head(
     eval_samples: list[PreparedValueSample],
     args,
     device: torch.device,
-) -> dict:
+) -> tuple[dict, dict[str, torch.Tensor]]:
     optimizer = torch.optim.AdamW(value_head.parameters(), lr=args.value_learning_rate, weight_decay=args.weight_decay)
     logs: list[dict] = []
     initial_train_metrics = _evaluate_value_head(
@@ -337,6 +631,18 @@ def _train_value_head(
         ),
         flush=True,
     )
+
+    best_split, best_metrics, best_score = _value_selection_metrics(initial_train_metrics, initial_eval_metrics)
+    best_state_dict = _clone_state_dict_cpu(value_head)
+    best_value_head = {
+        "epoch": 0,
+        "selection_metric": "mse",
+        "selection_mode": "min",
+        "selection_split": best_split,
+        "selection_score": None if best_score == float("inf") else best_score,
+        "train_metrics": initial_train_metrics,
+        "eval_metrics": initial_eval_metrics,
+    }
 
     rng = random.Random(args.seed)
     start = time.perf_counter()
@@ -393,14 +699,32 @@ def _train_value_head(
         logs.append(epoch_log)
         print(json.dumps({"event": "offline_value_epoch", **epoch_log}), flush=True)
 
-    return {
+        current_split, _, current_score = _value_selection_metrics(train_metrics, eval_metrics)
+        if current_score < best_score:
+            best_split = current_split
+            best_score = current_score
+            best_state_dict = _clone_state_dict_cpu(value_head)
+            best_value_head = {
+                "epoch": epoch_idx,
+                "selection_metric": "mse",
+                "selection_mode": "min",
+                "selection_split": best_split,
+                "selection_score": best_score,
+                "train_metrics": train_metrics,
+                "eval_metrics": eval_metrics,
+            }
+            print(json.dumps({"event": "offline_value_best", **best_value_head}), flush=True)
+
+    train_log = {
         "initial_train_metrics": initial_train_metrics,
         "initial_eval_metrics": initial_eval_metrics,
         "epochs": logs,
         "duration_s": time.perf_counter() - start,
         "final_train_metrics": logs[-1]["train_metrics"] if logs else initial_train_metrics,
         "final_eval_metrics": logs[-1]["eval_metrics"] if logs else initial_eval_metrics,
+        "best_value_head": best_value_head,
     }
+    return train_log, best_state_dict
 
 
 def main() -> int:
@@ -412,6 +736,15 @@ def main() -> int:
     parser.add_argument("--policy-weights", type=Path, help="Frozen SFT policy checkpoint used to replay patch states.")
     parser.add_argument("--hidden-cache-in", type=Path, help="Precomputed hidden-state cache from this script.")
     parser.add_argument("--hidden-cache-out", type=Path, help="Write precomputed hidden states for later critic-only runs.")
+    parser.add_argument(
+        "--retarget-ppo-json",
+        nargs="+",
+        type=Path,
+        help=(
+            "Replace cached value targets with discounted returns from these PPO JSON patch_rewards. "
+            "Use this when reward code changed but hidden states are still valid."
+        ),
+    )
     parser.add_argument("--output-value-head", type=Path, required=True)
     parser.add_argument("--output-json", type=Path, required=True)
     parser.add_argument("--input-value-head", type=Path)
@@ -447,13 +780,15 @@ def main() -> int:
     if args.value_loss_scale_min <= 0.0:
         raise ValueError(f"--value-loss-scale-min must be positive, got {args.value_loss_scale_min}")
 
-    set_seed(args.seed)
+    _set_seed(args.seed)
     device = _select_device(args.device)
 
     cache_config: dict = {}
     if args.hidden_cache_in:
         prepared_samples, cache_config = _load_hidden_cache(args.hidden_cache_in)
     else:
+        from scripts.custom_grpo_notagen import build_model, disable_dropout_modules, infer_model_shape
+
         if not args.policy_weights:
             raise ValueError("--policy-weights is required unless --hidden-cache-in is provided")
         if not args.ppo_json:
@@ -502,6 +837,14 @@ def main() -> int:
 
     if not prepared_samples:
         raise ValueError("no prepared value samples available")
+    retarget_meta = None
+    if args.retarget_ppo_json:
+        retarget_meta = _retarget_hidden_cache_samples(
+            prepared_samples,
+            ppo_json_paths=args.retarget_ppo_json,
+            gamma=args.gamma,
+        )
+        print(json.dumps({"event": "offline_value_retargeted", **retarget_meta}), flush=True)
     hidden_size = int(prepared_samples[0].hidden_states.shape[1])
     for sample in prepared_samples:
         if sample.hidden_states.ndim != 2 or int(sample.hidden_states.shape[1]) != hidden_size:
@@ -530,7 +873,8 @@ def main() -> int:
     if not train_samples:
         raise ValueError("offline value training split produced no training samples")
 
-    train_log = _train_value_head(value_head, train_samples, eval_samples, args, device)
+    train_log, best_value_head_state_dict = _train_value_head(value_head, train_samples, eval_samples, args, device)
+    value_head.load_state_dict(best_value_head_state_dict)
     save_value_head_checkpoint(value_head, args.output_value_head)
 
     patch_counts = [int(sample.targets.numel()) for sample in prepared_samples]
@@ -539,6 +883,7 @@ def main() -> int:
             "args": _json_safe(vars(args)),
             "device": str(device),
             "cache_config": cache_config,
+            "retarget": retarget_meta,
             "loaded_value_head": loaded_value_head,
             "value_head": value_head.config(),
             "split": split_meta,
@@ -555,11 +900,21 @@ def main() -> int:
         },
         "training": train_log,
         "saved_value_head": str(args.output_value_head),
+        "saved_value_head_selection": train_log.get("best_value_head"),
         "saved_hidden_cache": None if args.hidden_cache_out is None else str(args.hidden_cache_out),
     }
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
     args.output_json.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    print(json.dumps({"event": "offline_value_complete", **payload["dataset"], "output_json": str(args.output_json)}))
+    print(
+        json.dumps(
+            {
+                "event": "offline_value_complete",
+                **payload["dataset"],
+                "saved_value_head_selection": payload["saved_value_head_selection"],
+                "output_json": str(args.output_json),
+            }
+        )
+    )
     return 0
 
 
