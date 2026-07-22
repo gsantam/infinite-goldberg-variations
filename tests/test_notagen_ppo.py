@@ -48,7 +48,7 @@ try:
         per_patch_diagnostic_records,
     )
     from scripts.summarize_ppo_advantages import summarize_steps
-    from scripts.custom_grpo_notagen import PATCH_SIZE, GoldbergRewardConfig, SimilarityRewardWeights
+    from scripts.custom_grpo_notagen import PATCH_SIZE, GoldbergRewardConfig, SimilarityRewardWeights, _rollout_seed
     from evaluation.rewards import StructuralTarget
     from utils import NotaGenLMHeadModel, Patchilizer
 except ModuleNotFoundError as exc:
@@ -87,6 +87,16 @@ def _generated_patches_from_text(text: str) -> list[list[int]]:
 
 @unittest.skipIf(torch is None, f"NotaGen torch dependencies unavailable: {IMPORT_ERROR}")
 class NotaGenPPOTests(unittest.TestCase):
+    def test_rollout_seeds_do_not_collide_for_batched_spares_across_steps(self):
+        seeds = [
+            _rollout_seed(base_seed=0, step_idx=step_idx, group_idx=candidate_idx, retry_idx=retry_idx)
+            for step_idx in range(1, 14)
+            for candidate_idx in range(18)
+            for retry_idx in range(3)
+        ]
+
+        self.assertEqual(len(seeds), len(set(seeds)))
+
     def test_prompt_structural_targets_prefer_row_source_over_fallback(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)

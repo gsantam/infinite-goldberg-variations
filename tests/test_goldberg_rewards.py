@@ -115,11 +115,8 @@ class GoldbergRewardTests(unittest.TestCase):
         self.assertFalse(breakdown.parse_valid)
         self.assertEqual(breakdown.structural_validity_gate_reward, 0.0)
         self.assertGreater(breakdown.ungated_total_reward, 0.0)
-        self.assertEqual(breakdown.total_reward, 0.0)
-        self.assertAlmostEqual(
-            breakdown.structural_validity_gate_adjustment,
-            -breakdown.ungated_total_reward,
-        )
+        self.assertEqual(breakdown.structural_validity_gate_adjustment, 0.0)
+        self.assertEqual(breakdown.total_reward, breakdown.ungated_total_reward)
         self.assertLess(time.perf_counter() - start, 1.0)
 
     def test_unbalanced_chord_skips_music21_parse(self):
@@ -141,7 +138,9 @@ class GoldbergRewardTests(unittest.TestCase):
 
         parse_data.assert_not_called()
         self.assertFalse(breakdown.parse_valid)
-        self.assertEqual(breakdown.total_reward, 0.0)
+        self.assertEqual(breakdown.parse_reward, 0.0)
+        self.assertEqual(breakdown.structural_validity_gate_adjustment, 0.0)
+        self.assertEqual(breakdown.total_reward, breakdown.ungated_total_reward)
         self.assertLess(time.perf_counter() - start, 1.0)
 
     def test_invalid_inline_voice_skips_music21_parse(self):
@@ -162,7 +161,9 @@ class GoldbergRewardTests(unittest.TestCase):
 
         parse_data.assert_not_called()
         self.assertFalse(breakdown.parse_valid)
-        self.assertEqual(breakdown.total_reward, 0.0)
+        self.assertEqual(breakdown.parse_reward, 0.0)
+        self.assertEqual(breakdown.structural_validity_gate_adjustment, 0.0)
+        self.assertEqual(breakdown.total_reward, breakdown.ungated_total_reward)
 
     def test_abc_tokenizer_failure_skips_full_music21_parse(self):
         target = StructuralTarget(
@@ -186,7 +187,9 @@ class GoldbergRewardTests(unittest.TestCase):
 
         parse_data.assert_not_called()
         self.assertFalse(breakdown.parse_valid)
-        self.assertEqual(breakdown.total_reward, 0.0)
+        self.assertEqual(breakdown.parse_reward, 0.0)
+        self.assertEqual(breakdown.structural_validity_gate_adjustment, 0.0)
+        self.assertEqual(breakdown.total_reward, breakdown.ungated_total_reward)
 
     def test_meter_validation_tracks_inline_meter_changes(self):
         text = "\n".join(
@@ -555,7 +558,7 @@ class GoldbergRewardTests(unittest.TestCase):
 
         self.assertGreater(strong, weak)
 
-    def test_total_reward_is_gated_by_parse_validity(self):
+    def test_total_reward_keeps_structural_credit_when_parse_invalid(self):
         config = GoldbergRewardConfig()
         invalid = _total_reward(
             config=config,
@@ -571,7 +574,21 @@ class GoldbergRewardTests(unittest.TestCase):
             score_voice_reward=1.0,
         )
 
-        self.assertEqual(invalid, 0.0)
+        self.assertGreater(invalid, 0.0)
+        valid = _total_reward(
+            config=config,
+            parse_reward=1.0,
+            countdown_reward=1.0,
+            line_closure_reward=1.0,
+            bar_token_reward=1.0,
+            meter_alignment_reward=1.0,
+            meter_duration_closeness_reward=1.0,
+            bar_meter_consistency_reward=1.0,
+            bar_count_reward=1.0,
+            voice_declaration_reward=1.0,
+            score_voice_reward=1.0,
+        )
+        self.assertAlmostEqual(valid - invalid, config.parse_weight)
 
 
 if __name__ == "__main__":

@@ -3708,7 +3708,7 @@ def main() -> int:
         ),
     )
     parser.add_argument("--music21-parse-timeout-s", type=float, default=5.0)
-    parser.add_argument("--parse-reward-weight", type=float, default=0.25)
+    parser.add_argument("--parse-reward-weight", type=float, default=1.0)
     parser.add_argument("--output-json", required=True)
     parser.add_argument("--prompt-limit", type=int, default=1)
     parser.add_argument("--max-steps", type=int, default=1)

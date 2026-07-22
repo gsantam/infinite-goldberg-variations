@@ -355,6 +355,8 @@ python scripts/train_notagen_ppo_value_head_offline.py \
 
 The main diagnostics are `explained_variance`, `correlation`, `mse`, `mae`, and `bias` on both train and holdout samples. A useful critic should improve explained variance/correlation, not just reduce train MSE.
 
+`scripts/train_notagen_ppo_value_head_offline.py` saves the best checkpoint by default: `--output-value-head` is selected by lowest holdout/eval MSE when an eval split is present, otherwise by lowest train MSE. The metrics JSON records this under `training.best_value_head` and `saved_value_head_selection`.
+
 The current critic artifact was trained from 200 raw E3 SFT rollout trajectories with full active rewards for 80 epochs:
 
 ```text
