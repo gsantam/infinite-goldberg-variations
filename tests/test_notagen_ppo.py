@@ -23,9 +23,11 @@ try:
         _stream_line_end_patch_indices,
         _stream_line_spans,
         batched_trajectory_patch_logprobs_values,
+        batched_trajectory_token_log_dists,
         batched_trajectory_patch_values,
         batch_trajectory_returns_advantages,
         discounted_returns,
+        exact_categorical_kl,
         generalized_advantage_estimates,
         load_prompt_structural_targets,
         load_value_head_checkpoint,
@@ -591,8 +593,14 @@ class NotaGenPPOTests(unittest.TestCase):
         self.assertEqual(replay.values.shape, (3,))
         self.assertEqual(replay.token_counts.shape, (3,))
         self.assertEqual(replay.token_logprobs.shape, (PATCH_SIZE * 3,))
+        self.assertEqual(
+            replay.token_log_dists.shape,
+            (PATCH_SIZE * 3, model.char_level_decoder.base.transformer.wte.weight.shape[0]),
+        )
         self.assertTrue(torch.isfinite(replay.logprobs).all())
         self.assertTrue(torch.isfinite(replay.values).all())
+        self.assertTrue(torch.isfinite(replay.token_log_dists).all())
+        self.assertTrue(torch.allclose(replay.token_log_dists.logsumexp(dim=-1), torch.zeros(PATCH_SIZE * 3), atol=1e-5))
         split_tokens = torch.split(replay.token_logprobs, replay.token_counts.detach().cpu().tolist())
         self.assertTrue(torch.allclose(torch.stack([item.sum() for item in split_tokens]), replay.logprobs))
 
@@ -675,8 +683,13 @@ class NotaGenPPOTests(unittest.TestCase):
         self.assertEqual(replay.logprobs.shape, (3,))
         self.assertEqual(replay.values.shape, (3,))
         self.assertEqual(replay.token_counts.detach().cpu().tolist(), [first_patch_len, PATCH_SIZE, PATCH_SIZE])
+        self.assertEqual(
+            replay.token_log_dists.shape,
+            (first_patch_len + PATCH_SIZE * 2, model.char_level_decoder.base.transformer.wte.weight.shape[0]),
+        )
         self.assertTrue(torch.isfinite(replay.logprobs).all())
         self.assertTrue(torch.isfinite(replay.values).all())
+        self.assertTrue(torch.isfinite(replay.token_log_dists).all())
         split_tokens = torch.split(replay.token_logprobs, replay.token_counts.detach().cpu().tolist())
         self.assertTrue(torch.allclose(torch.stack([item.sum() for item in split_tokens]), replay.logprobs))
 
@@ -726,11 +739,59 @@ class NotaGenPPOTests(unittest.TestCase):
             self.assertEqual(batched_replay.logprobs.shape, serial_replay.logprobs.shape)
             self.assertEqual(batched_replay.values.shape, serial_replay.values.shape)
             self.assertEqual(batched_replay.token_logprobs.shape, serial_replay.token_logprobs.shape)
+            self.assertEqual(batched_replay.token_log_dists.shape, serial_replay.token_log_dists.shape)
             self.assertEqual(batched_replay.token_counts.shape, serial_replay.token_counts.shape)
             self.assertTrue(torch.allclose(batched_replay.logprobs, serial_replay.logprobs, atol=1e-5))
             self.assertTrue(torch.allclose(batched_replay.values, serial_replay.values, atol=1e-6))
             self.assertTrue(torch.allclose(batched_replay.token_logprobs, serial_replay.token_logprobs, atol=1e-5))
+            self.assertTrue(torch.allclose(batched_replay.token_log_dists, serial_replay.token_log_dists, atol=1e-5))
             self.assertTrue(torch.equal(batched_replay.token_counts, serial_replay.token_counts))
+
+    def test_distribution_only_replay_matches_generic_replay(self):
+        torch.manual_seed(0)
+        model = _tiny_notagen()
+        value_head = PatchValueHead(32)
+        model.eval()
+        value_head.eval()
+        prompt_ids = [3 + (i % 80) for i in range(PATCH_SIZE * 3 + 5)]
+        first_patch_len = PATCH_SIZE - 5
+        generated_batch = [
+            [
+                [11 + (i % 50) for i in range(first_patch_len)],
+                [23 + (i % 50) for i in range(PATCH_SIZE)],
+                [31 + (i % 40) for i in range(PATCH_SIZE)],
+            ],
+            [
+                [17 + (i % 45) for i in range(first_patch_len)],
+                [29 + (i % 35) for i in range(PATCH_SIZE)],
+            ],
+            [],
+        ]
+
+        generic = batched_trajectory_patch_logprobs_values(
+            model,
+            value_head,
+            prompt_ids,
+            generated_batch,
+            precision="fp32",
+            replay_context_patches=4,
+            target_chunk_patches=1,
+        )
+        distribution_only = batched_trajectory_token_log_dists(
+            model,
+            prompt_ids,
+            generated_batch,
+            precision="fp32",
+            replay_context_patches=4,
+            target_chunk_patches=1,
+        )
+
+        self.assertEqual(len(distribution_only), len(generic))
+        for distribution_replay, generic_replay in zip(distribution_only, generic, strict=True):
+            self.assertEqual(distribution_replay.token_log_dists.shape, generic_replay.token_log_dists.shape)
+            self.assertEqual(distribution_replay.token_counts.shape, generic_replay.token_counts.shape)
+            self.assertTrue(torch.equal(distribution_replay.token_counts, generic_replay.token_counts))
+            self.assertTrue(torch.allclose(distribution_replay.token_log_dists, generic_replay.token_log_dists, atol=1e-5))
 
     def test_batched_value_replay_matches_serial_for_multiple_trajectories(self):
         torch.manual_seed(0)
@@ -824,10 +885,12 @@ class NotaGenPPOTests(unittest.TestCase):
             self.assertEqual(batched_replay.logprobs.shape, serial_replay.logprobs.shape)
             self.assertEqual(batched_replay.values.shape, serial_replay.values.shape)
             self.assertEqual(batched_replay.token_logprobs.shape, serial_replay.token_logprobs.shape)
+            self.assertEqual(batched_replay.token_log_dists.shape, serial_replay.token_log_dists.shape)
             self.assertEqual(batched_replay.token_counts.shape, serial_replay.token_counts.shape)
             self.assertTrue(torch.allclose(batched_replay.logprobs, serial_replay.logprobs, atol=1e-5))
             self.assertTrue(torch.allclose(batched_replay.values, serial_replay.values, atol=1e-6))
             self.assertTrue(torch.allclose(batched_replay.token_logprobs, serial_replay.token_logprobs, atol=1e-5))
+            self.assertTrue(torch.allclose(batched_replay.token_log_dists, serial_replay.token_log_dists, atol=1e-5))
             self.assertTrue(torch.equal(batched_replay.token_counts, serial_replay.token_counts))
 
     def test_ppo_clipped_loss_is_finite(self):
@@ -909,6 +972,53 @@ class NotaGenPPOTests(unittest.TestCase):
         payload.loss.backward()
         self.assertIsNotNone(new_token_logprobs.grad)
         self.assertIsNotNone(values.grad)
+
+    def test_ppo_reference_kl_loss_uses_full_token_distribution(self):
+        policy_logits = torch.tensor(
+            [
+                [2.0, 0.5, -1.0, 0.0],
+                [-0.5, 1.0, 0.25, 2.0],
+            ],
+            requires_grad=True,
+        )
+        reference_logits = torch.tensor(
+            [
+                [0.0, 1.0, 0.5, -0.5],
+                [1.5, -0.25, 0.0, 0.5],
+            ]
+        )
+        policy_log_dists = torch.log_softmax(policy_logits, dim=-1)
+        reference_log_dists = torch.log_softmax(reference_logits, dim=-1)
+        selected_tokens = torch.tensor([0, 3])
+        new_logprobs = policy_log_dists[torch.arange(selected_tokens.numel()), selected_tokens]
+        old_logprobs = new_logprobs.detach().clone()
+        token_counts = torch.ones(selected_tokens.numel(), dtype=torch.long)
+
+        payload = ppo_clipped_loss(
+            new_logprobs=new_logprobs,
+            old_logprobs=old_logprobs,
+            values=torch.zeros(2),
+            old_values=torch.zeros(2),
+            advantages=torch.zeros(2),
+            value_targets=torch.zeros(2),
+            clip_range=0.2,
+            value_loss_coef=0.0,
+            normalize_advantage=False,
+            policy_patch_indices=token_patch_indices_from_counts(token_counts),
+            value_token_counts=token_counts,
+            new_log_dists=policy_log_dists,
+            old_log_dists=policy_log_dists.detach().clone(),
+            reference_log_dists=reference_log_dists,
+            reference_kl_coef=0.25,
+        )
+
+        expected_kl = exact_categorical_kl(policy_log_dists, reference_log_dists)
+        self.assertTrue(torch.allclose(payload.reference_exact_kl, expected_kl, atol=1e-7))
+        self.assertTrue(torch.allclose(payload.reference_kl_loss, 0.25 * expected_kl, atol=1e-7))
+        self.assertAlmostEqual(float(payload.old_policy_exact_kl.detach()), 0.0, places=6)
+        payload.loss.backward()
+        self.assertIsNotNone(policy_logits.grad)
+        self.assertGreater(float(policy_logits.grad.abs().sum()), 0.0)
 
     def test_logprob_advantage_diagnostics_reports_split_sign_hit_rates(self):
         diagnostics = logprob_advantage_diagnostics(

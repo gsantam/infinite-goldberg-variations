@@ -113,6 +113,21 @@ def char_patch_logprobs(
     target_patches: torch.Tensor,
     precision: str,
 ) -> torch.Tensor:
+    token_logps, _token_log_dists = char_patch_logprobs_and_dists(
+        model,
+        encoded_patches,
+        target_patches,
+        precision,
+    )
+    return token_logps
+
+
+def char_patch_logprobs_and_dists(
+    model: Any,
+    encoded_patches: torch.Tensor,
+    target_patches: torch.Tensor,
+    precision: str,
+) -> tuple[torch.Tensor, torch.Tensor]:
     bos = torch.ones_like(target_patches[:, 0:1]) * model.bos_token_id
     target_with_bos = torch.cat((bos, target_patches), dim=1)
     target_masks = target_with_bos == model.special_token_id
@@ -124,8 +139,10 @@ def char_patch_logprobs(
     with autocast_context(encoded_patches.device, precision):
         logits = model.char_level_decoder.base(inputs_embeds=input_embeds, attention_mask=target_masks).logits
     logits = logits[:, :-1, :].float()
-    token_logps = torch.gather(logits.log_softmax(-1), dim=-1, index=target_with_bos[:, 1:].unsqueeze(-1)).squeeze(-1)
-    return token_logps[target_masks[:, 1:] == 1]
+    token_log_dists = logits.log_softmax(-1)
+    token_logps = torch.gather(token_log_dists, dim=-1, index=target_with_bos[:, 1:].unsqueeze(-1)).squeeze(-1)
+    active_mask = target_masks[:, 1:] == 1
+    return token_logps[active_mask], token_log_dists[active_mask]
 
 
 def _pad_generated_patch(patch: list[int], special_token_id: int) -> list[int]:
@@ -183,6 +200,21 @@ def char_patch_token_logprobs_and_counts(
     target_patches: list[list[int]],
     precision: str,
 ) -> tuple[torch.Tensor, torch.Tensor]:
+    flat_logprobs, _flat_log_dists, token_counts = char_patch_token_logprobs_dists_and_counts(
+        model,
+        encoded_patches,
+        target_patches,
+        precision,
+    )
+    return flat_logprobs, token_counts
+
+
+def char_patch_token_logprobs_dists_and_counts(
+    model: Any,
+    encoded_patches: torch.Tensor,
+    target_patches: list[list[int]],
+    precision: str,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     special_token_id = model.special_token_id
     target_tensor = torch.tensor(
         [_pad_generated_patch(patch, special_token_id) for patch in target_patches],
@@ -194,8 +226,8 @@ def char_patch_token_logprobs_and_counts(
         device=encoded_patches.device,
         dtype=torch.long,
     )
-    flat_logprobs = char_patch_logprobs(model, encoded_patches, target_tensor, precision)
-    return flat_logprobs, token_counts
+    flat_logprobs, flat_log_dists = char_patch_logprobs_and_dists(model, encoded_patches, target_tensor, precision)
+    return flat_logprobs, flat_log_dists, token_counts
 
 
 def tail_encoded_targets(

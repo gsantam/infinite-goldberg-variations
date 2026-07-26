@@ -34,7 +34,7 @@ from grpo.notagen_replay import (
     _encoded_last_patch,
     autocast_context,
     batched_tail_encoded_targets,
-    char_patch_token_logprobs_and_counts,
+    char_patch_token_logprobs_dists_and_counts,
     normalize_patch_for_context,
     split_tensor_by_counts,
     tail_encoded_targets,
@@ -89,6 +89,13 @@ class PatchReplayChunk:
     logprobs: torch.Tensor
     values: torch.Tensor
     token_logprobs: torch.Tensor
+    token_log_dists: torch.Tensor
+    token_counts: torch.Tensor
+
+
+@dataclass
+class TokenDistributionReplay:
+    token_log_dists: torch.Tensor
     token_counts: torch.Tensor
 
 
@@ -100,7 +107,10 @@ class PPOLossPayload:
     raw_value_loss: torch.Tensor
     value_loss_scale: torch.Tensor
     entropy_loss: torch.Tensor
+    reference_kl_loss: torch.Tensor
     approx_kl: torch.Tensor
+    old_policy_exact_kl: torch.Tensor
+    reference_exact_kl: torch.Tensor
     clip_fraction: torch.Tensor
     advantages_mean: torch.Tensor
     advantages_std: torch.Tensor
@@ -452,6 +462,7 @@ def patch_logprob_sum_and_value(
         replay_context_patches=replay_context_patches,
     )
     logprobs: list[torch.Tensor] = []
+    log_dists: list[torch.Tensor] = []
     for tok in patch:
         token_embeddings = torch.nn.functional.embedding(
             tokens.reshape(1, -1),
@@ -461,7 +472,9 @@ def patch_logprob_sum_and_value(
         with autocast_context(device, precision):
             outputs = model.char_level_decoder.base(inputs_embeds=inputs_embeds)
             logits = outputs.logits[0, -1]
-        logprobs.append(torch.log_softmax(logits.float(), dim=-1)[tok])
+        token_log_dist = torch.log_softmax(logits.float(), dim=-1)
+        logprobs.append(token_log_dist[tok])
+        log_dists.append(token_log_dist)
         if len(tokens) >= PATCH_SIZE:
             break
         tokens = torch.cat((tokens, torch.tensor([tok], device=device, dtype=torch.long)), dim=0)
@@ -469,11 +482,52 @@ def patch_logprob_sum_and_value(
     if not logprobs:
         raise RuntimeError("cannot score an empty generated patch")
     token_logprobs = torch.stack(logprobs)
+    token_log_dists = torch.stack(log_dists)
     return PatchReplayChunk(
         logprobs=token_logprobs.sum().reshape(1),
         values=value_head(encoded_patch).reshape(1),
         token_logprobs=token_logprobs,
+        token_log_dists=token_log_dists,
         token_counts=torch.tensor([token_logprobs.numel()], device=device, dtype=torch.long),
+    )
+
+
+def patch_token_log_dists(
+    model: NotaGenLMHeadModel,
+    flat_prompt_ids: list[int],
+    patch: list[int],
+    precision: str,
+    replay_context_patches: int | None = None,
+) -> TokenDistributionReplay:
+    device = next(model.parameters()).device
+    encoded_patch, tokens = _encoded_last_patch(
+        model,
+        flat_prompt_ids,
+        device,
+        precision,
+        replay_context_patches=replay_context_patches,
+    )
+    log_dists: list[torch.Tensor] = []
+    for tok in patch:
+        token_embeddings = torch.nn.functional.embedding(
+            tokens.reshape(1, -1),
+            model.char_level_decoder.base.transformer.wte.weight,
+        )
+        inputs_embeds = torch.cat((encoded_patch.reshape(1, 1, -1), token_embeddings[:, 1:, :]), dim=1)
+        with autocast_context(device, precision):
+            outputs = model.char_level_decoder.base(inputs_embeds=inputs_embeds)
+            logits = outputs.logits[0, -1]
+        log_dists.append(torch.log_softmax(logits.float(), dim=-1))
+        if len(tokens) >= PATCH_SIZE:
+            break
+        tokens = torch.cat((tokens, torch.tensor([tok], device=device, dtype=torch.long)), dim=0)
+
+    if not log_dists:
+        raise RuntimeError("cannot score an empty generated patch")
+    token_log_dists = torch.stack(log_dists)
+    return TokenDistributionReplay(
+        token_log_dists=token_log_dists,
+        token_counts=torch.tensor([token_log_dists.shape[0]], device=device, dtype=torch.long),
     )
 
 
@@ -497,7 +551,7 @@ def tail_patch_logprob_value_chunk(
         replay_context_patches=replay_context_patches,
         error_context="PPO replay",
     )
-    token_logprobs, token_counts = char_patch_token_logprobs_and_counts(
+    token_logprobs, token_log_dists, token_counts = char_patch_token_logprobs_dists_and_counts(
         model,
         encoded_targets,
         target_patches,
@@ -515,6 +569,7 @@ def tail_patch_logprob_value_chunk(
         ),
         values=value_head(encoded_targets),
         token_logprobs=token_logprobs,
+        token_log_dists=token_log_dists,
         token_counts=token_counts,
     )
 
@@ -557,7 +612,7 @@ def batched_tail_patch_logprob_value_chunk(
         patch_counts.append(len(targets))
 
     encoded_target_tensor = torch.cat(encoded_targets, dim=0)
-    token_logprobs, token_counts = char_patch_token_logprobs_and_counts(
+    token_logprobs, token_log_dists, token_counts = char_patch_token_logprobs_dists_and_counts(
         model,
         encoded_target_tensor,
         target_patches,
@@ -576,18 +631,80 @@ def batched_tail_patch_logprob_value_chunk(
     split_token_counts = split_tensor_by_counts(token_counts, patch_counts)
     token_sample_counts = [int(counts.detach().sum().cpu()) for counts in split_token_counts]
     split_token_logprobs = split_tensor_by_counts(token_logprobs, token_sample_counts)
+    split_token_log_dists = split_tensor_by_counts(token_log_dists, token_sample_counts)
     return {
         sample_idx: PatchReplayChunk(
             logprobs=logprobs,
             values=sample_values,
             token_logprobs=sample_token_logprobs,
+            token_log_dists=sample_token_log_dists,
             token_counts=sample_token_counts,
         )
-        for sample_idx, logprobs, sample_values, sample_token_logprobs, sample_token_counts in zip(
+        for sample_idx, logprobs, sample_values, sample_token_logprobs, sample_token_log_dists, sample_token_counts in zip(
             sample_indices,
             split_logprobs,
             split_values,
             split_token_logprobs,
+            split_token_log_dists,
+            split_token_counts,
+            strict=True,
+        )
+    }
+
+
+def batched_tail_token_log_dist_chunk(
+    model: NotaGenLMHeadModel,
+    current_ids_batch: list[list[int]],
+    remaining_patches_batch: list[list[list[int]]],
+    chunk_start: int,
+    target_chunk_patches: int,
+    precision: str,
+    replay_context_patches: int | None = None,
+    replay_batch_size: int = 0,
+) -> dict[int, TokenDistributionReplay]:
+    payload = batched_tail_encoded_targets(
+        model=model,
+        current_ids_batch=current_ids_batch,
+        remaining_patches_batch=remaining_patches_batch,
+        chunk_start=chunk_start,
+        target_chunk_patches=target_chunk_patches,
+        precision=precision,
+        replay_context_patches=replay_context_patches,
+        replay_batch_size=replay_batch_size,
+        detach_policy=True,
+        error_context="batched PPO distribution replay",
+    )
+    if not payload:
+        return {}
+
+    sample_indices: list[int] = []
+    encoded_targets: list[torch.Tensor] = []
+    target_patches: list[list[int]] = []
+    patch_counts: list[int] = []
+    for sample_idx, (encoded, targets) in payload.items():
+        sample_indices.append(sample_idx)
+        encoded_targets.append(encoded)
+        target_patches.extend(targets)
+        patch_counts.append(len(targets))
+
+    encoded_target_tensor = torch.cat(encoded_targets, dim=0)
+    _token_logprobs, token_log_dists, token_counts = char_patch_token_logprobs_dists_and_counts(
+        model,
+        encoded_target_tensor,
+        target_patches,
+        precision,
+    )
+    split_token_counts = split_tensor_by_counts(token_counts, patch_counts)
+    token_sample_counts = [int(counts.detach().sum().cpu()) for counts in split_token_counts]
+    split_token_log_dists = split_tensor_by_counts(token_log_dists, token_sample_counts)
+    return {
+        sample_idx: TokenDistributionReplay(
+            token_log_dists=sample_token_log_dists,
+            token_counts=sample_token_counts,
+        )
+        for sample_idx, sample_token_log_dists, sample_token_counts in zip(
+            sample_indices,
+            split_token_log_dists,
             split_token_counts,
             strict=True,
         )
@@ -748,17 +865,20 @@ def trajectory_patch_logprobs_values(
         )
     )
     device = next(model.parameters()).device
+    vocab_size = model.char_level_decoder.base.transformer.wte.weight.shape[0]
     if not chunks:
         return PatchReplayChunk(
             logprobs=torch.empty(0, device=device),
             values=torch.empty(0, device=device),
             token_logprobs=torch.empty(0, device=device),
+            token_log_dists=torch.empty((0, vocab_size), device=device),
             token_counts=torch.empty(0, device=device, dtype=torch.long),
         )
     return PatchReplayChunk(
         logprobs=torch.cat([chunk.logprobs for chunk in chunks]),
         values=torch.cat([chunk.values for chunk in chunks]),
         token_logprobs=torch.cat([chunk.token_logprobs for chunk in chunks]),
+        token_log_dists=torch.cat([chunk.token_log_dists for chunk in chunks]),
         token_counts=torch.cat([chunk.token_counts for chunk in chunks]),
     )
 
@@ -774,6 +894,7 @@ def batched_trajectory_patch_logprobs_values(
     replay_batch_size: int = 0,
 ) -> list[PatchReplayChunk]:
     device = next(model.parameters()).device
+    vocab_size = model.char_level_decoder.base.transformer.wte.weight.shape[0]
     current_ids_batch = [list(flat_prompt_ids) for _idx in generated_patches_batch]
     remaining_batch: list[list[list[int]]] = []
     outputs: list[list[PatchReplayChunk]] = [[] for _idx in generated_patches_batch]
@@ -831,6 +952,7 @@ def batched_trajectory_patch_logprobs_values(
                     logprobs=torch.cat([chunk.logprobs for chunk in chunks]),
                     values=torch.cat([chunk.values for chunk in chunks]),
                     token_logprobs=torch.cat([chunk.token_logprobs for chunk in chunks]),
+                    token_log_dists=torch.cat([chunk.token_log_dists for chunk in chunks]),
                     token_counts=torch.cat([chunk.token_counts for chunk in chunks]),
                 )
             )
@@ -840,6 +962,84 @@ def batched_trajectory_patch_logprobs_values(
                     logprobs=torch.empty(0, device=device),
                     values=torch.empty(0, device=device),
                     token_logprobs=torch.empty(0, device=device),
+                    token_log_dists=torch.empty((0, vocab_size), device=device),
+                    token_counts=torch.empty(0, device=device, dtype=torch.long),
+                )
+            )
+    return result
+
+
+def batched_trajectory_token_log_dists(
+    model: NotaGenLMHeadModel,
+    flat_prompt_ids: list[int],
+    generated_patches_batch: list[list[list[int]]],
+    precision: str,
+    replay_context_patches: int | None = None,
+    target_chunk_patches: int = 0,
+    replay_batch_size: int = 0,
+) -> list[TokenDistributionReplay]:
+    device = next(model.parameters()).device
+    vocab_size = model.char_level_decoder.base.transformer.wte.weight.shape[0]
+    current_ids_batch = [list(flat_prompt_ids) for _idx in generated_patches_batch]
+    remaining_batch: list[list[list[int]]] = []
+    outputs: list[list[TokenDistributionReplay]] = [[] for _idx in generated_patches_batch]
+
+    for sample_idx, generated_patches in enumerate(generated_patches_batch):
+        current_ids = current_ids_batch[sample_idx]
+        start_idx = 0
+        while start_idx < len(generated_patches) and len(current_ids) % PATCH_SIZE != 0:
+            patch = generated_patches[start_idx]
+            outputs[sample_idx].append(
+                patch_token_log_dists(
+                    model,
+                    current_ids,
+                    patch,
+                    precision,
+                    replay_context_patches=replay_context_patches,
+                )
+            )
+            current_ids.extend(
+                normalize_patch_for_context(
+                    patch,
+                    eos_token_id=model.eos_token_id,
+                    special_token_id=model.special_token_id,
+                )
+            )
+            start_idx += 1
+        current_ids_batch[sample_idx] = current_ids
+        remaining_batch.append(generated_patches[start_idx:])
+
+    max_remaining = max((len(remaining) for remaining in remaining_batch), default=0)
+    chunk_size = max_remaining if target_chunk_patches <= 0 else target_chunk_patches
+    if chunk_size > 0:
+        for chunk_start in range(0, max_remaining, chunk_size):
+            chunk_payload = batched_tail_token_log_dist_chunk(
+                model,
+                current_ids_batch,
+                remaining_batch,
+                chunk_start,
+                target_chunk_patches,
+                precision,
+                replay_context_patches=replay_context_patches,
+                replay_batch_size=replay_batch_size,
+            )
+            for sample_idx, replay_chunk in chunk_payload.items():
+                if replay_chunk.token_counts.numel() > 0:
+                    outputs[sample_idx].append(replay_chunk)
+
+    result: list[TokenDistributionReplay] = []
+    for chunks in outputs:
+        if chunks:
+            result.append(
+                TokenDistributionReplay(
+                    token_log_dists=torch.cat([chunk.token_log_dists for chunk in chunks]),
+                    token_counts=torch.cat([chunk.token_counts for chunk in chunks]),
+                )
+            )
+        else:
+            result.append(
+                TokenDistributionReplay(
+                    token_log_dists=torch.empty((0, vocab_size), device=device),
                     token_counts=torch.empty(0, device=device, dtype=torch.long),
                 )
             )
@@ -2228,6 +2428,22 @@ def weighted_std(values: torch.Tensor, weights: torch.Tensor | None = None) -> t
     return torch.sqrt(weighted_mean((values.float() - mean) ** 2, weights))
 
 
+def exact_categorical_kl(policy_log_dists: torch.Tensor, reference_log_dists: torch.Tensor) -> torch.Tensor:
+    if policy_log_dists.shape != reference_log_dists.shape:
+        raise RuntimeError(
+            "exact categorical KL shape mismatch: "
+            f"policy={tuple(policy_log_dists.shape)} reference={tuple(reference_log_dists.shape)}"
+        )
+    if policy_log_dists.ndim != 2:
+        raise RuntimeError(f"exact categorical KL expects [tokens, vocab], got {tuple(policy_log_dists.shape)}")
+    if policy_log_dists.shape[0] == 0:
+        raise RuntimeError("exact categorical KL needs at least one generated token")
+    policy_log_dists = policy_log_dists.float()
+    reference_log_dists = reference_log_dists.detach().float()
+    policy_probs = policy_log_dists.exp()
+    return (policy_probs * (policy_log_dists - reference_log_dists)).sum(dim=-1).mean()
+
+
 def token_patch_indices_from_counts(token_counts: torch.Tensor) -> torch.Tensor:
     token_counts = token_counts.detach().long()
     return torch.repeat_interleave(
@@ -2277,6 +2493,10 @@ def ppo_clipped_loss(
     fixed_value_loss_scale: torch.Tensor | None = None,
     policy_patch_indices: torch.Tensor | None = None,
     value_token_counts: torch.Tensor | None = None,
+    new_log_dists: torch.Tensor | None = None,
+    old_log_dists: torch.Tensor | None = None,
+    reference_log_dists: torch.Tensor | None = None,
+    reference_kl_coef: float = 0.0,
 ) -> PPOLossPayload:
     if not (values.shape == old_values.shape == advantages.shape == value_targets.shape):
         raise RuntimeError(
@@ -2288,6 +2508,15 @@ def ppo_clipped_loss(
         raise RuntimeError(
             "PPO policy logprob shape mismatch: "
             f"new={tuple(new_logprobs.shape)} old={tuple(old_logprobs.shape)}"
+        )
+    if reference_kl_coef != 0.0 and reference_log_dists is None:
+        raise RuntimeError("--reference-kl-coef requires reference token log-distributions")
+    if (new_log_dists is None) and (old_log_dists is not None or reference_log_dists is not None):
+        raise RuntimeError("PPO exact KL diagnostics require current token log-distributions")
+    if new_log_dists is not None and new_log_dists.shape[0] != new_logprobs.numel():
+        raise RuntimeError(
+            "PPO current log-distribution/token shape mismatch: "
+            f"log_dists={tuple(new_log_dists.shape)} logprobs={tuple(new_logprobs.shape)}"
         )
     if policy_patch_indices is None:
         raise RuntimeError("PPO loss is token-level and requires policy_patch_indices")
@@ -2365,8 +2594,24 @@ def ppo_clipped_loss(
             scale_min=value_loss_scale_min,
             weights=value_token_counts,
         )
-    entropy_loss = -entropy_bonus_coef * (-new_logprobs).mean()
-    loss = policy_loss + value_loss_coef * value_loss + entropy_loss
+    if new_log_dists is not None:
+        entropy = -(new_log_dists.float().exp() * new_log_dists.float()).sum(dim=-1).mean()
+    else:
+        entropy = (-new_logprobs).mean()
+    entropy_loss = -entropy_bonus_coef * entropy
+    zero = torch.zeros((), device=new_logprobs.device, dtype=torch.float32)
+    old_policy_exact_kl = (
+        exact_categorical_kl(new_log_dists, old_log_dists)
+        if new_log_dists is not None and old_log_dists is not None
+        else zero
+    )
+    reference_exact_kl = (
+        exact_categorical_kl(new_log_dists, reference_log_dists)
+        if new_log_dists is not None and reference_log_dists is not None
+        else zero
+    )
+    reference_kl_loss = float(reference_kl_coef) * reference_exact_kl
+    loss = policy_loss + value_loss_coef * value_loss + entropy_loss + reference_kl_loss
     approx_kl = ((old_logprobs.detach() - new_logprobs) ** 2).mean() * 0.5
     clip_fraction = ((ratio - 1.0).abs() > clip_range).float().mean()
     return PPOLossPayload(
@@ -2376,7 +2621,10 @@ def ppo_clipped_loss(
         raw_value_loss=raw_value_loss,
         value_loss_scale=value_loss_scale,
         entropy_loss=entropy_loss,
+        reference_kl_loss=reference_kl_loss,
         approx_kl=approx_kl,
+        old_policy_exact_kl=old_policy_exact_kl,
+        reference_exact_kl=reference_exact_kl,
         clip_fraction=clip_fraction,
         advantages_mean=adv_mean,
         advantages_std=adv_std,
@@ -2435,14 +2683,18 @@ def _loss_payload_weighted_sum(
     policy_loss = weighted_tensor("policy_loss")
     value_loss = weighted_tensor("value_loss")
     entropy_loss = weighted_tensor("entropy_loss")
+    reference_kl_loss = weighted_tensor("reference_kl_loss")
     return PPOLossPayload(
-        loss=policy_loss + float(value_loss_coef) * value_loss + entropy_loss,
+        loss=policy_loss + float(value_loss_coef) * value_loss + entropy_loss + reference_kl_loss,
         policy_loss=policy_loss,
         value_loss=value_loss,
         raw_value_loss=weighted_tensor("raw_value_loss"),
         value_loss_scale=weighted_tensor("value_loss_scale"),
         entropy_loss=entropy_loss,
+        reference_kl_loss=reference_kl_loss,
         approx_kl=weighted_tensor("approx_kl"),
+        old_policy_exact_kl=weighted_tensor("old_policy_exact_kl"),
+        reference_exact_kl=weighted_tensor("reference_exact_kl"),
         clip_fraction=weighted_tensor("clip_fraction"),
         advantages_mean=weighted_tensor("advantages_mean"),
         advantages_std=weighted_tensor("advantages_std"),
@@ -2544,7 +2796,9 @@ def run_ppo_replay_epoch_microbatched(
     trajectory_lengths: list[int],
     old_logprobs: torch.Tensor,
     old_token_logprobs: torch.Tensor,
+    old_token_log_dists: torch.Tensor,
     old_token_counts: torch.Tensor,
+    reference_token_log_dists: torch.Tensor | None,
     old_values: torch.Tensor,
     batch_tensors: PPOBatchTensors,
     normalized_advantages: torch.Tensor,
@@ -2582,6 +2836,15 @@ def run_ppo_replay_epoch_microbatched(
         raise RuntimeError(
             f"PPO microbatch tensor length mismatch for old_token_logprobs: {old_token_logprobs.numel()} != {total_tokens}"
         )
+    if old_token_log_dists.shape[0] != total_tokens:
+        raise RuntimeError(
+            f"PPO microbatch tensor length mismatch for old_token_log_dists: {old_token_log_dists.shape[0]} != {total_tokens}"
+        )
+    if reference_token_log_dists is not None and reference_token_log_dists.shape != old_token_log_dists.shape:
+        raise RuntimeError(
+            "PPO reference KL tensor shape mismatch: "
+            f"reference={tuple(reference_token_log_dists.shape)} old={tuple(old_token_log_dists.shape)}"
+        )
 
     microbatch_size = _effective_microbatch_size(args.ppo_replay_microbatch_size, len(rollout_payloads))
     token_offsets = _trajectory_patch_offsets(trajectory_token_lengths)
@@ -2611,6 +2874,7 @@ def run_ppo_replay_epoch_microbatched(
         )
         new_logprobs = torch.cat([replay.logprobs.float() for replay in chunk_replays])
         new_token_logprobs = torch.cat([replay.token_logprobs.float() for replay in chunk_replays])
+        new_token_log_dists = torch.cat([replay.token_log_dists.float() for replay in chunk_replays])
         new_token_counts = torch.cat([replay.token_counts.long() for replay in chunk_replays])
         new_values = torch.cat([replay.values.float() for replay in chunk_replays])
         if new_logprobs.numel() != expected_patches:
@@ -2651,6 +2915,12 @@ def run_ppo_replay_epoch_microbatched(
             fixed_value_loss_scale=value_loss_scale,
             policy_patch_indices=token_patch_indices_from_counts(new_token_counts),
             value_token_counts=new_token_counts,
+            new_log_dists=new_token_log_dists,
+            old_log_dists=old_token_log_dists[token_start:token_end],
+            reference_log_dists=(
+                None if reference_token_log_dists is None else reference_token_log_dists[token_start:token_end]
+            ),
+            reference_kl_coef=args.reference_kl_coef,
         )
         token_weight = expected_tokens / total_tokens
         payloads_for_metrics.append((loss_payload, token_weight))
@@ -2659,6 +2929,7 @@ def run_ppo_replay_epoch_microbatched(
                 loss_payload.policy_loss * token_weight
                 + float(args.value_loss_coef) * loss_payload.value_loss * token_weight
                 + loss_payload.entropy_loss * token_weight
+                + loss_payload.reference_kl_loss * token_weight
             )
             weighted_loss.backward()
 
@@ -2667,11 +2938,12 @@ def run_ppo_replay_epoch_microbatched(
                 logprobs=replay.logprobs.detach().float(),
                 values=replay.values.detach().float(),
                 token_logprobs=replay.token_logprobs.detach().float(),
+                token_log_dists=replay.token_log_dists.detach().float(),
                 token_counts=replay.token_counts.detach().long(),
             )
             for replay in chunk_replays
         )
-        del chunk_replays, new_logprobs, new_token_logprobs, new_token_counts, new_values, loss_payload
+        del chunk_replays, new_logprobs, new_token_logprobs, new_token_log_dists, new_token_counts, new_values, loss_payload
         if next(policy_model.parameters()).device.type == "cuda":
             torch.cuda.empty_cache()
         microbatch_count += 1
@@ -2717,6 +2989,7 @@ def post_step_replay_microbatched(
     logprobs: list[torch.Tensor] = []
     values: list[torch.Tensor] = []
     token_logprobs: list[torch.Tensor] = []
+    token_log_dists: list[torch.Tensor] = []
     token_counts: list[torch.Tensor] = []
     with torch.no_grad():
         for trajectory_start in range(0, len(rollout_payloads), microbatch_size):
@@ -2736,21 +3009,25 @@ def post_step_replay_microbatched(
                 logprobs.append(replay.logprobs.detach().float())
                 values.append(replay.values.detach().float())
                 token_logprobs.append(replay.token_logprobs.detach().float())
+                token_log_dists.append(replay.token_log_dists.detach().float())
                 token_counts.append(replay.token_counts.detach().long())
             if next(policy_model.parameters()).device.type == "cuda":
                 torch.cuda.empty_cache()
     device = next(policy_model.parameters()).device
+    vocab_size = policy_model.char_level_decoder.base.transformer.wte.weight.shape[0]
     if not logprobs:
         return PatchReplayChunk(
             logprobs=torch.empty(0, device=device),
             values=torch.empty(0, device=device),
             token_logprobs=torch.empty(0, device=device),
+            token_log_dists=torch.empty((0, vocab_size), device=device),
             token_counts=torch.empty(0, device=device, dtype=torch.long),
         )
     return PatchReplayChunk(
         logprobs=torch.cat(logprobs),
         values=torch.cat(values),
         token_logprobs=torch.cat(token_logprobs),
+        token_log_dists=torch.cat(token_log_dists),
         token_counts=torch.cat(token_counts),
     )
 
@@ -3635,6 +3912,7 @@ def run_ppo_smoke(
     reward_config: GoldbergRewardConfig,
     args,
     behavior_policy_model: NotaGenLMHeadModel | None = None,
+    reference_policy_model: NotaGenLMHeadModel | None = None,
 ) -> dict:
     patchilizer = Patchilizer(stream=PATCH_STREAM)
     device = next(policy_model.parameters()).device
@@ -3652,10 +3930,17 @@ def run_ppo_smoke(
         behavior_policy_model.eval()
         for param in behavior_policy_model.parameters():
             param.requires_grad_(False)
+    if reference_policy_model is not None:
+        reference_policy_model.eval()
+        for param in reference_policy_model.parameters():
+            param.requires_grad_(False)
     value_head.train()
     dropout_modules_disabled = disable_dropout_modules(policy_model)
     behavior_dropout_modules_disabled = (
         disable_dropout_modules(behavior_policy_model) if behavior_policy_model is not None else []
+    )
+    reference_dropout_modules_disabled = (
+        disable_dropout_modules(reference_policy_model) if reference_policy_model is not None else []
     )
 
     if args.reward_mode == "goldberg":
@@ -3705,6 +3990,8 @@ def run_ppo_smoke(
         raise ValueError(f"rollout_spares_percent must be non-negative, got {args.rollout_spares_percent}")
     if args.ppo_epochs <= 0:
         raise ValueError(f"ppo_epochs must be positive, got {args.ppo_epochs}")
+    if args.reference_kl_coef != 0.0 and reference_policy_model is None:
+        raise ValueError("--reference-kl-coef requires a loaded reference policy model")
     if args.value_warmup_epochs < 0:
         raise ValueError(f"value_warmup_epochs must be non-negative, got {args.value_warmup_epochs}")
     if args.value_loss_eps <= 0:
@@ -3877,13 +4164,17 @@ def run_ppo_smoke(
         prompt_flat = [item for sublist in patchilizer.encode_generate(rollout_prompt) for item in sublist]
         old_replay_start = time.perf_counter()
         old_replays: list[PatchReplayChunk] = []
+        reference_replays: list[TokenDistributionReplay] = []
         reward_tensors: list[torch.Tensor] = []
+        old_replay_only_s = 0.0
+        reference_replay_s = 0.0
         with torch.no_grad():
             microbatch_size = _effective_microbatch_size(args.ppo_replay_microbatch_size, len(update_rollout_payloads))
             for trajectory_start in range(0, len(update_rollout_payloads), microbatch_size):
                 trajectory_end = min(len(update_rollout_payloads), trajectory_start + microbatch_size)
                 trajectory_batch = update_rollout_payloads[trajectory_start:trajectory_end]
                 reward_trace_batch = update_reward_traces[trajectory_start:trajectory_end]
+                old_replay_batch_start = time.perf_counter()
                 old_replay_batch = batched_trajectory_patch_logprobs_values(
                     old_logprob_model,
                     value_head,
@@ -3894,6 +4185,20 @@ def run_ppo_smoke(
                     target_chunk_patches=args.score_chunk_patches,
                     replay_batch_size=0,
                 )
+                old_replay_only_s += time.perf_counter() - old_replay_batch_start
+                reference_replay_batch = None
+                if reference_policy_model is not None:
+                    reference_replay_batch_start = time.perf_counter()
+                    reference_replay_batch = batched_trajectory_token_log_dists(
+                        reference_policy_model,
+                        prompt_flat,
+                        [payload.generated_patches for payload in trajectory_batch],
+                        args.precision,
+                        replay_context_patches=args.replay_context_patches,
+                        target_chunk_patches=args.score_chunk_patches,
+                        replay_batch_size=0,
+                    )
+                    reference_replay_s += time.perf_counter() - reference_replay_batch_start
                 for payload, reward_trace, old_replay in zip(
                     trajectory_batch,
                     reward_trace_batch,
@@ -3916,12 +4221,43 @@ def run_ppo_smoke(
                         )
                     old_replays.append(old_replay)
                     reward_tensors.append(torch.tensor(reward_trace.rewards, device=device, dtype=torch.float32))
+                if reference_replay_batch is not None:
+                    for payload, old_replay, reference_replay in zip(
+                        trajectory_batch,
+                        old_replay_batch,
+                        reference_replay_batch,
+                        strict=True,
+                    ):
+                        if reference_replay.token_log_dists.shape != old_replay.token_log_dists.shape:
+                            raise RuntimeError(
+                                "PPO reference replay token distribution shape mismatch: "
+                                f"trajectory={payload.trajectory_index} "
+                                f"reference={tuple(reference_replay.token_log_dists.shape)} "
+                                f"old={tuple(old_replay.token_log_dists.shape)}"
+                            )
+                        if not torch.equal(
+                            reference_replay.token_counts.detach().cpu(),
+                            old_replay.token_counts.detach().cpu(),
+                        ):
+                            raise RuntimeError(
+                                "PPO reference replay token-count mismatch: "
+                                f"trajectory={payload.trajectory_index}"
+                            )
+                        reference_replays.append(reference_replay)
                 if device.type == "cuda":
                     torch.cuda.empty_cache()
-        timings["old_replay_s"] = time.perf_counter() - old_replay_start
+        timings["old_replay_s"] = old_replay_only_s
+        timings["reference_replay_s"] = reference_replay_s
+        timings["old_reference_replay_total_s"] = time.perf_counter() - old_replay_start
         old_logprobs = torch.cat([replay.logprobs.detach().float() for replay in old_replays])
         old_token_logprobs = torch.cat([replay.token_logprobs.detach().float() for replay in old_replays])
+        old_token_log_dists = torch.cat([replay.token_log_dists.detach().float() for replay in old_replays])
         old_token_counts = torch.cat([replay.token_counts.detach().long() for replay in old_replays])
+        reference_token_log_dists = (
+            torch.cat([replay.token_log_dists.detach().float() for replay in reference_replays])
+            if reference_replays
+            else None
+        )
         initial_old_value_tensors = [replay.values.detach().float() for replay in old_replays]
         trajectory_lengths = [int(replay.logprobs.numel()) for replay in old_replays]
         trajectory_token_lengths = [int(replay.token_logprobs.numel()) for replay in old_replays]
@@ -4012,7 +4348,9 @@ def run_ppo_smoke(
                 trajectory_lengths=trajectory_lengths,
                 old_logprobs=old_logprobs,
                 old_token_logprobs=old_token_logprobs,
+                old_token_log_dists=old_token_log_dists,
                 old_token_counts=old_token_counts,
+                reference_token_log_dists=reference_token_log_dists,
                 old_values=old_values,
                 batch_tensors=batch_tensors,
                 normalized_advantages=normalized_advantages,
@@ -4051,6 +4389,21 @@ def run_ppo_smoke(
                 post_epoch_logprob_advantage_diag["token_approx_kl"] = float(
                     (((old_token_logprobs - post_epoch_replay.token_logprobs) ** 2).mean() * 0.5).detach().cpu()
                 )
+                post_epoch_logprob_advantage_diag["old_policy_exact_kl"] = float(
+                    exact_categorical_kl(post_epoch_replay.token_log_dists, old_token_log_dists).detach().cpu()
+                )
+                post_epoch_logprob_advantage_diag["reference_exact_kl"] = (
+                    None
+                    if reference_token_log_dists is None
+                    else float(
+                        exact_categorical_kl(
+                            post_epoch_replay.token_log_dists,
+                            reference_token_log_dists,
+                        )
+                        .detach()
+                        .cpu()
+                    )
+                )
                 post_epoch_logprob_advantage_diag["token_clip_fraction"] = float(
                     ((post_epoch_token_ratio - 1.0).abs() > args.ppo_clip_range).float().mean().detach().cpu()
                 )
@@ -4067,7 +4420,11 @@ def run_ppo_smoke(
                     "raw_value_loss": float(loss_payload.raw_value_loss.detach().cpu()),
                     "value_loss_scale": float(loss_payload.value_loss_scale.detach().cpu()),
                     "entropy_loss": float(loss_payload.entropy_loss.detach().cpu()),
+                    "reference_kl_loss": float(loss_payload.reference_kl_loss.detach().cpu()),
                     "approx_kl": float(loss_payload.approx_kl.detach().cpu()),
+                    "old_policy_exact_kl": float(loss_payload.old_policy_exact_kl.detach().cpu()),
+                    "reference_exact_kl": float(loss_payload.reference_exact_kl.detach().cpu()),
+                    "reference_kl_coef": float(args.reference_kl_coef),
                     "clip_fraction": float(loss_payload.clip_fraction.detach().cpu()),
                     "policy_granularity": "token",
                     "policy_reduction": "token_mean",
@@ -4104,6 +4461,9 @@ def run_ppo_smoke(
                             "loss": epoch_log["loss"],
                             "policy_loss": epoch_log["policy_loss"],
                             "approx_kl": epoch_log["approx_kl"],
+                            "old_policy_exact_kl": epoch_log["old_policy_exact_kl"],
+                            "reference_exact_kl": epoch_log["reference_exact_kl"],
+                            "reference_kl_loss": epoch_log["reference_kl_loss"],
                             "clip_fraction": epoch_log["clip_fraction"],
                             "grad_norm": epoch_log["grad_norm"],
                             "duration_s": epoch_log["duration_s"],
@@ -4143,10 +4503,21 @@ def run_ppo_smoke(
             post_step_token_log_ratio = post_step_token_logprobs - old_token_logprobs
             post_step_token_ratio = torch.exp(post_step_token_log_ratio)
             post_step_approx_kl = ((old_token_logprobs - post_step_token_logprobs) ** 2).mean() * 0.5
+            post_step_old_policy_exact_kl = exact_categorical_kl(
+                post_step_replay.token_log_dists,
+                old_token_log_dists,
+            )
+            post_step_reference_exact_kl = (
+                None
+                if reference_token_log_dists is None
+                else exact_categorical_kl(post_step_replay.token_log_dists, reference_token_log_dists)
+            )
             post_step_clip_fraction = ((post_step_token_ratio - 1.0).abs() > args.ppo_clip_range).float().mean()
             timings["post_step_kl_check_s"] = time.perf_counter() - post_step_kl_start
         else:
             post_step_approx_kl = None
+            post_step_old_policy_exact_kl = None
+            post_step_reference_exact_kl = None
             post_step_clip_fraction = None
             post_step_logprobs = None
             post_step_log_ratio = None
@@ -4246,10 +4617,25 @@ def run_ppo_smoke(
             "raw_value_loss": float(loss_payload.raw_value_loss.detach().cpu()),
             "value_loss_scale": float(loss_payload.value_loss_scale.detach().cpu()),
             "entropy_loss": float(loss_payload.entropy_loss.detach().cpu()),
+            "reference_kl_loss": float(loss_payload.reference_kl_loss.detach().cpu()),
             "approx_kl": float(loss_payload.approx_kl.detach().cpu()),
+            "old_policy_exact_kl": float(loss_payload.old_policy_exact_kl.detach().cpu()),
+            "reference_exact_kl": float(loss_payload.reference_exact_kl.detach().cpu()),
+            "reference_kl_coef": float(args.reference_kl_coef),
+            "reference_kl_enabled": bool(reference_policy_model is not None),
             "clip_fraction": float(loss_payload.clip_fraction.detach().cpu()),
             "post_step_approx_kl": (
                 None if post_step_approx_kl is None else float(post_step_approx_kl.detach().cpu())
+            ),
+            "post_step_old_policy_exact_kl": (
+                None
+                if post_step_old_policy_exact_kl is None
+                else float(post_step_old_policy_exact_kl.detach().cpu())
+            ),
+            "post_step_reference_exact_kl": (
+                None
+                if post_step_reference_exact_kl is None
+                else float(post_step_reference_exact_kl.detach().cpu())
             ),
             "post_step_clip_fraction": (
                 None if post_step_clip_fraction is None else float(post_step_clip_fraction.detach().cpu())
@@ -4282,6 +4668,7 @@ def run_ppo_smoke(
                 len(update_rollout_payloads),
             ),
             "frozen_behavior_policy": bool(behavior_policy_model is not None),
+            "reference_policy": bool(reference_policy_model is not None),
             "ppo_epoch_logs": ppo_epoch_logs,
             "value_warmup": value_warmup_log,
             "normalize_value_loss": args.normalize_value_loss,
@@ -4357,7 +4744,10 @@ def run_ppo_smoke(
             reward_tensors,
             old_logprobs,
             old_token_logprobs,
+            old_token_log_dists,
             old_token_counts,
+            reference_replays,
+            reference_token_log_dists,
             initial_old_value_tensors,
             return_tensors,
             returns_for_metrics,
@@ -4381,6 +4771,7 @@ def run_ppo_smoke(
         "fixed_eval_logs": fixed_eval_logs,
         "policy_dropout_modules_disabled": dropout_modules_disabled,
         "behavior_policy_dropout_modules_disabled": behavior_dropout_modules_disabled,
+        "reference_policy_dropout_modules_disabled": reference_dropout_modules_disabled,
         "value_head": {
             **value_head.config(),
             "trainable_params": sum(param.numel() for param in value_head.parameters() if param.requires_grad),
@@ -4535,6 +4926,28 @@ def main() -> int:
         help="Minimum denominator used only when --normalize-value-loss is enabled.",
     )
     parser.add_argument("--entropy-bonus-coef", type=float, default=0.0)
+    parser.add_argument(
+        "--reference-kl-coef",
+        type=float,
+        default=0.0,
+        help=(
+            "Coefficient for exact categorical KL(pi_current || pi_reference) over generated character tokens. "
+            "The reference defaults to --policy-weights without PPO LoRA/checkpoint state."
+        ),
+    )
+    parser.add_argument(
+        "--reference-kl-check",
+        action="store_true",
+        help="Load the reference/SFT model and log exact reference KL even when --reference-kl-coef is 0.",
+    )
+    parser.add_argument(
+        "--reference-policy-weights",
+        help="Optional full-model weights for the reference/SFT model. Defaults to --policy-weights.",
+    )
+    parser.add_argument(
+        "--reference-checkpoint-dir",
+        help="Optional LoRA checkpoint to load into the reference model. Leave unset to anchor to raw SFT/base weights.",
+    )
     parser.add_argument("--gamma", type=float, default=1.0)
     parser.add_argument("--gae-lambda", type=float, default=0.95)
     parser.add_argument(
@@ -4700,6 +5113,25 @@ def main() -> int:
             load_policy_checkpoint(behavior_policy_model, Path(args.resume_checkpoint_dir))
             print(f"Loaded frozen behavior policy LoRA checkpoint from {args.resume_checkpoint_dir}")
         print("Frozen behavior policy enabled for rollouts and old logprobs")
+    reference_policy_model = None
+    reference_payload = None
+    reference_policy_weights = None
+    reference_policy_requested = args.reference_kl_coef != 0.0 or args.reference_kl_check
+    if reference_policy_requested:
+        reference_policy_weights = Path(args.reference_policy_weights) if args.reference_policy_weights else policy_weights
+        reference_policy_model = build_model(
+            reference_policy_weights,
+            device,
+            lora_r=args.lora_r if args.reference_checkpoint_dir else 0,
+            lora_alpha=args.lora_alpha,
+            lora_dropout=args.lora_dropout,
+            precision=args.precision,
+            freeze_before_precision_cast=True,
+        )
+        if args.reference_checkpoint_dir:
+            reference_payload = load_policy_checkpoint(reference_policy_model, Path(args.reference_checkpoint_dir))
+            print(f"Loaded reference policy LoRA checkpoint from {args.reference_checkpoint_dir}")
+        print(f"Reference KL model enabled from {reference_policy_weights}")
     value_head, value_head_load = build_value_head(policy_shape, args, device)
     prompts = load_prompt_rows(args.prompts_jsonl, limit=args.prompt_limit)
     prompt_targets = load_prompt_structural_targets(prompts, args)
@@ -4717,6 +5149,7 @@ def main() -> int:
         reward_config=reward_config,
         args=args,
         behavior_policy_model=behavior_policy_model,
+        reference_policy_model=reference_policy_model,
     )
     if args.save_value_head_weights:
         save_value_head_checkpoint(value_head, args.save_value_head_weights)
@@ -4725,11 +5158,14 @@ def main() -> int:
         payload["loaded_value_head_weights"] = value_head_load
     if resume_payload:
         payload["resume_checkpoint"] = resume_payload
+    if reference_payload:
+        payload["reference_checkpoint"] = reference_payload
     payload["run_config"] = {
         "args": vars(args),
         "policy_shape": asdict(policy_shape),
         "reward_config": asdict(reward_config),
         "policy_weights": str(policy_weights),
+        "reference_policy_weights": None if reference_policy_weights is None else str(reference_policy_weights),
         "prompt_structural_targets": prompt_structural_target_metadata(prompt_targets),
         "reward_mode": {
             "mode": args.reward_mode,
@@ -4743,6 +5179,10 @@ def main() -> int:
             "clip_range": args.ppo_clip_range,
             "value_loss_coef": args.value_loss_coef,
             "entropy_bonus_coef": args.entropy_bonus_coef,
+            "reference_kl_coef": args.reference_kl_coef,
+            "reference_kl_check": args.reference_kl_check,
+            "reference_policy": bool(reference_policy_model is not None),
+            "reference_checkpoint_dir": args.reference_checkpoint_dir,
             "gamma": args.gamma,
             "gae_lambda": args.gae_lambda,
             "ppo_epochs": args.ppo_epochs,

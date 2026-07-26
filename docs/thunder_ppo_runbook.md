@@ -179,7 +179,29 @@ value_prediction_granularity: patch
 value_reduction: token_mean
 ```
 
-KL is diagnostic only right now. PPO clipping is active, but there is no dense KL reward or KL loss coefficient against the SFT/reference policy. Pre-step KL is normally near zero because old and new policy are identical before `optimizer.step()`; use `--post-step-kl-check` for the real post-update movement.
+The selected-token PPO ratio is still computed against `pi_old`, but replay also stores the full character-symbol distribution for every generated token. Exact categorical KL is:
+
+```text
+KL(pi_current || pi_reference) =
+mean_over_generated_tokens(
+    sum_symbol pi_current(symbol | state)
+      * (log pi_current(symbol | state) - log pi_reference(symbol | state))
+)
+```
+
+`old_policy_exact_kl` logs this full-distribution KL against `pi_old`. `reference_exact_kl` logs it against a frozen reference/SFT model, and `reference_kl_loss = reference_kl_coef * reference_exact_kl` is added to the PPO objective when `--reference-kl-coef` is nonzero.
+
+Reference KL is off by default. Enable it with:
+
+```text
+--reference-kl-coef 0.01
+```
+
+The reference defaults to `--policy-weights` without PPO LoRA/checkpoint state. Use `--reference-kl-check` to load the reference and log `reference_exact_kl` without penalizing it. Use `--reference-policy-weights` or `--reference-checkpoint-dir` only when the reference should differ from the raw SFT weights.
+
+The reference pass uses a distribution-only no-grad replay path: it returns only `token_log_dists` and `token_counts`, without value-head predictions or per-patch logprob sums. Its timing is logged separately as `reference_replay_s`; `old_replay_s` is the old-policy replay only, and `old_reference_replay_total_s` is their combined wall time.
+
+Pre-step selected-token `approx_kl` is normally near zero because old and new policy are identical before `optimizer.step()`; use `--post-step-kl-check` for the real post-update movement. Post-step logs include both selected-token movement and full-distribution exact KL fields.
 
 ## Sync Minimal Project State
 
