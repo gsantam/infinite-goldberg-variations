@@ -13,6 +13,7 @@ try:
     from scripts.custom_ppo_notagen import (
         PatchRewardTrace,
         PatchValueHead,
+        PPORewardScoringOptions,
         PPORolloutPayload,
         PromptStructuralTarget,
         RewardEvent,
@@ -29,11 +30,16 @@ try:
         load_prompt_structural_targets,
         load_value_head_checkpoint,
         normalize_advantages,
+        normalize_advantages_token_weighted,
+        patch_rewards_single_pass,
+        patch_rewards_simple_test,
+        patch_rewards_terminal,
         ppo_clipped_loss,
         save_value_head_checkpoint,
         sample_ppo_rollouts,
         score_ppo_rollout_payloads,
         terminal_returns,
+        token_patch_indices_from_counts,
         trajectory_patch_hidden_states,
         trajectory_patch_logprobs_values,
         trajectory_patch_values,
@@ -375,6 +381,192 @@ class NotaGenPPOTests(unittest.TestCase):
         self.assertTrue(scored.trajectory_logs[0]["reward_breakdown"]["rollout_failed"])
         self.assertTrue(scored.trajectory_logs[0]["reward_breakdown"]["zero_contribution_rollout"])
 
+    def test_simple_note_count_reward_can_be_dense_or_terminal(self):
+        completion = "[r:0/0][V:1]G G A g|\n"
+        generated_patches = _generated_patches_from_text(completion)
+        self.assertGreater(len(generated_patches), 1)
+
+        dense = patch_rewards_simple_test(
+            generated_patches=generated_patches,
+            scoring_options=PPORewardScoringOptions(
+                similarity_chroma_bins=8,
+                similarity_band_ratio=0.25,
+                similarity_timeout_s=5.0,
+                max_similarity_reward=2.0,
+                reward_mode="note_count",
+                simple_reward_note="G",
+                simple_reward_max_count=4.0,
+                simple_reward_scale=2.0,
+            ),
+        )
+        terminal = patch_rewards_simple_test(
+            generated_patches=generated_patches,
+            scoring_options=PPORewardScoringOptions(
+                similarity_chroma_bins=8,
+                similarity_band_ratio=0.25,
+                similarity_timeout_s=5.0,
+                max_similarity_reward=2.0,
+                patch_reward_attribution="terminal",
+                reward_mode="note_count",
+                simple_reward_note="G",
+                simple_reward_max_count=4.0,
+                simple_reward_scale=2.0,
+            ),
+        )
+
+        self.assertAlmostEqual(dense.final_score.total, 1.5)
+        self.assertAlmostEqual(sum(dense.rewards), 1.5)
+        self.assertEqual(dense.final_score.breakdown["simple_reward_note_count"], 3.0)
+        self.assertTrue(any(reward > 0.0 for reward in dense.rewards[:-1]))
+        self.assertAlmostEqual(terminal.final_score.total, 1.5)
+        self.assertEqual(terminal.rewards[:-1], [0.0 for _idx in terminal.rewards[:-1]])
+        self.assertAlmostEqual(terminal.rewards[-1], 1.5)
+
+    def test_simple_note_fraction_reward_is_terminal_and_length_normalized(self):
+        completion = "[r:0/0][V:1]G A [I:staff -1]g C|\n"
+        generated_patches = _generated_patches_from_text(completion)
+        self.assertGreater(len(generated_patches), 1)
+
+        trace = patch_rewards_simple_test(
+            generated_patches=generated_patches,
+            scoring_options=PPORewardScoringOptions(
+                similarity_chroma_bins=8,
+                similarity_band_ratio=0.25,
+                similarity_timeout_s=5.0,
+                max_similarity_reward=2.0,
+                patch_reward_attribution="terminal",
+                reward_mode="note_fraction",
+                simple_reward_note="G",
+                simple_reward_scale=2.0,
+            ),
+        )
+
+        self.assertAlmostEqual(trace.final_score.total, 1.0)
+        self.assertEqual(trace.final_score.breakdown["simple_reward_note_count"], 2.0)
+        self.assertEqual(trace.final_score.breakdown["simple_reward_total_note_count"], 4.0)
+        self.assertAlmostEqual(trace.final_score.breakdown["simple_reward_fraction"], 0.5)
+        self.assertEqual(trace.rewards[:-1], [0.0 for _idx in trace.rewards[:-1]])
+        self.assertAlmostEqual(trace.rewards[-1], 1.0)
+
+        with self.assertRaisesRegex(RuntimeError, "requires terminal"):
+            patch_rewards_simple_test(
+                generated_patches=generated_patches,
+                scoring_options=PPORewardScoringOptions(
+                    similarity_chroma_bins=8,
+                    similarity_band_ratio=0.25,
+                    similarity_timeout_s=5.0,
+                    max_similarity_reward=2.0,
+                    reward_mode="note_fraction",
+                    simple_reward_note="G",
+                ),
+            )
+
+    def test_score_rollout_payloads_supports_simple_note_count_mode(self):
+        prompt = "X:1\nT:Simple note count reward test\nM:3/4\nL:1/8\nK:C\nV:1\n%%score 1\n"
+        completion = "[r:0/0][V:1]G G A g|\n"
+        target = StructuralTarget(expected_bars=1, expected_structure_bars=1)
+        prompt_target = PromptStructuralTarget(
+            target=target,
+            structure_path="<test>",
+            source_key="simple_note_count_test",
+        )
+        payload = PPORolloutPayload(
+            trajectory_index=0,
+            rollout_seed=10,
+            full_text=prompt + completion,
+            generated_patches=_generated_patches_from_text(completion),
+            meta={"stop_reason": "target_stream_lines"},
+        )
+
+        scored = score_ppo_rollout_payloads(
+            prompt=prompt,
+            prompt_idx=0,
+            prompt_name="simple_note_count_test",
+            prompt_target=prompt_target,
+            target=target,
+            target_stream_lines=1,
+            rollout_payloads=[payload],
+            reward_config=GoldbergRewardConfig(parse_validation_mode="abc-tokenize"),
+            similarity_weights=SimilarityRewardWeights(),
+            aria_similarity_ref=None,
+            args=SimpleNamespace(
+                similarity_chroma_bins=8,
+                similarity_band_ratio=0.25,
+                similarity_timeout_s=5.0,
+                max_similarity_reward=2.0,
+                reward_workers=0,
+                patch_reward_attribution="terminal",
+                reward_mode="note_count",
+                simple_reward_note="G",
+                simple_reward_max_count=4.0,
+                simple_reward_length_unit="patches",
+                simple_reward_length_target=160.0,
+                simple_reward_scale=2.0,
+            ),
+            step_idx=0,
+            candidate_name_prefix="simple_note_count",
+        )
+
+        log = scored.trajectory_logs[0]
+        self.assertAlmostEqual(log["reward"], 1.5)
+        self.assertEqual(log["reward_breakdown"]["reward_mode"], "note_count")
+        self.assertEqual(log["reward_breakdown"]["patch_reward_mode"], "simple_note_count_terminal")
+        self.assertAlmostEqual(log["patch_reward_component_sums"]["simple_note_count_reward"], 1.5)
+        self.assertAlmostEqual(sum(log["patch_rewards"]), 1.5)
+
+    def test_score_rollout_payloads_supports_simple_note_fraction_mode(self):
+        prompt = "X:1\nT:Simple note fraction reward test\nM:3/4\nL:1/8\nK:C\nV:1\n%%score 1\n"
+        completion = "[r:0/0][V:1]G A [I:staff -1]g C|\n"
+        target = StructuralTarget(expected_bars=1, expected_structure_bars=1)
+        prompt_target = PromptStructuralTarget(
+            target=target,
+            structure_path="<test>",
+            source_key="simple_note_fraction_test",
+        )
+        payload = PPORolloutPayload(
+            trajectory_index=0,
+            rollout_seed=10,
+            full_text=prompt + completion,
+            generated_patches=_generated_patches_from_text(completion),
+            meta={"stop_reason": "target_stream_lines"},
+        )
+
+        scored = score_ppo_rollout_payloads(
+            prompt=prompt,
+            prompt_idx=0,
+            prompt_name="simple_note_fraction_test",
+            prompt_target=prompt_target,
+            target=target,
+            target_stream_lines=1,
+            rollout_payloads=[payload],
+            reward_config=GoldbergRewardConfig(parse_validation_mode="abc-tokenize"),
+            similarity_weights=SimilarityRewardWeights(),
+            aria_similarity_ref=None,
+            args=SimpleNamespace(
+                similarity_chroma_bins=8,
+                similarity_band_ratio=0.25,
+                similarity_timeout_s=5.0,
+                max_similarity_reward=2.0,
+                reward_workers=0,
+                patch_reward_attribution="terminal",
+                reward_mode="note_fraction",
+                simple_reward_note="G",
+                simple_reward_max_count=4.0,
+                simple_reward_length_unit="patches",
+                simple_reward_length_target=160.0,
+                simple_reward_scale=2.0,
+            ),
+            step_idx=0,
+            candidate_name_prefix="simple_note_fraction",
+        )
+
+        log = scored.trajectory_logs[0]
+        self.assertAlmostEqual(log["reward"], 1.0)
+        self.assertEqual(log["reward_breakdown"]["reward_mode"], "note_fraction")
+        self.assertEqual(log["reward_breakdown"]["patch_reward_mode"], "simple_note_fraction_terminal")
+        self.assertAlmostEqual(log["patch_reward_component_sums"]["simple_note_fraction_reward"], 1.0)
+        self.assertAlmostEqual(sum(log["patch_rewards"]), 1.0)
+
     def test_patch_replay_returns_one_logprob_and_value_per_aligned_patch(self):
         torch.manual_seed(0)
         model = _tiny_notagen()
@@ -397,8 +589,12 @@ class NotaGenPPOTests(unittest.TestCase):
 
         self.assertEqual(replay.logprobs.shape, (3,))
         self.assertEqual(replay.values.shape, (3,))
+        self.assertEqual(replay.token_counts.shape, (3,))
+        self.assertEqual(replay.token_logprobs.shape, (PATCH_SIZE * 3,))
         self.assertTrue(torch.isfinite(replay.logprobs).all())
         self.assertTrue(torch.isfinite(replay.values).all())
+        split_tokens = torch.split(replay.token_logprobs, replay.token_counts.detach().cpu().tolist())
+        self.assertTrue(torch.allclose(torch.stack([item.sum() for item in split_tokens]), replay.logprobs))
 
     def test_value_only_replay_returns_one_value_per_aligned_patch(self):
         torch.manual_seed(0)
@@ -478,8 +674,11 @@ class NotaGenPPOTests(unittest.TestCase):
 
         self.assertEqual(replay.logprobs.shape, (3,))
         self.assertEqual(replay.values.shape, (3,))
+        self.assertEqual(replay.token_counts.detach().cpu().tolist(), [first_patch_len, PATCH_SIZE, PATCH_SIZE])
         self.assertTrue(torch.isfinite(replay.logprobs).all())
         self.assertTrue(torch.isfinite(replay.values).all())
+        split_tokens = torch.split(replay.token_logprobs, replay.token_counts.detach().cpu().tolist())
+        self.assertTrue(torch.allclose(torch.stack([item.sum() for item in split_tokens]), replay.logprobs))
 
     def test_batched_patch_replay_matches_serial_for_multiple_trajectories(self):
         torch.manual_seed(0)
@@ -526,8 +725,12 @@ class NotaGenPPOTests(unittest.TestCase):
         for serial_replay, batched_replay in zip(serial, batched, strict=True):
             self.assertEqual(batched_replay.logprobs.shape, serial_replay.logprobs.shape)
             self.assertEqual(batched_replay.values.shape, serial_replay.values.shape)
+            self.assertEqual(batched_replay.token_logprobs.shape, serial_replay.token_logprobs.shape)
+            self.assertEqual(batched_replay.token_counts.shape, serial_replay.token_counts.shape)
             self.assertTrue(torch.allclose(batched_replay.logprobs, serial_replay.logprobs, atol=1e-5))
             self.assertTrue(torch.allclose(batched_replay.values, serial_replay.values, atol=1e-6))
+            self.assertTrue(torch.allclose(batched_replay.token_logprobs, serial_replay.token_logprobs, atol=1e-5))
+            self.assertTrue(torch.equal(batched_replay.token_counts, serial_replay.token_counts))
 
     def test_batched_value_replay_matches_serial_for_multiple_trajectories(self):
         torch.manual_seed(0)
@@ -620,8 +823,12 @@ class NotaGenPPOTests(unittest.TestCase):
         for serial_replay, batched_replay in zip(serial, batched, strict=True):
             self.assertEqual(batched_replay.logprobs.shape, serial_replay.logprobs.shape)
             self.assertEqual(batched_replay.values.shape, serial_replay.values.shape)
+            self.assertEqual(batched_replay.token_logprobs.shape, serial_replay.token_logprobs.shape)
+            self.assertEqual(batched_replay.token_counts.shape, serial_replay.token_counts.shape)
             self.assertTrue(torch.allclose(batched_replay.logprobs, serial_replay.logprobs, atol=1e-5))
             self.assertTrue(torch.allclose(batched_replay.values, serial_replay.values, atol=1e-6))
+            self.assertTrue(torch.allclose(batched_replay.token_logprobs, serial_replay.token_logprobs, atol=1e-5))
+            self.assertTrue(torch.equal(batched_replay.token_counts, serial_replay.token_counts))
 
     def test_ppo_clipped_loss_is_finite(self):
         old_logprobs = torch.tensor([-4.0, -3.0, -2.0])
@@ -630,6 +837,7 @@ class NotaGenPPOTests(unittest.TestCase):
         values = torch.tensor([0.3, 0.0, -0.2], requires_grad=True)
         value_targets = terminal_returns(1.5, 3, gamma=1.0, device=torch.device("cpu"))
         advantages = value_targets - old_values
+        token_counts = torch.ones(3, dtype=torch.long)
 
         payload = ppo_clipped_loss(
             new_logprobs=new_logprobs,
@@ -640,11 +848,66 @@ class NotaGenPPOTests(unittest.TestCase):
             value_targets=value_targets,
             clip_range=0.2,
             value_loss_coef=0.5,
+            policy_patch_indices=token_patch_indices_from_counts(token_counts),
+            value_token_counts=token_counts,
         )
 
         self.assertTrue(torch.isfinite(payload.loss))
         payload.loss.backward()
         self.assertIsNotNone(new_logprobs.grad)
+        self.assertIsNotNone(values.grad)
+
+    def test_ppo_token_clipped_loss_repeats_patch_advantages(self):
+        old_token_logprobs = torch.tensor([-4.0, -3.0, -2.5, -2.0, -1.5, -1.0])
+        new_token_logprobs = torch.tensor([-3.9, -3.2, -2.4, -2.2, -1.4, -1.1], requires_grad=True)
+        token_counts = torch.tensor([2, 1, 3])
+        policy_patch_indices = token_patch_indices_from_counts(token_counts)
+        old_values = torch.tensor([0.2, 0.1, -0.1])
+        values = torch.tensor([0.3, 0.0, -0.2], requires_grad=True)
+        value_targets = torch.tensor([1.0, 0.2, -0.3])
+        advantages = value_targets - old_values
+
+        normalized_advantages, mean, std = normalize_advantages_token_weighted(advantages, token_counts)
+        repeated_advantages = normalized_advantages[policy_patch_indices]
+        self.assertAlmostEqual(
+            float(repeated_advantages.mean()),
+            0.0,
+            places=6,
+        )
+        self.assertAlmostEqual(
+            float(repeated_advantages.std(unbiased=False)),
+            1.0,
+            places=6,
+        )
+
+        payload = ppo_clipped_loss(
+            new_logprobs=new_token_logprobs,
+            old_logprobs=old_token_logprobs,
+            values=values,
+            old_values=old_values,
+            advantages=advantages,
+            value_targets=value_targets,
+            clip_range=0.2,
+            value_loss_coef=0.5,
+            normalized_advantages=normalized_advantages,
+            advantages_mean=mean,
+            advantages_std=std,
+            policy_patch_indices=policy_patch_indices,
+        )
+
+        log_ratio = new_token_logprobs - old_token_logprobs
+        ratio = torch.exp(log_ratio)
+        expected_policy_loss = -torch.minimum(
+            ratio * repeated_advantages,
+            torch.clamp(ratio, 0.8, 1.2) * repeated_advantages,
+        ).mean()
+        repeated_values = values[policy_patch_indices]
+        repeated_value_targets = value_targets[policy_patch_indices]
+        expected_value_loss = torch.nn.functional.mse_loss(repeated_values, repeated_value_targets)
+        self.assertTrue(torch.allclose(payload.policy_loss, expected_policy_loss, atol=1e-6))
+        self.assertTrue(torch.allclose(payload.value_loss, expected_value_loss, atol=1e-6))
+        payload.loss.backward()
+        self.assertIsNotNone(new_token_logprobs.grad)
         self.assertIsNotNone(values.grad)
 
     def test_logprob_advantage_diagnostics_reports_split_sign_hit_rates(self):
@@ -841,8 +1104,13 @@ class NotaGenPPOTests(unittest.TestCase):
         self.assertTrue(torch.allclose(lambda_returns["structural_total_reward"], torch.tensor([0.875, 0.75])))
 
     def test_ppo_microbatch_loss_matches_full_batch_normalization(self):
-        old_logprobs = torch.tensor([-4.0, -3.0, -2.0, -2.5, -3.5])
-        new_logprobs = torch.tensor([-3.9, -3.2, -2.1, -2.7, -3.4], requires_grad=True)
+        token_counts = torch.tensor([1, 3, 2, 1, 4])
+        policy_patch_indices = token_patch_indices_from_counts(token_counts)
+        old_logprobs = torch.tensor([-4.0, -3.0, -2.8, -2.6, -2.0, -1.9, -2.5, -3.5, -3.4, -3.3, -3.2])
+        new_logprobs = torch.tensor(
+            [-3.9, -3.2, -2.7, -2.5, -2.1, -1.8, -2.7, -3.4, -3.5, -3.1, -3.0],
+            requires_grad=True,
+        )
         old_values = torch.tensor([0.2, 0.1, -0.1, 0.0, 0.5])
         values = torch.tensor([0.3, 0.0, -0.2, 0.1, 0.4], requires_grad=True)
         value_targets = torch.tensor([1.5, 0.7, 0.2, -0.1, 0.4])
@@ -859,15 +1127,19 @@ class NotaGenPPOTests(unittest.TestCase):
             value_loss_coef=0.5,
             normalize_value_loss=True,
             value_loss_scale_min=1.0,
+            policy_patch_indices=policy_patch_indices,
         )
 
-        normalized_advantages, adv_mean, adv_std = normalize_advantages(advantages)
-        value_loss_scale = torch.clamp(value_targets.std(unbiased=False), min=1.0)
+        normalized_advantages, adv_mean, adv_std = normalize_advantages_token_weighted(advantages, token_counts)
+        value_loss_scale = torch.clamp(torch.repeat_interleave(value_targets, token_counts).std(unbiased=False), min=1.0)
         weighted = {}
+        token_offsets = [0, 1, 4, 6, 7, 11]
         for start, end in [(0, 2), (2, 5)]:
+            token_start = token_offsets[start]
+            token_end = token_offsets[end]
             payload = ppo_clipped_loss(
-                new_logprobs=new_logprobs[start:end],
-                old_logprobs=old_logprobs[start:end],
+                new_logprobs=new_logprobs[token_start:token_end],
+                old_logprobs=old_logprobs[token_start:token_end],
                 values=values[start:end],
                 old_values=old_values[start:end],
                 advantages=advantages[start:end],
@@ -881,10 +1153,15 @@ class NotaGenPPOTests(unittest.TestCase):
                 advantages_mean=adv_mean,
                 advantages_std=adv_std,
                 fixed_value_loss_scale=value_loss_scale,
+                policy_patch_indices=token_patch_indices_from_counts(token_counts[start:end]),
             )
-            weight = (end - start) / len(advantages)
-            for name in ("loss", "policy_loss", "value_loss", "raw_value_loss", "approx_kl", "clip_fraction"):
-                weighted[name] = weighted.get(name, torch.zeros(())) + getattr(payload, name).detach() * weight
+            token_weight = (token_end - token_start) / int(token_counts.sum())
+            for name in ("policy_loss", "entropy_loss", "approx_kl", "clip_fraction"):
+                weighted[name] = weighted.get(name, torch.zeros(())) + getattr(payload, name).detach() * token_weight
+            for name in ("value_loss", "raw_value_loss"):
+                weighted[name] = weighted.get(name, torch.zeros(())) + getattr(payload, name).detach() * token_weight
+
+        weighted["loss"] = weighted["policy_loss"] + 0.5 * weighted["value_loss"] + weighted["entropy_loss"]
 
         for name in weighted:
             self.assertTrue(torch.allclose(weighted[name], getattr(full, name).detach(), atol=1e-6), name)
@@ -1034,6 +1311,82 @@ class NotaGenPPOTests(unittest.TestCase):
         self.assertGreater(len(events), 0)
         self.assertAlmostEqual(sum(event.value for event in events), 0.9)
         self.assertTrue(all(event.name == "root_dtw" for event in events))
+
+    def test_terminal_patch_reward_attribution_matches_final_score(self):
+        prompt = "X:1\nT:Terminal reward test\nM:4/4\nL:1/4\nK:C\nV:1\n%%score 1\n"
+        completion = "[r:0/1][V:1] C D E F |\n[r:1/0][V:1] G A B c |\n"
+        generated_patches = _generated_patches_from_text(completion)
+        target = StructuralTarget(expected_bars=2, expected_structure_bars=2)
+        reward_config = GoldbergRewardConfig(parse_validation_mode="abc-tokenize")
+        common_kwargs = {
+            "prompt_text": prompt,
+            "generated_patches": generated_patches,
+            "target": target,
+            "reward_config": reward_config,
+            "candidate_name": "terminal_reward_test",
+            "similarity_weights": SimilarityRewardWeights(),
+            "aria_similarity_ref": None,
+            "similarity_chroma_bins": 8,
+            "similarity_band_ratio": 0.25,
+            "similarity_timeout_s": 5.0,
+            "max_similarity_reward": 2.0,
+        }
+
+        single_pass = patch_rewards_single_pass(**common_kwargs)
+        terminal = patch_rewards_terminal(**common_kwargs)
+
+        self.assertGreater(len(generated_patches), 1)
+        self.assertAlmostEqual(terminal.final_score.total, single_pass.final_score.total)
+        self.assertAlmostEqual(sum(terminal.rewards), single_pass.final_score.total)
+        self.assertTrue(all(abs(value) < 1e-7 for value in terminal.rewards[:-1]))
+        self.assertAlmostEqual(terminal.rewards[-1], terminal.final_score.total)
+
+    def test_score_rollout_payloads_supports_terminal_patch_reward_attribution(self):
+        prompt = "X:1\nT:Terminal rollout score test\nM:4/4\nL:1/4\nK:C\nV:1\n%%score 1\n"
+        completion = "[r:0/1][V:1] C D E F |\n[r:1/0][V:1] G A B c |\n"
+        generated_patches = _generated_patches_from_text(completion)
+        target = StructuralTarget(expected_bars=2, expected_structure_bars=2)
+        prompt_target = PromptStructuralTarget(
+            target=target,
+            structure_path="<test>",
+            source_key="terminal_attribution_test",
+        )
+        payload = PPORolloutPayload(
+            trajectory_index=0,
+            rollout_seed=123,
+            full_text=prompt + completion,
+            generated_patches=generated_patches,
+            meta={"stop_reason": "target_stream_lines"},
+        )
+
+        scored = score_ppo_rollout_payloads(
+            prompt=prompt,
+            prompt_idx=0,
+            prompt_name="terminal_attribution_test",
+            prompt_target=prompt_target,
+            target=target,
+            target_stream_lines=2,
+            rollout_payloads=[payload],
+            reward_config=GoldbergRewardConfig(parse_validation_mode="abc-tokenize"),
+            similarity_weights=SimilarityRewardWeights(),
+            aria_similarity_ref=None,
+            args=SimpleNamespace(
+                similarity_chroma_bins=8,
+                similarity_band_ratio=0.25,
+                similarity_timeout_s=5.0,
+                max_similarity_reward=2.0,
+                patch_reward_attribution="terminal",
+                reward_workers=0,
+            ),
+            step_idx=0,
+            candidate_name_prefix="terminal_attribution",
+        )
+
+        trajectory_log = scored.trajectory_logs[0]
+        self.assertEqual(trajectory_log["reward_breakdown"]["patch_reward_mode"], "terminal_total_reward")
+        self.assertAlmostEqual(sum(trajectory_log["patch_rewards"]), trajectory_log["reward"])
+        self.assertTrue(all(abs(value) < 1e-7 for value in trajectory_log["patch_rewards"][:-1]))
+        self.assertAlmostEqual(trajectory_log["patch_rewards"][-1], trajectory_log["reward"])
 
 
 if __name__ == "__main__":

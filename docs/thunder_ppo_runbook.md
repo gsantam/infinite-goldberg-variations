@@ -148,6 +148,39 @@ PY
 
 Keep the `source` or `continuation` fields in each prompt row. PPO uses them to load the prompt-specific NotaGen structure target for `bar_count_reward` and rollout stopping length. `--target-structure-abc` is only a fallback for prompt rows that do not provide their own target path. This matters because the Goldberg NotaGen structure-line count is variation-dependent after preprocessing/augmentation.
 
+## PPO Objective
+
+The current PPO policy and value losses are token-level over generated character symbols. Prompt tokens are excluded. Rewards, advantages, value predictions, and value targets are computed per patch, then repeated over generated tokens for loss reduction.
+
+For generated token `j` in patch `i`, the trainer repeats the normalized patch advantage over that patch's generated tokens:
+
+```text
+log_ratio_ij = log pi_new(a_ij | s_ij) - log pi_old(a_ij | s_ij)
+ratio_ij = exp(log_ratio_ij)
+A_ij = normalized patch advantage A_i
+L_policy = -mean_over_generated_tokens(
+    min(ratio_ij * A_ij, clip(ratio_ij, 1-eps, 1+eps) * A_ij)
+)
+```
+
+The policy and value reductions are true generated-token means. Advantage normalization is token-weighted, so a patch with `token_count_i` generated characters contributes `token_count_i` terms to the batch mean/std. The value head still predicts one value per patch state, but the value MSE is equivalent to repeating that patch value/target over its generated tokens. Replay microbatching weights policy, value, entropy, and KL metrics by `microbatch_tokens / total_batch_tokens`.
+
+Logged granularity fields should read:
+
+```text
+policy_granularity: token
+policy_reduction: token_mean
+advantage_granularity: patch_repeated_per_token
+advantage_normalization_granularity: token
+value_function_granularity: patch
+value_target_granularity: patch
+value_loss_granularity: token
+value_prediction_granularity: patch
+value_reduction: token_mean
+```
+
+KL is diagnostic only right now. PPO clipping is active, but there is no dense KL reward or KL loss coefficient against the SFT/reference policy. Pre-step KL is normally near zero because old and new policy are identical before `optimizer.step()`; use `--post-step-kl-check` for the real post-update movement.
+
 ## Sync Minimal Project State
 
 Create remote directories:
@@ -250,6 +283,44 @@ Defaults are:
 ```
 
 `top_hist` and `top_contour_dtw` are logged/candidate metrics, not active in the scalar reward. `density_dtw` is diagnostic only.
+
+## Simple PPO Sanity-Test Rewards
+
+Use `--reward-mode note_count`, `--reward-mode note_fraction`, or `--reward-mode length` only to test whether PPO can optimize a deliberately simple signal. These modes bypass the Goldberg structural/similarity reward while leaving rollout, replay, GAE, clipping, and logging unchanged.
+
+The recommended first probe is a bounded count of one ABC note letter:
+
+```bash
+--reward-mode note_count \
+--simple-reward-note G \
+--simple-reward-max-count 64 \
+--simple-reward-scale 1.0 \
+--patch-reward-attribution single_pass
+```
+
+This rewards generated completions by `min(count(G/g), 64) / 64`. With `single_pass`, each patch gets the incremental clipped count it contributed; with `terminal`, the same final scalar is put on the last generated patch and propagated backward by returns/GAE.
+
+To avoid the obvious length hack in raw note count, use the fraction variant:
+
+```bash
+--reward-mode note_fraction \
+--simple-reward-note G \
+--simple-reward-scale 1.0 \
+--patch-reward-attribution terminal
+```
+
+This rewards generated completions by `count(G/g) / count(A-G/a-g)`, after stripping NotaGen control tags. It is terminal-only because the denominator is a global completion property.
+
+For a pure length probe:
+
+```bash
+--reward-mode length \
+--simple-reward-length-unit patches \
+--simple-reward-length-target 160 \
+--simple-reward-scale 1.0
+```
+
+Length is easier to game by running to the cap, so use it only as a basic update-pipeline check.
 
 ## Patch-Level PPO Reward Assignment
 
@@ -356,6 +427,21 @@ python scripts/train_notagen_ppo_value_head_offline.py \
 The main diagnostics are `explained_variance`, `correlation`, `mse`, `mae`, and `bias` on both train and holdout samples. A useful critic should improve explained variance/correlation, not just reduce train MSE.
 
 `scripts/train_notagen_ppo_value_head_offline.py` saves the best checkpoint by default: `--output-value-head` is selected by lowest holdout/eval MSE when an eval split is present, otherwise by lowest train MSE. The metrics JSON records this under `training.best_value_head` and `saved_value_head_selection`.
+
+Patch rewards can be assigned in two ways:
+
+- `--patch-reward-attribution single_pass` keeps the current dense attribution: line/harmony events are projected to patches and any residual remains terminal.
+- `--patch-reward-attribution terminal` puts every final reward component on the last generated patch. Use this to test a pure terminal structural reward propagated backward by returns/GAE. For the Monte Carlo-style version, pair it with `--gamma 1.0 --gae-lambda 1.0`.
+
+The structure-only rescorer supports the same option, so a matching critic can be trained from saved rollouts:
+
+```bash
+python scripts/rescore_structure_only_rollouts.py \
+  --input-json data/processed/notagen/remote_runs/<rollouts>/result.json \
+  --output-json data/processed/notagen/remote_runs/<rollouts>/result_structure_only_terminal.json \
+  --parse-reward-weight 1.0 \
+  --patch-reward-attribution terminal
+```
 
 The current critic artifact was trained from 200 raw E3 SFT rollout trajectories with full active rewards for 80 epochs:
 

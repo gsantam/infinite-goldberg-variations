@@ -162,21 +162,40 @@ def char_patch_logprob_sums(
     target_patches: list[list[int]],
     precision: str,
 ) -> torch.Tensor:
-    special_token_id = model.special_token_id
-    target_tensor = torch.tensor(
-        [_pad_generated_patch(patch, special_token_id) for patch in target_patches],
-        device=encoded_patches.device,
-        dtype=torch.long,
+    flat_logprobs, token_counts = char_patch_token_logprobs_and_counts(
+        model,
+        encoded_patches,
+        target_patches,
+        precision,
     )
-    token_counts = [sum(1 for token in patch if token != special_token_id) for patch in target_tensor.tolist()]
-    flat_logprobs = char_patch_logprobs(model, encoded_patches, target_tensor, precision)
-    per_patch = _split_flat_logprobs(flat_logprobs, token_counts)
+    per_patch = _split_flat_logprobs(flat_logprobs, [int(item) for item in token_counts.detach().cpu().tolist()])
     return torch.stack(
         [
             item.sum() if item.numel() > 0 else torch.zeros((), device=encoded_patches.device, dtype=flat_logprobs.dtype)
             for item in per_patch
         ]
     )
+
+
+def char_patch_token_logprobs_and_counts(
+    model: Any,
+    encoded_patches: torch.Tensor,
+    target_patches: list[list[int]],
+    precision: str,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    special_token_id = model.special_token_id
+    target_tensor = torch.tensor(
+        [_pad_generated_patch(patch, special_token_id) for patch in target_patches],
+        device=encoded_patches.device,
+        dtype=torch.long,
+    )
+    token_counts = torch.tensor(
+        [sum(1 for token in patch if token != special_token_id) for patch in target_tensor.tolist()],
+        device=encoded_patches.device,
+        dtype=torch.long,
+    )
+    flat_logprobs = char_patch_logprobs(model, encoded_patches, target_tensor, precision)
+    return flat_logprobs, token_counts
 
 
 def tail_encoded_targets(

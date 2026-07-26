@@ -34,7 +34,7 @@ from grpo.notagen_replay import (
     _encoded_last_patch,
     autocast_context,
     batched_tail_encoded_targets,
-    char_patch_logprob_sums,
+    char_patch_token_logprobs_and_counts,
     normalize_patch_for_context,
     split_tensor_by_counts,
     tail_encoded_targets,
@@ -88,6 +88,8 @@ from utils import NotaGenLMHeadModel, Patchilizer
 class PatchReplayChunk:
     logprobs: torch.Tensor
     values: torch.Tensor
+    token_logprobs: torch.Tensor
+    token_counts: torch.Tensor
 
 
 @dataclass
@@ -140,6 +142,13 @@ class PPORewardScoringOptions:
     similarity_band_ratio: float
     similarity_timeout_s: float
     max_similarity_reward: float
+    patch_reward_attribution: str = "single_pass"
+    reward_mode: str = "goldberg"
+    simple_reward_note: str = "G"
+    simple_reward_max_count: float = 64.0
+    simple_reward_length_unit: str = "patches"
+    simple_reward_length_target: float = 160.0
+    simple_reward_scale: float = 1.0
 
 
 @dataclass
@@ -171,6 +180,7 @@ class PPOReplayEpochResult:
     loss_payload: PPOLossPayload
     new_replays: list[PatchReplayChunk]
     new_logprobs: torch.Tensor
+    new_token_logprobs: torch.Tensor
     new_values: torch.Tensor
     grad_norm: float | None
     microbatch_count: int
@@ -458,9 +468,12 @@ def patch_logprob_sum_and_value(
 
     if not logprobs:
         raise RuntimeError("cannot score an empty generated patch")
+    token_logprobs = torch.stack(logprobs)
     return PatchReplayChunk(
-        logprobs=torch.stack(logprobs).sum().reshape(1),
+        logprobs=token_logprobs.sum().reshape(1),
         values=value_head(encoded_patch).reshape(1),
+        token_logprobs=token_logprobs,
+        token_counts=torch.tensor([token_logprobs.numel()], device=device, dtype=torch.long),
     )
 
 
@@ -484,9 +497,25 @@ def tail_patch_logprob_value_chunk(
         replay_context_patches=replay_context_patches,
         error_context="PPO replay",
     )
+    token_logprobs, token_counts = char_patch_token_logprobs_and_counts(
+        model,
+        encoded_targets,
+        target_patches,
+        precision,
+    )
+    per_patch_logprobs = split_tensor_by_counts(token_logprobs, [int(item) for item in token_counts.detach().cpu()])
     return PatchReplayChunk(
-        logprobs=char_patch_logprob_sums(model, encoded_targets, target_patches, precision),
+        logprobs=torch.stack(
+            [
+                item.sum()
+                if item.numel() > 0
+                else torch.zeros((), device=encoded_targets.device, dtype=token_logprobs.dtype)
+                for item in per_patch_logprobs
+            ]
+        ),
         values=value_head(encoded_targets),
+        token_logprobs=token_logprobs,
+        token_counts=token_counts,
     )
 
 
@@ -528,13 +557,40 @@ def batched_tail_patch_logprob_value_chunk(
         patch_counts.append(len(targets))
 
     encoded_target_tensor = torch.cat(encoded_targets, dim=0)
-    logprob_sums = char_patch_logprob_sums(model, encoded_target_tensor, target_patches, precision)
+    token_logprobs, token_counts = char_patch_token_logprobs_and_counts(
+        model,
+        encoded_target_tensor,
+        target_patches,
+        precision,
+    )
+    per_patch_logprobs = split_tensor_by_counts(token_logprobs, [int(item) for item in token_counts.detach().cpu()])
+    logprob_sums = torch.stack(
+        [
+            item.sum() if item.numel() > 0 else torch.zeros((), device=encoded_target_tensor.device, dtype=token_logprobs.dtype)
+            for item in per_patch_logprobs
+        ]
+    )
     values = value_head(encoded_target_tensor)
     split_logprobs = split_tensor_by_counts(logprob_sums, patch_counts)
     split_values = split_tensor_by_counts(values, patch_counts)
+    split_token_counts = split_tensor_by_counts(token_counts, patch_counts)
+    token_sample_counts = [int(counts.detach().sum().cpu()) for counts in split_token_counts]
+    split_token_logprobs = split_tensor_by_counts(token_logprobs, token_sample_counts)
     return {
-        sample_idx: PatchReplayChunk(logprobs=logprobs, values=sample_values)
-        for sample_idx, logprobs, sample_values in zip(sample_indices, split_logprobs, split_values, strict=True)
+        sample_idx: PatchReplayChunk(
+            logprobs=logprobs,
+            values=sample_values,
+            token_logprobs=sample_token_logprobs,
+            token_counts=sample_token_counts,
+        )
+        for sample_idx, logprobs, sample_values, sample_token_logprobs, sample_token_counts in zip(
+            sample_indices,
+            split_logprobs,
+            split_values,
+            split_token_logprobs,
+            split_token_counts,
+            strict=True,
+        )
     }
 
 
@@ -696,10 +752,14 @@ def trajectory_patch_logprobs_values(
         return PatchReplayChunk(
             logprobs=torch.empty(0, device=device),
             values=torch.empty(0, device=device),
+            token_logprobs=torch.empty(0, device=device),
+            token_counts=torch.empty(0, device=device, dtype=torch.long),
         )
     return PatchReplayChunk(
         logprobs=torch.cat([chunk.logprobs for chunk in chunks]),
         values=torch.cat([chunk.values for chunk in chunks]),
+        token_logprobs=torch.cat([chunk.token_logprobs for chunk in chunks]),
+        token_counts=torch.cat([chunk.token_counts for chunk in chunks]),
     )
 
 
@@ -770,6 +830,8 @@ def batched_trajectory_patch_logprobs_values(
                 PatchReplayChunk(
                     logprobs=torch.cat([chunk.logprobs for chunk in chunks]),
                     values=torch.cat([chunk.values for chunk in chunks]),
+                    token_logprobs=torch.cat([chunk.token_logprobs for chunk in chunks]),
+                    token_counts=torch.cat([chunk.token_counts for chunk in chunks]),
                 )
             )
         else:
@@ -777,6 +839,8 @@ def batched_trajectory_patch_logprobs_values(
                 PatchReplayChunk(
                     logprobs=torch.empty(0, device=device),
                     values=torch.empty(0, device=device),
+                    token_logprobs=torch.empty(0, device=device),
+                    token_counts=torch.empty(0, device=device, dtype=torch.long),
                 )
             )
     return result
@@ -1561,6 +1625,274 @@ def _terminal_patch_rewards(patch_count: int, value: float) -> list[float]:
     return rewards
 
 
+def _terminal_structural_component_rewards(
+    *,
+    final_score: RewardScore,
+    reward_config: GoldbergRewardConfig,
+    patch_count: int,
+) -> dict[str, list[float]]:
+    breakdown = final_score.breakdown
+    component_weights = {
+        "parse_reward": reward_config.parse_weight,
+        "countdown_reward": reward_config.countdown_weight,
+        "line_closure_reward": reward_config.line_closure_weight,
+        "bar_token_reward": reward_config.bar_token_weight,
+        "meter_alignment_reward": reward_config.meter_alignment_weight,
+        "meter_duration_closeness_reward": reward_config.meter_duration_closeness_weight,
+        "bar_meter_consistency_reward": reward_config.bar_meter_consistency_weight,
+        "bar_count_reward": reward_config.bar_count_weight,
+        "voice_declaration_reward": reward_config.voice_declaration_weight,
+        "score_voice_reward": reward_config.score_voice_weight,
+    }
+    component_rewards: dict[str, list[float]] = {}
+    for component_name, weight in component_weights.items():
+        value = float(weight) * float(breakdown.get(component_name, 0.0))
+        if value != 0.0:
+            component_rewards[component_name] = _terminal_patch_rewards(patch_count, value)
+
+    gate_adjustment = float(breakdown.get("structural_validity_gate_adjustment", 0.0))
+    if gate_adjustment != 0.0:
+        component_rewards["structural_validity_gate_adjustment"] = _terminal_patch_rewards(
+            patch_count,
+            gate_adjustment,
+        )
+    return component_rewards
+
+
+def _terminal_similarity_component_rewards(
+    *,
+    final_score: RewardScore,
+    similarity_weights: SimilarityRewardWeights,
+    patch_count: int,
+) -> dict[str, list[float]]:
+    component_rewards: dict[str, list[float]] = {}
+    if similarity_weights.aria_chroma != 0.0:
+        chroma_component = _effective_similarity_component(
+            similarity_weights.aria_chroma * float(final_score.breakdown.get("aria_chroma_harmonic_hist", 0.0)),
+            final_score,
+        )
+        if chroma_component != 0.0:
+            component_rewards["aria_chroma_harmonic_hist_effective"] = _terminal_patch_rewards(
+                patch_count,
+                chroma_component,
+            )
+
+    if similarity_weights.aria_harmony != 0.0:
+        weight_per_metric = similarity_weights.aria_harmony / 3.0
+        for metric_name in (
+            "aria_harmony_harmony_dtw",
+            "aria_harmony_root_dtw",
+            "aria_harmony_bass_dtw",
+        ):
+            component = _effective_similarity_component(
+                weight_per_metric * float(final_score.breakdown.get(metric_name, 0.0)),
+                final_score,
+            )
+            if component != 0.0:
+                component_rewards[f"{metric_name}_effective"] = _terminal_patch_rewards(patch_count, component)
+    return component_rewards
+
+
+def _patch_reward_trace_from_terminal_components(
+    *,
+    final_score: RewardScore,
+    component_rewards: dict[str, list[float]],
+    patch_count: int,
+) -> PatchRewardTrace:
+    rewards = [
+        float(sum(component_rewards[name][idx] for name in component_rewards))
+        for idx in range(patch_count)
+    ]
+    terminal_residual = final_score.total - sum(rewards)
+    if rewards and terminal_residual != 0.0:
+        component_rewards["other_residual"] = _terminal_patch_rewards(patch_count, terminal_residual)
+        rewards[-1] += terminal_residual
+    else:
+        component_rewards["other_residual"] = [0.0 for _idx in range(patch_count)]
+
+    return PatchRewardTrace(
+        rewards=rewards,
+        prefix_totals=prefix_totals(rewards),
+        final_score=final_score,
+        component_rewards=component_rewards,
+        component_prefix_totals=component_prefix_totals(component_rewards),
+    )
+
+
+def _strip_notagen_control_tags(text: str) -> str:
+    return re.sub(r"\[(?:r:[^\]]*|V:[^\]]*|I:[^\]]*)\]", "", text)
+
+
+def _count_abc_note_letter(text: str, note: str) -> int:
+    note_letter = note.strip()
+    if len(note_letter) != 1 or note_letter.upper() not in {"A", "B", "C", "D", "E", "F", "G"}:
+        raise ValueError(f"simple note-count reward note must be one ABC pitch letter A-G, got {note!r}")
+    stripped = _strip_notagen_control_tags(text)
+    target = note_letter.lower()
+    return sum(1 for char in stripped if char.lower() == target)
+
+
+def _count_abc_note_letters(text: str) -> int:
+    stripped = _strip_notagen_control_tags(text)
+    return sum(1 for char in stripped if char.lower() in {"a", "b", "c", "d", "e", "f", "g"})
+
+
+def _clipped_increment_rewards(values: list[float], *, target: float, scale: float) -> list[float]:
+    if target <= 0:
+        raise ValueError(f"simple reward target must be positive, got {target}")
+    rewards: list[float] = []
+    running = 0.0
+    previous_clipped = 0.0
+    for value in values:
+        running += max(0.0, float(value))
+        clipped = min(float(target), running)
+        rewards.append(float(scale) * (clipped - previous_clipped) / float(target))
+        previous_clipped = clipped
+    return rewards
+
+
+def patch_rewards_simple_test(
+    *,
+    generated_patches: list[list[int]],
+    scoring_options: PPORewardScoringOptions,
+) -> PatchRewardTrace:
+    patch_texts = _generated_patch_texts(generated_patches)
+    completion_text = "".join(patch_texts)
+    mode = scoring_options.reward_mode
+    component_name = f"simple_{mode}_reward"
+    component_rewards: dict[str, list[float]]
+
+    if mode == "note_count":
+        patch_values = [
+            float(_count_abc_note_letter(patch_text, scoring_options.simple_reward_note))
+            for patch_text in patch_texts
+        ]
+        metric_value = float(sum(patch_values))
+        metric_target = float(scoring_options.simple_reward_max_count)
+        detail_key = "simple_reward_note_count"
+        detail_value = metric_value
+    elif mode == "note_fraction":
+        if scoring_options.patch_reward_attribution != "terminal":
+            raise RuntimeError("note_fraction simple reward requires terminal patch_reward_attribution")
+        note_count = float(_count_abc_note_letter(completion_text, scoring_options.simple_reward_note))
+        total_note_count = float(_count_abc_note_letters(completion_text))
+        fraction = note_count / total_note_count if total_note_count > 0 else 0.0
+        total_reward = float(scoring_options.simple_reward_scale) * fraction
+        breakdown = {
+            "reward_mode": mode,
+            "parse_valid": True,
+            "parse_reward": 1.0,
+            "structural_total_reward": 0.0,
+            "raw_similarity_reward": 0.0,
+            "clipped_similarity_reward": 0.0,
+            "similarity_validity_gate": 1.0,
+            "effective_similarity_reward": 0.0,
+            "simple_reward_component": component_name,
+            "simple_reward_scale": float(scoring_options.simple_reward_scale),
+            "simple_reward_note": scoring_options.simple_reward_note,
+            "simple_reward_note_count": note_count,
+            "simple_reward_total_note_count": total_note_count,
+            "simple_reward_fraction": fraction,
+            "simple_reward_normalized": fraction,
+            "total_reward": total_reward,
+        }
+        final_score = RewardScore(total=total_reward, breakdown=breakdown)
+        component_rewards = {component_name: _terminal_patch_rewards(len(patch_texts), total_reward)}
+        return _patch_reward_trace_from_terminal_components(
+            final_score=final_score,
+            component_rewards=component_rewards,
+            patch_count=len(patch_texts),
+        )
+    elif mode == "length":
+        unit = scoring_options.simple_reward_length_unit
+        if unit == "patches":
+            patch_values = [1.0 for _patch_text in patch_texts]
+        elif unit == "chars":
+            patch_values = [float(len(patch_text)) for patch_text in patch_texts]
+        elif unit == "stream_lines":
+            cumulative_values: list[float] = []
+            prefix = ""
+            for patch_text in patch_texts:
+                prefix += patch_text
+                cumulative_values.append(float(count_stream_lines(prefix)))
+            previous = 0.0
+            patch_values = []
+            for cumulative in cumulative_values:
+                patch_values.append(max(0.0, cumulative - previous))
+                previous = cumulative
+        else:
+            raise RuntimeError(f"unsupported simple length unit: {unit!r}")
+        metric_value = float(sum(patch_values))
+        metric_target = float(scoring_options.simple_reward_length_target)
+        detail_key = f"simple_reward_length_{unit}"
+        detail_value = metric_value
+    else:
+        raise RuntimeError(f"unsupported simple reward mode: {mode!r}")
+
+    total_reward = float(scoring_options.simple_reward_scale) * min(metric_value, metric_target) / metric_target
+    breakdown = {
+        "reward_mode": mode,
+        "parse_valid": True,
+        "parse_reward": 1.0,
+        "structural_total_reward": 0.0,
+        "raw_similarity_reward": 0.0,
+        "clipped_similarity_reward": 0.0,
+        "similarity_validity_gate": 1.0,
+        "effective_similarity_reward": 0.0,
+        "simple_reward_component": component_name,
+        "simple_reward_scale": float(scoring_options.simple_reward_scale),
+        "simple_reward_target": metric_target,
+        "simple_reward_metric_value": metric_value,
+        "simple_reward_normalized": min(metric_value, metric_target) / metric_target,
+        detail_key: detail_value,
+        "total_reward": total_reward,
+    }
+    if mode == "note_count":
+        breakdown["simple_reward_note"] = scoring_options.simple_reward_note
+    if mode == "length":
+        breakdown["simple_reward_length_unit"] = scoring_options.simple_reward_length_unit
+
+    final_score = RewardScore(total=total_reward, breakdown=breakdown)
+    if not patch_texts:
+        return PatchRewardTrace(
+            rewards=[],
+            prefix_totals=[],
+            final_score=final_score,
+            component_rewards={},
+            component_prefix_totals={},
+        )
+
+    if scoring_options.patch_reward_attribution == "terminal":
+        component_rewards = {component_name: _terminal_patch_rewards(len(patch_texts), total_reward)}
+        return _patch_reward_trace_from_terminal_components(
+            final_score=final_score,
+            component_rewards=component_rewards,
+            patch_count=len(patch_texts),
+        )
+
+    component_rewards = {
+        component_name: _clipped_increment_rewards(
+            patch_values,
+            target=metric_target,
+            scale=float(scoring_options.simple_reward_scale),
+        )
+    }
+    rewards = component_rewards[component_name][:]
+    residual = total_reward - sum(rewards)
+    if residual != 0.0:
+        rewards[-1] += residual
+        component_rewards["other_residual"] = _terminal_patch_rewards(len(patch_texts), residual)
+    else:
+        component_rewards["other_residual"] = [0.0 for _idx in patch_texts]
+    return PatchRewardTrace(
+        rewards=rewards,
+        prefix_totals=prefix_totals(rewards),
+        final_score=final_score,
+        component_rewards=component_rewards,
+        component_prefix_totals=component_prefix_totals(component_rewards),
+    )
+
+
 def _countdown_local_rewards(stream_lines) -> np.ndarray:
     if not stream_lines:
         return np.zeros(0, dtype=np.float32)
@@ -1786,6 +2118,63 @@ def patch_rewards_single_pass(
     )
 
 
+def patch_rewards_terminal(
+    *,
+    prompt_text: str,
+    generated_patches: list[list[int]],
+    target,
+    reward_config: GoldbergRewardConfig,
+    candidate_name: str,
+    similarity_weights: SimilarityRewardWeights,
+    aria_similarity_ref: SimilarityReference | None,
+    similarity_chroma_bins: int,
+    similarity_band_ratio: float,
+    similarity_timeout_s: float,
+    max_similarity_reward: float,
+) -> PatchRewardTrace:
+    patch_texts = _generated_patch_texts(generated_patches)
+    completion_text = "".join(patch_texts)
+    final_score = score_total_reward(
+        prompt_text=prompt_text,
+        completion_text=completion_text,
+        target=target,
+        reward_config=reward_config,
+        candidate_name=f"{candidate_name}_terminal",
+        similarity_weights=similarity_weights,
+        aria_similarity_ref=aria_similarity_ref,
+        similarity_chroma_bins=similarity_chroma_bins,
+        similarity_band_ratio=similarity_band_ratio,
+        similarity_timeout_s=similarity_timeout_s,
+        max_similarity_reward=max_similarity_reward,
+    )
+    if not generated_patches:
+        return PatchRewardTrace(
+            rewards=[],
+            prefix_totals=[],
+            final_score=final_score,
+            component_rewards={},
+            component_prefix_totals={},
+        )
+
+    component_rewards = _terminal_structural_component_rewards(
+        final_score=final_score,
+        reward_config=reward_config,
+        patch_count=len(patch_texts),
+    )
+    component_rewards.update(
+        _terminal_similarity_component_rewards(
+            final_score=final_score,
+            similarity_weights=similarity_weights,
+            patch_count=len(patch_texts),
+        )
+    )
+    return _patch_reward_trace_from_terminal_components(
+        final_score=final_score,
+        component_rewards=component_rewards,
+        patch_count=len(patch_texts),
+    )
+
+
 def patch_rewards_from_prefix_deltas(**kwargs) -> PatchRewardTrace:
     return patch_rewards_single_pass(**kwargs)
 
@@ -1798,6 +2187,55 @@ def normalize_advantages(advantages: torch.Tensor, eps: float = 1e-8) -> tuple[t
     return (advantages - mean) / (std + eps), mean, std
 
 
+def normalize_advantages_token_weighted(
+    advantages: torch.Tensor,
+    token_counts: torch.Tensor,
+    eps: float = 1e-8,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    if advantages.shape != token_counts.shape:
+        raise RuntimeError(
+            "token-weighted advantage shape mismatch: "
+            f"advantages={tuple(advantages.shape)} token_counts={tuple(token_counts.shape)}"
+        )
+    weights = token_counts.detach().float().to(advantages.device)
+    total_weight = weights.sum()
+    if advantages.numel() <= 1 or total_weight <= 0:
+        return normalize_advantages(advantages, eps=eps)
+    mean = (advantages.float() * weights).sum() / total_weight
+    variance = (((advantages.float() - mean) ** 2) * weights).sum() / total_weight
+    std = torch.sqrt(variance)
+    if std <= eps:
+        return advantages.float() - mean, mean, std
+    return (advantages.float() - mean) / (std + eps), mean, std
+
+
+def weighted_mean(values: torch.Tensor, weights: torch.Tensor | None = None) -> torch.Tensor:
+    if weights is None:
+        return values.float().mean()
+    weights = weights.detach().float().to(values.device)
+    if weights.shape != values.shape:
+        raise RuntimeError(f"weighted mean shape mismatch: values={tuple(values.shape)} weights={tuple(weights.shape)}")
+    total_weight = weights.sum()
+    if total_weight <= 0:
+        raise RuntimeError("weighted mean requires positive total weight")
+    return (values.float() * weights).sum() / total_weight
+
+
+def weighted_std(values: torch.Tensor, weights: torch.Tensor | None = None) -> torch.Tensor:
+    if weights is None:
+        return values.float().std(unbiased=False)
+    mean = weighted_mean(values.float(), weights)
+    return torch.sqrt(weighted_mean((values.float() - mean) ** 2, weights))
+
+
+def token_patch_indices_from_counts(token_counts: torch.Tensor) -> torch.Tensor:
+    token_counts = token_counts.detach().long()
+    return torch.repeat_interleave(
+        torch.arange(token_counts.numel(), device=token_counts.device, dtype=torch.long),
+        token_counts,
+    )
+
+
 def value_mse_loss(
     values: torch.Tensor,
     value_targets: torch.Tensor,
@@ -1805,17 +2243,16 @@ def value_mse_loss(
     normalize_value_loss: bool = False,
     eps: float = 1e-6,
     scale_min: float = 1e-6,
+    weights: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    raw_value_loss = torch.nn.functional.mse_loss(values.float(), value_targets.detach().float())
+    squared_error = (values.float() - value_targets.detach().float()) ** 2
+    raw_value_loss = weighted_mean(squared_error, weights)
     if not normalize_value_loss:
         return raw_value_loss, raw_value_loss, torch.ones((), device=values.device, dtype=torch.float32)
 
-    target_std = value_targets.detach().float().std(unbiased=False)
+    target_std = weighted_std(value_targets.detach().float(), weights)
     scale = torch.clamp(target_std, min=max(float(eps), float(scale_min)))
-    scaled_loss = torch.nn.functional.mse_loss(
-        values.float() / scale,
-        value_targets.detach().float() / scale,
-    )
+    scaled_loss = weighted_mean(((values.float() / scale) - (value_targets.detach().float() / scale)) ** 2, weights)
     return scaled_loss, raw_value_loss, scale
 
 
@@ -1838,15 +2275,51 @@ def ppo_clipped_loss(
     advantages_mean: torch.Tensor | None = None,
     advantages_std: torch.Tensor | None = None,
     fixed_value_loss_scale: torch.Tensor | None = None,
+    policy_patch_indices: torch.Tensor | None = None,
+    value_token_counts: torch.Tensor | None = None,
 ) -> PPOLossPayload:
-    if not (new_logprobs.shape == old_logprobs.shape == values.shape == old_values.shape == advantages.shape == value_targets.shape):
+    if not (values.shape == old_values.shape == advantages.shape == value_targets.shape):
         raise RuntimeError(
             "PPO tensor shape mismatch: "
-            f"new={tuple(new_logprobs.shape)} old={tuple(old_logprobs.shape)} "
             f"values={tuple(values.shape)} old_values={tuple(old_values.shape)} "
             f"advantages={tuple(advantages.shape)} value_targets={tuple(value_targets.shape)}"
         )
+    if new_logprobs.shape != old_logprobs.shape:
+        raise RuntimeError(
+            "PPO policy logprob shape mismatch: "
+            f"new={tuple(new_logprobs.shape)} old={tuple(old_logprobs.shape)}"
+        )
+    if policy_patch_indices is None:
+        raise RuntimeError("PPO loss is token-level and requires policy_patch_indices")
     raw_advantages = advantages.detach().float()
+    policy_indices = None
+    policy_indices = policy_patch_indices.detach().long().to(raw_advantages.device)
+    if policy_indices.ndim != 1 or policy_indices.numel() != new_logprobs.numel():
+        raise RuntimeError(
+            "PPO token policy index shape mismatch: "
+            f"indices={tuple(policy_indices.shape)} logprobs={tuple(new_logprobs.shape)}"
+        )
+    if policy_indices.numel() == 0:
+        raise RuntimeError("PPO token-level policy loss needs at least one generated token")
+    if int(policy_indices.min().detach().cpu()) < 0 or int(policy_indices.max().detach().cpu()) >= raw_advantages.numel():
+        raise RuntimeError(
+            "PPO token policy index out of range: "
+            f"indices=({int(policy_indices.min().detach().cpu())}, {int(policy_indices.max().detach().cpu())}) "
+            f"patches={raw_advantages.numel()}"
+        )
+
+    if value_token_counts is None:
+        value_token_counts = torch.bincount(policy_indices, minlength=raw_advantages.numel()).to(raw_advantages.device)
+    elif value_token_counts is not None:
+        value_token_counts = value_token_counts.detach().long().to(raw_advantages.device)
+        if value_token_counts.shape != values.shape:
+            raise RuntimeError(
+                "PPO value token-count shape mismatch: "
+                f"token_counts={tuple(value_token_counts.shape)} values={tuple(values.shape)}"
+            )
+        if value_token_counts.sum() <= 0:
+            raise RuntimeError("PPO token-level value loss needs at least one generated token")
+
     if normalized_advantages is not None:
         if normalized_advantages.shape != raw_advantages.shape:
             raise RuntimeError(
@@ -1857,23 +2330,31 @@ def ppo_clipped_loss(
         adv_mean = advantages_mean.detach().float() if advantages_mean is not None else raw_advantages.mean()
         adv_std = advantages_std.detach().float() if advantages_std is not None else raw_advantages.std(unbiased=False)
     elif normalize_advantage:
-        advantages, adv_mean, adv_std = normalize_advantages(raw_advantages)
+        if policy_indices is None:
+            advantages, adv_mean, adv_std = normalize_advantages(raw_advantages)
+        else:
+            token_counts = torch.bincount(policy_indices, minlength=raw_advantages.numel()).to(raw_advantages.device)
+            advantages, adv_mean, adv_std = normalize_advantages_token_weighted(raw_advantages, token_counts)
     else:
         advantages = raw_advantages
         adv_mean = raw_advantages.mean()
         adv_std = raw_advantages.std(unbiased=False)
 
+    policy_advantages = advantages[policy_indices] if policy_indices is not None else advantages
     log_ratio = new_logprobs - old_logprobs.detach()
     ratio = torch.exp(log_ratio)
-    unclipped = ratio * advantages.detach()
-    clipped = torch.clamp(ratio, 1.0 - clip_range, 1.0 + clip_range) * advantages.detach()
+    unclipped = ratio * policy_advantages.detach()
+    clipped = torch.clamp(ratio, 1.0 - clip_range, 1.0 + clip_range) * policy_advantages.detach()
     policy_loss = -torch.minimum(unclipped, clipped).mean()
     if fixed_value_loss_scale is not None and normalize_value_loss:
         value_loss_scale = fixed_value_loss_scale.detach().float().to(values.device)
-        raw_value_loss = torch.nn.functional.mse_loss(values.float(), value_targets.detach().float())
-        value_loss = torch.nn.functional.mse_loss(
-            values.float() / value_loss_scale,
-            value_targets.detach().float() / value_loss_scale,
+        raw_value_loss = weighted_mean(
+            (values.float() - value_targets.detach().float()) ** 2,
+            value_token_counts,
+        )
+        value_loss = weighted_mean(
+            ((values.float() / value_loss_scale) - (value_targets.detach().float() / value_loss_scale)) ** 2,
+            value_token_counts,
         )
     else:
         value_loss, raw_value_loss, value_loss_scale = value_mse_loss(
@@ -1882,6 +2363,7 @@ def ppo_clipped_loss(
             normalize_value_loss=normalize_value_loss,
             eps=value_loss_eps,
             scale_min=value_loss_scale_min,
+            weights=value_token_counts,
         )
     entropy_loss = -entropy_bonus_coef * (-new_logprobs).mean()
     loss = policy_loss + value_loss_coef * value_loss + entropy_loss
@@ -1901,17 +2383,29 @@ def ppo_clipped_loss(
     )
 
 
-def _ppo_loss_constants(batch_tensors: PPOBatchTensors, args) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+def _ppo_loss_constants(
+    batch_tensors: PPOBatchTensors,
+    args,
+    token_counts: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     raw_advantages = batch_tensors.advantages.detach().float()
     if args.no_advantage_normalization:
         normalized_advantages = raw_advantages
         advantages_mean = raw_advantages.mean()
         advantages_std = raw_advantages.std(unbiased=False)
+    elif token_counts is not None:
+        normalized_advantages, advantages_mean, advantages_std = normalize_advantages_token_weighted(
+            raw_advantages,
+            token_counts.detach().long().to(raw_advantages.device),
+        )
     else:
         normalized_advantages, advantages_mean, advantages_std = normalize_advantages(raw_advantages)
 
     if args.normalize_value_loss:
-        target_std = batch_tensors.value_targets.detach().float().std(unbiased=False)
+        target_std = weighted_std(
+            batch_tensors.value_targets.detach().float(),
+            None if token_counts is None else token_counts.detach().long().to(batch_tensors.value_targets.device),
+        )
         value_loss_scale = torch.clamp(
             target_std,
             min=max(float(args.value_loss_eps), float(args.value_loss_scale_min)),
@@ -1921,26 +2415,33 @@ def _ppo_loss_constants(batch_tensors: PPOBatchTensors, args) -> tuple[torch.Ten
     return normalized_advantages, advantages_mean, advantages_std, value_loss_scale
 
 
-def _loss_payload_weighted_sum(payloads: list[tuple[PPOLossPayload, float]]) -> PPOLossPayload:
+def _loss_payload_weighted_sum(
+    payloads: list[tuple[PPOLossPayload, float]],
+    *,
+    value_loss_coef: float,
+) -> PPOLossPayload:
     if not payloads:
         raise RuntimeError("cannot aggregate empty PPO loss payloads")
 
     def weighted_tensor(name: str) -> torch.Tensor:
         total = None
         for payload, weight in payloads:
-            item = getattr(payload, name).detach().float() * float(weight)
-            total = item if total is None else total + item
+            weighted_item = getattr(payload, name).detach().float() * float(weight)
+            total = weighted_item if total is None else total + weighted_item
         if total is None:
             raise RuntimeError(f"missing PPO loss metric {name}")
         return total
 
+    policy_loss = weighted_tensor("policy_loss")
+    value_loss = weighted_tensor("value_loss")
+    entropy_loss = weighted_tensor("entropy_loss")
     return PPOLossPayload(
-        loss=weighted_tensor("loss"),
-        policy_loss=weighted_tensor("policy_loss"),
-        value_loss=weighted_tensor("value_loss"),
+        loss=policy_loss + float(value_loss_coef) * value_loss + entropy_loss,
+        policy_loss=policy_loss,
+        value_loss=value_loss,
         raw_value_loss=weighted_tensor("raw_value_loss"),
         value_loss_scale=weighted_tensor("value_loss_scale"),
-        entropy_loss=weighted_tensor("entropy_loss"),
+        entropy_loss=entropy_loss,
         approx_kl=weighted_tensor("approx_kl"),
         clip_fraction=weighted_tensor("clip_fraction"),
         advantages_mean=weighted_tensor("advantages_mean"),
@@ -2042,6 +2543,8 @@ def run_ppo_replay_epoch_microbatched(
     rollout_payloads: list[PPORolloutPayload],
     trajectory_lengths: list[int],
     old_logprobs: torch.Tensor,
+    old_token_logprobs: torch.Tensor,
+    old_token_counts: torch.Tensor,
     old_values: torch.Tensor,
     batch_tensors: PPOBatchTensors,
     normalized_advantages: torch.Tensor,
@@ -2060,15 +2563,28 @@ def run_ppo_replay_epoch_microbatched(
         raise RuntimeError("PPO microbatch replay needs at least one scored patch")
     for name, tensor in (
         ("old_logprobs", old_logprobs),
+        ("old_token_counts", old_token_counts),
         ("old_values", old_values),
         ("advantages", normalized_advantages),
         ("value_targets", batch_tensors.value_targets),
     ):
         if tensor.numel() != total_patches:
             raise RuntimeError(f"PPO microbatch tensor length mismatch for {name}: {tensor.numel()} != {total_patches}")
+    offsets = _trajectory_patch_offsets(trajectory_lengths)
+    trajectory_token_lengths = [
+        int(old_token_counts[start:end].detach().sum().cpu())
+        for start, end in offsets
+    ]
+    total_tokens = int(sum(trajectory_token_lengths))
+    if total_tokens <= 0:
+        raise RuntimeError("PPO microbatch replay needs at least one generated token")
+    if old_token_logprobs.numel() != total_tokens:
+        raise RuntimeError(
+            f"PPO microbatch tensor length mismatch for old_token_logprobs: {old_token_logprobs.numel()} != {total_tokens}"
+        )
 
     microbatch_size = _effective_microbatch_size(args.ppo_replay_microbatch_size, len(rollout_payloads))
-    offsets = _trajectory_patch_offsets(trajectory_lengths)
+    token_offsets = _trajectory_patch_offsets(trajectory_token_lengths)
     optimizer.zero_grad(set_to_none=True)
     payloads_for_metrics: list[tuple[PPOLossPayload, float]] = []
     new_replays: list[PatchReplayChunk] = []
@@ -2078,7 +2594,10 @@ def run_ppo_replay_epoch_microbatched(
         trajectory_end = min(len(rollout_payloads), trajectory_start + microbatch_size)
         patch_start = offsets[trajectory_start][0]
         patch_end = offsets[trajectory_end - 1][1]
+        token_start = token_offsets[trajectory_start][0]
+        token_end = token_offsets[trajectory_end - 1][1]
         expected_patches = patch_end - patch_start
+        expected_tokens = token_end - token_start
         trajectory_batch = rollout_payloads[trajectory_start:trajectory_end]
         chunk_replays = batched_trajectory_patch_logprobs_values(
             policy_model,
@@ -2091,6 +2610,8 @@ def run_ppo_replay_epoch_microbatched(
             replay_batch_size=0,
         )
         new_logprobs = torch.cat([replay.logprobs.float() for replay in chunk_replays])
+        new_token_logprobs = torch.cat([replay.token_logprobs.float() for replay in chunk_replays])
+        new_token_counts = torch.cat([replay.token_counts.long() for replay in chunk_replays])
         new_values = torch.cat([replay.values.float() for replay in chunk_replays])
         if new_logprobs.numel() != expected_patches:
             raise RuntimeError(
@@ -2098,10 +2619,21 @@ def run_ppo_replay_epoch_microbatched(
                 f"trajectories={trajectory_start}:{trajectory_end} "
                 f"new={new_logprobs.numel()} expected={expected_patches}"
             )
+        if new_token_logprobs.numel() != expected_tokens:
+            raise RuntimeError(
+                "PPO replay microbatch token count mismatch: "
+                f"trajectories={trajectory_start}:{trajectory_end} "
+                f"new={new_token_logprobs.numel()} expected={expected_tokens}"
+            )
+        if not torch.equal(new_token_counts.detach().cpu(), old_token_counts[patch_start:patch_end].detach().cpu()):
+            raise RuntimeError(
+                "PPO replay microbatch token-count mismatch for scored patches: "
+                f"trajectories={trajectory_start}:{trajectory_end}"
+            )
 
         loss_payload = ppo_clipped_loss(
-            new_logprobs=new_logprobs,
-            old_logprobs=old_logprobs[patch_start:patch_end],
+            new_logprobs=new_token_logprobs,
+            old_logprobs=old_token_logprobs[token_start:token_end],
             values=new_values,
             old_values=old_values[patch_start:patch_end],
             advantages=batch_tensors.advantages[patch_start:patch_end],
@@ -2117,20 +2649,29 @@ def run_ppo_replay_epoch_microbatched(
             advantages_mean=advantages_mean,
             advantages_std=advantages_std,
             fixed_value_loss_scale=value_loss_scale,
+            policy_patch_indices=token_patch_indices_from_counts(new_token_counts),
+            value_token_counts=new_token_counts,
         )
-        weight = expected_patches / total_patches
-        payloads_for_metrics.append((loss_payload, weight))
+        token_weight = expected_tokens / total_tokens
+        payloads_for_metrics.append((loss_payload, token_weight))
         if not args.no_step:
-            (loss_payload.loss * weight).backward()
+            weighted_loss = (
+                loss_payload.policy_loss * token_weight
+                + float(args.value_loss_coef) * loss_payload.value_loss * token_weight
+                + loss_payload.entropy_loss * token_weight
+            )
+            weighted_loss.backward()
 
         new_replays.extend(
             PatchReplayChunk(
                 logprobs=replay.logprobs.detach().float(),
                 values=replay.values.detach().float(),
+                token_logprobs=replay.token_logprobs.detach().float(),
+                token_counts=replay.token_counts.detach().long(),
             )
             for replay in chunk_replays
         )
-        del chunk_replays, new_logprobs, new_values, loss_payload
+        del chunk_replays, new_logprobs, new_token_logprobs, new_token_counts, new_values, loss_payload
         if next(policy_model.parameters()).device.type == "cuda":
             torch.cuda.empty_cache()
         microbatch_count += 1
@@ -2150,11 +2691,13 @@ def run_ppo_replay_epoch_microbatched(
         grad_norm = None
 
     new_logprobs = torch.cat([replay.logprobs for replay in new_replays])
+    new_token_logprobs = torch.cat([replay.token_logprobs for replay in new_replays])
     new_values = torch.cat([replay.values for replay in new_replays])
     return PPOReplayEpochResult(
-        loss_payload=_loss_payload_weighted_sum(payloads_for_metrics),
+        loss_payload=_loss_payload_weighted_sum(payloads_for_metrics, value_loss_coef=args.value_loss_coef),
         new_replays=new_replays,
         new_logprobs=new_logprobs,
+        new_token_logprobs=new_token_logprobs,
         new_values=new_values,
         grad_norm=grad_norm,
         microbatch_count=microbatch_count,
@@ -2162,16 +2705,19 @@ def run_ppo_replay_epoch_microbatched(
     )
 
 
-def post_step_replay_logprobs_microbatched(
+def post_step_replay_microbatched(
     *,
     policy_model: NotaGenLMHeadModel,
     value_head: PatchValueHead,
     flat_prompt_ids: list[int],
     rollout_payloads: list[PPORolloutPayload],
     args,
-) -> torch.Tensor:
+) -> PatchReplayChunk:
     microbatch_size = _effective_microbatch_size(args.ppo_replay_microbatch_size, len(rollout_payloads))
     logprobs: list[torch.Tensor] = []
+    values: list[torch.Tensor] = []
+    token_logprobs: list[torch.Tensor] = []
+    token_counts: list[torch.Tensor] = []
     with torch.no_grad():
         for trajectory_start in range(0, len(rollout_payloads), microbatch_size):
             trajectory_end = min(len(rollout_payloads), trajectory_start + microbatch_size)
@@ -2188,11 +2734,42 @@ def post_step_replay_logprobs_microbatched(
             )
             for replay in replay_batch:
                 logprobs.append(replay.logprobs.detach().float())
+                values.append(replay.values.detach().float())
+                token_logprobs.append(replay.token_logprobs.detach().float())
+                token_counts.append(replay.token_counts.detach().long())
             if next(policy_model.parameters()).device.type == "cuda":
                 torch.cuda.empty_cache()
+    device = next(policy_model.parameters()).device
     if not logprobs:
-        return torch.empty(0, device=next(policy_model.parameters()).device)
-    return torch.cat(logprobs)
+        return PatchReplayChunk(
+            logprobs=torch.empty(0, device=device),
+            values=torch.empty(0, device=device),
+            token_logprobs=torch.empty(0, device=device),
+            token_counts=torch.empty(0, device=device, dtype=torch.long),
+        )
+    return PatchReplayChunk(
+        logprobs=torch.cat(logprobs),
+        values=torch.cat(values),
+        token_logprobs=torch.cat(token_logprobs),
+        token_counts=torch.cat(token_counts),
+    )
+
+
+def post_step_replay_logprobs_microbatched(
+    *,
+    policy_model: NotaGenLMHeadModel,
+    value_head: PatchValueHead,
+    flat_prompt_ids: list[int],
+    rollout_payloads: list[PPORolloutPayload],
+    args,
+) -> torch.Tensor:
+    return post_step_replay_microbatched(
+        policy_model=policy_model,
+        value_head=value_head,
+        flat_prompt_ids=flat_prompt_ids,
+        rollout_payloads=rollout_payloads,
+        args=args,
+    ).logprobs
 
 
 def sample_ppo_rollouts(
@@ -2589,19 +3166,44 @@ def _score_ppo_rollout_payload(
         }
         return reward_trace, trajectory_log
 
-    reward_trace = patch_rewards_from_prefix_deltas(
-        prompt_text=prompt,
-        generated_patches=payload.generated_patches,
-        target=target,
-        reward_config=reward_config,
-        candidate_name=f"{candidate_name_prefix}_sample{payload.trajectory_index}",
-        similarity_weights=similarity_weights,
-        aria_similarity_ref=aria_similarity_ref,
-        similarity_chroma_bins=scoring_options.similarity_chroma_bins,
-        similarity_band_ratio=scoring_options.similarity_band_ratio,
-        similarity_timeout_s=scoring_options.similarity_timeout_s,
-        max_similarity_reward=scoring_options.max_similarity_reward,
-    )
+    if scoring_options.reward_mode != "goldberg":
+        reward_trace = patch_rewards_simple_test(
+            generated_patches=payload.generated_patches,
+            scoring_options=scoring_options,
+        )
+        patch_reward_mode = f"simple_{scoring_options.reward_mode}_{scoring_options.patch_reward_attribution}"
+    elif scoring_options.patch_reward_attribution == "single_pass":
+        reward_trace = patch_rewards_from_prefix_deltas(
+            prompt_text=prompt,
+            generated_patches=payload.generated_patches,
+            target=target,
+            reward_config=reward_config,
+            candidate_name=f"{candidate_name_prefix}_sample{payload.trajectory_index}",
+            similarity_weights=similarity_weights,
+            aria_similarity_ref=aria_similarity_ref,
+            similarity_chroma_bins=scoring_options.similarity_chroma_bins,
+            similarity_band_ratio=scoring_options.similarity_band_ratio,
+            similarity_timeout_s=scoring_options.similarity_timeout_s,
+            max_similarity_reward=scoring_options.max_similarity_reward,
+        )
+        patch_reward_mode = "single_pass_events_plus_terminal_residual"
+    elif scoring_options.patch_reward_attribution == "terminal":
+        reward_trace = patch_rewards_terminal(
+            prompt_text=prompt,
+            generated_patches=payload.generated_patches,
+            target=target,
+            reward_config=reward_config,
+            candidate_name=f"{candidate_name_prefix}_sample{payload.trajectory_index}",
+            similarity_weights=similarity_weights,
+            aria_similarity_ref=aria_similarity_ref,
+            similarity_chroma_bins=scoring_options.similarity_chroma_bins,
+            similarity_band_ratio=scoring_options.similarity_band_ratio,
+            similarity_timeout_s=scoring_options.similarity_timeout_s,
+            max_similarity_reward=scoring_options.max_similarity_reward,
+        )
+        patch_reward_mode = "terminal_total_reward"
+    else:
+        raise RuntimeError(f"unsupported patch reward attribution: {scoring_options.patch_reward_attribution!r}")
     total_reward = reward_trace.final_score.total
     reward_breakdown = reward_trace.final_score.breakdown
     completion_text = "".join(patchilizer.decode(payload.generated_patches))
@@ -2627,7 +3229,7 @@ def _score_ppo_rollout_payload(
     reward_breakdown["rollout_prefix_stream_lines"] = prompt_stream_lines
     reward_breakdown.update(payload.meta)
     reward_breakdown.update(length_diagnostics)
-    reward_breakdown["patch_reward_mode"] = "single_pass_events_plus_terminal_residual"
+    reward_breakdown["patch_reward_mode"] = patch_reward_mode
     reward_breakdown["patch_reward_count"] = len(reward_trace.rewards)
     reward_breakdown["patch_reward_sum"] = float(sum(reward_trace.rewards))
     patch_reward_component_sums = component_reward_sums(reward_trace.component_rewards)
@@ -2710,6 +3312,13 @@ def score_ppo_rollout_payloads(
         similarity_band_ratio=float(args.similarity_band_ratio),
         similarity_timeout_s=float(args.similarity_timeout_s),
         max_similarity_reward=float(args.max_similarity_reward),
+        patch_reward_attribution=str(getattr(args, "patch_reward_attribution", "single_pass")),
+        reward_mode=str(getattr(args, "reward_mode", "goldberg")),
+        simple_reward_note=str(getattr(args, "simple_reward_note", "G")),
+        simple_reward_max_count=float(getattr(args, "simple_reward_max_count", 64.0)),
+        simple_reward_length_unit=str(getattr(args, "simple_reward_length_unit", "patches")),
+        simple_reward_length_target=float(getattr(args, "simple_reward_length_target", 160.0)),
+        simple_reward_scale=float(getattr(args, "simple_reward_scale", 1.0)),
     )
     context = {
         "prompt": prompt,
@@ -2882,6 +3491,7 @@ def run_fixed_eval_batch(
         "rollout_sampling": rollout_sampling,
         "fixed_eval_seed_offset": args.fixed_eval_seed_offset,
         "fixed_eval_seed_step": args.fixed_eval_seed_step,
+        "patch_reward_attribution": args.patch_reward_attribution,
         "reward_mean": scored.reward_summary["reward_mean"],
         "reward_std": scored.reward_summary["reward_std"],
         "reward_min": scored.reward_summary["reward_min"],
@@ -3048,10 +3658,13 @@ def run_ppo_smoke(
         disable_dropout_modules(behavior_policy_model) if behavior_policy_model is not None else []
     )
 
-    similarity_weights = SimilarityRewardWeights(
-        aria_chroma=args.aria_chroma_reward_weight,
-        aria_harmony=args.aria_harmony_reward_weight,
-    )
+    if args.reward_mode == "goldberg":
+        similarity_weights = SimilarityRewardWeights(
+            aria_chroma=args.aria_chroma_reward_weight,
+            aria_harmony=args.aria_harmony_reward_weight,
+        )
+    else:
+        similarity_weights = SimilarityRewardWeights()
     aria_similarity_ref: SimilarityReference | None = None
     if similarity_weights.enabled:
         aria_similarity_ref = load_similarity_reference(
@@ -3066,6 +3679,26 @@ def run_ppo_smoke(
         raise ValueError(f"prompt target count mismatch: prompts={len(prompts)} targets={len(prompt_targets)}")
     if not 0.0 <= args.gae_lambda <= 1.0:
         raise ValueError(f"gae_lambda must be in [0, 1], got {args.gae_lambda}")
+    if args.patch_reward_attribution not in {"single_pass", "terminal"}:
+        raise ValueError(
+            "patch_reward_attribution must be one of {'single_pass', 'terminal'}, "
+            f"got {args.patch_reward_attribution!r}"
+        )
+    if args.reward_mode not in {"goldberg", "note_count", "note_fraction", "length"}:
+        raise ValueError(f"unsupported reward_mode: {args.reward_mode!r}")
+    if args.reward_mode in {"note_count", "note_fraction"}:
+        note = str(args.simple_reward_note).strip()
+        if len(note) != 1 or note.upper() not in {"A", "B", "C", "D", "E", "F", "G"}:
+            raise ValueError(f"simple_reward_note must be one ABC pitch letter A-G, got {args.simple_reward_note!r}")
+    if args.reward_mode == "note_count":
+        if args.simple_reward_max_count <= 0:
+            raise ValueError(f"simple_reward_max_count must be positive, got {args.simple_reward_max_count}")
+    if args.reward_mode == "note_fraction" and args.patch_reward_attribution != "terminal":
+        raise ValueError("reward_mode note_fraction requires --patch-reward-attribution terminal")
+    if args.reward_mode == "length" and args.simple_reward_length_target <= 0:
+        raise ValueError(f"simple_reward_length_target must be positive, got {args.simple_reward_length_target}")
+    if args.simple_reward_scale < 0:
+        raise ValueError(f"simple_reward_scale must be non-negative, got {args.simple_reward_scale}")
     if args.rollout_retries <= 0:
         raise ValueError(f"rollout_retries must be positive, got {args.rollout_retries}")
     if args.rollout_spares_percent < 0:
@@ -3275,14 +3908,23 @@ def run_ppo_smoke(
                             f"trajectory={payload.trajectory_index} rewards={len(reward_trace.rewards)} "
                             f"logprobs={old_replay.logprobs.numel()}"
                         )
+                    if old_replay.token_counts.numel() != old_replay.logprobs.numel():
+                        raise RuntimeError(
+                            "PPO replay token-count/logprob count mismatch: "
+                            f"trajectory={payload.trajectory_index} token_counts={old_replay.token_counts.numel()} "
+                            f"logprobs={old_replay.logprobs.numel()}"
+                        )
                     old_replays.append(old_replay)
                     reward_tensors.append(torch.tensor(reward_trace.rewards, device=device, dtype=torch.float32))
                 if device.type == "cuda":
                     torch.cuda.empty_cache()
         timings["old_replay_s"] = time.perf_counter() - old_replay_start
         old_logprobs = torch.cat([replay.logprobs.detach().float() for replay in old_replays])
+        old_token_logprobs = torch.cat([replay.token_logprobs.detach().float() for replay in old_replays])
+        old_token_counts = torch.cat([replay.token_counts.detach().long() for replay in old_replays])
         initial_old_value_tensors = [replay.values.detach().float() for replay in old_replays]
         trajectory_lengths = [int(replay.logprobs.numel()) for replay in old_replays]
+        trajectory_token_lengths = [int(replay.token_logprobs.numel()) for replay in old_replays]
         return_tensors = [discounted_returns(rewards, args.gamma).detach() for rewards in reward_tensors]
         returns_for_metrics = torch.cat([item.detach().float() for item in return_tensors])
         initial_value_return_metrics = value_prediction_metrics(
@@ -3345,12 +3987,14 @@ def run_ppo_smoke(
         new_replay_start = time.perf_counter()
         ppo_epoch_logs: list[dict] = []
         new_logprobs = torch.empty(0, device=device)
+        new_token_logprobs = torch.empty(0, device=device)
         new_values = torch.empty(0, device=device)
         loss_payload: PPOLossPayload | None = None
         new_replays: list[PatchReplayChunk] = []
         normalized_advantages, advantages_mean, advantages_std, value_loss_scale = _ppo_loss_constants(
             batch_tensors,
             args,
+            token_counts=old_token_counts,
         )
         advantage_summary = advantage_distribution_summary(
             batch_tensors.advantages,
@@ -3367,6 +4011,8 @@ def run_ppo_smoke(
                 rollout_payloads=update_rollout_payloads,
                 trajectory_lengths=trajectory_lengths,
                 old_logprobs=old_logprobs,
+                old_token_logprobs=old_token_logprobs,
+                old_token_counts=old_token_counts,
                 old_values=old_values,
                 batch_tensors=batch_tensors,
                 normalized_advantages=normalized_advantages,
@@ -3378,13 +4024,14 @@ def run_ppo_smoke(
             loss_payload = epoch_result.loss_payload
             new_replays = epoch_result.new_replays
             new_logprobs = epoch_result.new_logprobs
+            new_token_logprobs = epoch_result.new_token_logprobs
             new_values = epoch_result.new_values
             value_return_metrics = value_prediction_metrics(new_values, batch_tensors.returns)
             value_target_metrics = value_prediction_metrics(new_values, batch_tensors.value_targets)
             post_epoch_logprob_advantage_diag = None
             if not args.no_step and args.post_epoch_kl_check:
                 post_epoch_start = time.perf_counter()
-                post_epoch_logprobs = post_step_replay_logprobs_microbatched(
+                post_epoch_replay = post_step_replay_microbatched(
                     policy_model=policy_model,
                     value_head=value_head,
                     flat_prompt_ids=prompt_flat,
@@ -3393,11 +4040,22 @@ def run_ppo_smoke(
                 )
                 post_epoch_logprob_advantage_diag = compact_logprob_advantage_diagnostics(
                     old_logprobs=old_logprobs,
-                    current_logprobs=post_epoch_logprobs,
+                    current_logprobs=post_epoch_replay.logprobs,
                     raw_advantages=batch_tensors.advantages,
                     normalized_advantages=normalized_advantages,
                     patch_rewards=batch_tensors.patch_rewards,
                     clip_range=args.ppo_clip_range,
+                )
+                post_epoch_token_log_ratio = post_epoch_replay.token_logprobs - old_token_logprobs
+                post_epoch_token_ratio = torch.exp(post_epoch_token_log_ratio)
+                post_epoch_logprob_advantage_diag["token_approx_kl"] = float(
+                    (((old_token_logprobs - post_epoch_replay.token_logprobs) ** 2).mean() * 0.5).detach().cpu()
+                )
+                post_epoch_logprob_advantage_diag["token_clip_fraction"] = float(
+                    ((post_epoch_token_ratio - 1.0).abs() > args.ppo_clip_range).float().mean().detach().cpu()
+                )
+                post_epoch_logprob_advantage_diag["token_log_ratio_mean"] = float(
+                    post_epoch_token_log_ratio.mean().detach().cpu()
                 )
                 post_epoch_logprob_advantage_diag["duration_s"] = time.perf_counter() - post_epoch_start
             ppo_epoch_logs.append(
@@ -3411,6 +4069,20 @@ def run_ppo_smoke(
                     "entropy_loss": float(loss_payload.entropy_loss.detach().cpu()),
                     "approx_kl": float(loss_payload.approx_kl.detach().cpu()),
                     "clip_fraction": float(loss_payload.clip_fraction.detach().cpu()),
+                    "policy_granularity": "token",
+                    "policy_reduction": "token_mean",
+                    "advantage_granularity": "patch_repeated_per_token",
+                    "advantage_normalization_granularity": (
+                        "none" if args.no_advantage_normalization else "token"
+                    ),
+                    "value_function_granularity": "patch",
+                    "value_target_granularity": "patch",
+                    "value_loss_granularity": "token",
+                    "value_prediction_granularity": "patch",
+                    "value_reduction": "token_mean",
+                    "policy_token_count": int(new_token_logprobs.numel()),
+                    "value_token_count": int(new_token_logprobs.numel()),
+                    "value_prediction_patch_count": int(new_logprobs.numel()),
                     "value_return_metrics": value_return_metrics,
                     "value_target_metrics": value_target_metrics,
                     "grad_norm": epoch_result.grad_norm,
@@ -3457,23 +4129,29 @@ def run_ppo_smoke(
 
         if not args.no_step and args.post_step_kl_check:
             post_step_kl_start = time.perf_counter()
-            post_step_logprobs = post_step_replay_logprobs_microbatched(
+            post_step_replay = post_step_replay_microbatched(
                 policy_model=policy_model,
                 value_head=value_head,
                 flat_prompt_ids=prompt_flat,
                 rollout_payloads=update_rollout_payloads,
                 args=args,
             )
+            post_step_logprobs = post_step_replay.logprobs
+            post_step_token_logprobs = post_step_replay.token_logprobs
             post_step_log_ratio = post_step_logprobs - old_logprobs
             post_step_ratio = torch.exp(post_step_log_ratio)
-            post_step_approx_kl = ((old_logprobs - post_step_logprobs) ** 2).mean() * 0.5
-            post_step_clip_fraction = ((post_step_ratio - 1.0).abs() > args.ppo_clip_range).float().mean()
+            post_step_token_log_ratio = post_step_token_logprobs - old_token_logprobs
+            post_step_token_ratio = torch.exp(post_step_token_log_ratio)
+            post_step_approx_kl = ((old_token_logprobs - post_step_token_logprobs) ** 2).mean() * 0.5
+            post_step_clip_fraction = ((post_step_token_ratio - 1.0).abs() > args.ppo_clip_range).float().mean()
             timings["post_step_kl_check_s"] = time.perf_counter() - post_step_kl_start
         else:
             post_step_approx_kl = None
             post_step_clip_fraction = None
             post_step_logprobs = None
             post_step_log_ratio = None
+            post_step_token_logprobs = None
+            post_step_token_log_ratio = None
         timings["new_replay_backward_s"] = time.perf_counter() - new_replay_start
 
         checkpoint_payload = None
@@ -3548,6 +4226,17 @@ def run_ppo_smoke(
             "ppo_update_trajectories": len(update_rollout_payloads),
             "zero_contribution_trajectories": zero_contribution_count,
             "failed_rollout_count": failed_rollout_count,
+            "policy_granularity": "token",
+            "policy_reduction": "token_mean",
+            "advantage_granularity": "patch_repeated_per_token",
+            "advantage_normalization_granularity": (
+                "none" if args.no_advantage_normalization else "token"
+            ),
+            "value_function_granularity": "patch",
+            "value_target_granularity": "patch",
+            "value_loss_granularity": "token",
+            "value_prediction_granularity": "patch",
+            "value_reduction": "token_mean",
             "rollout_batch_size": args.rollout_batch_size,
             "rollout_sampling": rollout_sampling,
             "rollout_failure_policy": args.rollout_failure_policy,
@@ -3566,9 +4255,15 @@ def run_ppo_smoke(
                 None if post_step_clip_fraction is None else float(post_step_clip_fraction.detach().cpu())
             ),
             "post_step_log_ratio_mean": (
-                None if post_step_log_ratio is None else float(post_step_log_ratio.mean().detach().cpu())
+                None if post_step_token_log_ratio is None else float(post_step_token_log_ratio.mean().detach().cpu())
             ),
             "post_step_log_ratio_max_abs": (
+                None if post_step_token_log_ratio is None else float(post_step_token_log_ratio.abs().max().detach().cpu())
+            ),
+            "post_step_patch_log_ratio_mean": (
+                None if post_step_log_ratio is None else float(post_step_log_ratio.mean().detach().cpu())
+            ),
+            "post_step_patch_log_ratio_max_abs": (
                 None if post_step_log_ratio is None else float(post_step_log_ratio.abs().max().detach().cpu())
             ),
             "logprob_advantage_diagnostics": logprob_advantage_diag,
@@ -3580,6 +4275,7 @@ def run_ppo_smoke(
             "value_target_mean": float(value_targets.mean().detach().cpu()),
             "value_target_std": float(value_targets.std(unbiased=False).detach().cpu()),
             "gae_lambda": args.gae_lambda,
+            "patch_reward_attribution": args.patch_reward_attribution,
             "ppo_epochs": args.ppo_epochs,
             "ppo_replay_microbatch_size": _effective_microbatch_size(
                 args.ppo_replay_microbatch_size,
@@ -3611,6 +4307,11 @@ def run_ppo_smoke(
             "value_mean": float(new_values.mean().detach().cpu()),
             "value_std": float(new_values.std(unbiased=False).detach().cpu()),
             "scored_patches": int(new_logprobs.numel()),
+            "scored_tokens": int(new_token_logprobs.numel()),
+            "generated_tokens_per_patch_mean": float(old_token_counts.float().mean().detach().cpu()),
+            "generated_tokens_per_patch_min": int(old_token_counts.min().detach().cpu()),
+            "generated_tokens_per_patch_max": int(old_token_counts.max().detach().cpu()),
+            "trajectory_token_lengths": trajectory_token_lengths,
             "reward": float(sample_rewards_array.mean()),
             "reward_mean": float(sample_rewards_array.mean()),
             "reward_std": float(sample_rewards_array.std()),
@@ -3655,6 +4356,8 @@ def run_ppo_smoke(
             old_replays,
             reward_tensors,
             old_logprobs,
+            old_token_logprobs,
+            old_token_counts,
             initial_old_value_tensors,
             return_tensors,
             returns_for_metrics,
@@ -3663,6 +4366,7 @@ def run_ppo_smoke(
             old_values,
             new_replays,
             new_logprobs,
+            new_token_logprobs,
             new_values,
             loss_payload,
             patch_rewards,
@@ -3709,6 +4413,44 @@ def main() -> int:
     )
     parser.add_argument("--music21-parse-timeout-s", type=float, default=5.0)
     parser.add_argument("--parse-reward-weight", type=float, default=1.0)
+    parser.add_argument(
+        "--reward-mode",
+        choices=("goldberg", "note_count", "note_fraction", "length"),
+        default="goldberg",
+        help=(
+            "Reward objective. goldberg uses the normal structural/similarity reward. "
+            "note_count, note_fraction, and length are simple PPO sanity-test rewards."
+        ),
+    )
+    parser.add_argument(
+        "--simple-reward-note",
+        default="G",
+        help="ABC pitch letter A-G counted by --reward-mode note_count or note_fraction, case-insensitive.",
+    )
+    parser.add_argument(
+        "--simple-reward-max-count",
+        type=float,
+        default=64.0,
+        help="Count at which --reward-mode note_count reaches --simple-reward-scale.",
+    )
+    parser.add_argument(
+        "--simple-reward-length-unit",
+        choices=("patches", "chars", "stream_lines"),
+        default="patches",
+        help="Length unit for --reward-mode length.",
+    )
+    parser.add_argument(
+        "--simple-reward-length-target",
+        type=float,
+        default=160.0,
+        help="Length at which --reward-mode length reaches --simple-reward-scale.",
+    )
+    parser.add_argument(
+        "--simple-reward-scale",
+        type=float,
+        default=1.0,
+        help="Simple reward multiplier; for note_count/length this is the reward after clipping to the target.",
+    )
     parser.add_argument("--output-json", required=True)
     parser.add_argument("--prompt-limit", type=int, default=1)
     parser.add_argument("--max-steps", type=int, default=1)
@@ -3795,6 +4537,16 @@ def main() -> int:
     parser.add_argument("--entropy-bonus-coef", type=float, default=0.0)
     parser.add_argument("--gamma", type=float, default=1.0)
     parser.add_argument("--gae-lambda", type=float, default=0.95)
+    parser.add_argument(
+        "--patch-reward-attribution",
+        choices=("single_pass", "terminal"),
+        default="single_pass",
+        help=(
+            "How to assign final trajectory reward to generated patches. single_pass uses "
+            "line/harmony events plus terminal residual; terminal puts every reward component "
+            "on the final generated patch and relies on returns/GAE to propagate backward."
+        ),
+    )
     parser.add_argument("--max-grad-norm", type=float, default=1.0)
     parser.add_argument("--replay-context-patches", type=int, default=128)
     parser.add_argument("--score-chunk-patches", type=int, default=64)
@@ -3979,6 +4731,14 @@ def main() -> int:
         "reward_config": asdict(reward_config),
         "policy_weights": str(policy_weights),
         "prompt_structural_targets": prompt_structural_target_metadata(prompt_targets),
+        "reward_mode": {
+            "mode": args.reward_mode,
+            "simple_reward_note": args.simple_reward_note,
+            "simple_reward_max_count": args.simple_reward_max_count,
+            "simple_reward_length_unit": args.simple_reward_length_unit,
+            "simple_reward_length_target": args.simple_reward_length_target,
+            "simple_reward_scale": args.simple_reward_scale,
+        },
         "ppo": {
             "clip_range": args.ppo_clip_range,
             "value_loss_coef": args.value_loss_coef,
@@ -3990,7 +4750,12 @@ def main() -> int:
             "value_warmup_epochs": args.value_warmup_epochs,
             "normalize_value_loss": args.normalize_value_loss,
             "value_loss_scale_min": args.value_loss_scale_min,
-            "reward_assignment": "single_pass_events_plus_terminal_residual",
+            "reward_assignment": (
+                "terminal_total_reward"
+                if args.patch_reward_attribution == "terminal"
+                else "single_pass_events_plus_terminal_residual"
+            ),
+            "patch_reward_attribution": args.patch_reward_attribution,
             "rollout_only": args.rollout_only,
         },
     }
