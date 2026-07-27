@@ -602,6 +602,62 @@ def prompt_batch_metadata(prompt_batch: list[PromptBatchItem]) -> dict:
     }
 
 
+def resolve_fixed_eval_prompt_selection(args) -> str:
+    selection = str(getattr(args, "fixed_eval_prompt_selection", "same"))
+    if selection == "same":
+        return str(args.prompt_selection)
+    if selection in {"ordered", "random"}:
+        return selection
+    raise ValueError(f"unsupported fixed_eval_prompt_selection: {selection!r}")
+
+
+def fixed_eval_should_run_after_step(args, step_idx: int) -> bool:
+    if int(args.fixed_eval_trajectories) <= 0:
+        return False
+    every_steps = int(getattr(args, "fixed_eval_every_steps", 1))
+    if every_steps <= 0:
+        return False
+    return int(step_idx) > 0 and int(step_idx) % every_steps == 0
+
+
+def fixed_eval_event_index_after_step(args, step_idx: int) -> int:
+    every_steps = int(getattr(args, "fixed_eval_every_steps", 1))
+    if every_steps <= 0:
+        raise ValueError("fixed_eval_event_index_after_step requires fixed_eval_every_steps > 0")
+    if not fixed_eval_should_run_after_step(args, step_idx):
+        raise ValueError(f"step {step_idx} is not a fixed-eval step for every_steps={every_steps}")
+    return int(step_idx) // every_steps - 1
+
+
+def fixed_eval_event_index_before_training(args) -> int:
+    every_steps = int(getattr(args, "fixed_eval_every_steps", 1))
+    if every_steps <= 0:
+        return 0
+    return max(0, int(args.step_offset) // every_steps)
+
+
+def build_fixed_eval_prompt_batch(
+    *,
+    prompts: list[dict],
+    prompt_targets: list[PromptStructuralTarget],
+    args,
+    event_index: int,
+) -> list[PromptBatchItem]:
+    if int(args.fixed_eval_trajectories) <= 0:
+        return []
+    if event_index < 0:
+        raise ValueError(f"fixed eval event index must be non-negative, got {event_index}")
+    start_slot = int(event_index) * int(args.fixed_eval_trajectories)
+    return build_prompt_batch_for_slots(
+        prompts=prompts,
+        prompt_targets=prompt_targets,
+        selection=resolve_fixed_eval_prompt_selection(args),
+        seed=int(args.seed) + int(getattr(args, "fixed_eval_prompt_seed_offset", 2_000_000)),
+        start_slot=start_slot,
+        count=int(args.fixed_eval_trajectories),
+    )
+
+
 def prompt_context_from_payload(payload: PPORolloutPayload) -> PromptBatchItem:
     if (
         not payload.prompt
@@ -4149,26 +4205,133 @@ def compact_eval_trajectory_log(trajectory_log: dict, *, include_trajectories: b
     return record
 
 
+def fixed_eval_reference_kl_diagnostics(
+    *,
+    policy_model: NotaGenLMHeadModel,
+    reference_policy_model: NotaGenLMHeadModel,
+    rollout_payloads: list[PPORolloutPayload],
+    args,
+) -> dict:
+    eval_payloads = [
+        payload
+        for payload in rollout_payloads
+        if not (payload.meta or {}).get("rollout_failed") and payload.generated_patches
+    ]
+    if not eval_payloads:
+        return {
+            "ok": False,
+            "reason": "no_generated_tokens",
+            "trajectory_count": 0,
+            "patch_count": 0,
+            "token_count": 0,
+            "reference_exact_kl": None,
+        }
+
+    microbatch_size = _effective_microbatch_size(
+        int(getattr(args, "fixed_eval_kl_replay_microbatch_size", 0)),
+        len(eval_payloads),
+    )
+    policy_replays: list[TokenDistributionReplay] = []
+    reference_replays: list[TokenDistributionReplay] = []
+    with torch.no_grad():
+        for trajectory_start in range(0, len(eval_payloads), microbatch_size):
+            trajectory_end = min(len(eval_payloads), trajectory_start + microbatch_size)
+            trajectory_batch = eval_payloads[trajectory_start:trajectory_end]
+            policy_replays.extend(
+                batched_trajectory_token_log_dists_by_prompt(
+                    policy_model,
+                    trajectory_batch,
+                    args.precision,
+                    replay_context_patches=args.replay_context_patches,
+                    target_chunk_patches=args.score_chunk_patches,
+                    replay_batch_size=0,
+                )
+            )
+            reference_replays.extend(
+                batched_trajectory_token_log_dists_by_prompt(
+                    reference_policy_model,
+                    trajectory_batch,
+                    args.precision,
+                    replay_context_patches=args.replay_context_patches,
+                    target_chunk_patches=args.score_chunk_patches,
+                    replay_batch_size=0,
+                )
+            )
+            if next(policy_model.parameters()).device.type == "cuda":
+                torch.cuda.empty_cache()
+
+    per_trajectory: list[dict] = []
+    for payload, policy_replay, reference_replay in zip(
+        eval_payloads,
+        policy_replays,
+        reference_replays,
+        strict=True,
+    ):
+        if policy_replay.token_log_dists.shape != reference_replay.token_log_dists.shape:
+            raise RuntimeError(
+                "fixed-eval reference KL replay shape mismatch: "
+                f"trajectory={payload.trajectory_index} "
+                f"policy={tuple(policy_replay.token_log_dists.shape)} "
+                f"reference={tuple(reference_replay.token_log_dists.shape)}"
+            )
+        if not torch.equal(
+            policy_replay.token_counts.detach().cpu(),
+            reference_replay.token_counts.detach().cpu(),
+        ):
+            raise RuntimeError(f"fixed-eval reference KL token-count mismatch: trajectory={payload.trajectory_index}")
+        per_trajectory.append(
+            {
+                "trajectory_index": int(payload.trajectory_index),
+                "prompt_index": int(payload.prompt_idx),
+                "prompt_name": payload.prompt_name,
+                "patch_count": int(policy_replay.token_counts.numel()),
+                "token_count": int(policy_replay.token_log_dists.shape[0]),
+                "reference_exact_kl": float(
+                    exact_categorical_kl(
+                        policy_replay.token_log_dists,
+                        reference_replay.token_log_dists,
+                    )
+                    .detach()
+                    .cpu()
+                ),
+            }
+        )
+
+    policy_log_dists = torch.cat([replay.token_log_dists.detach().float() for replay in policy_replays])
+    reference_log_dists = torch.cat([replay.token_log_dists.detach().float() for replay in reference_replays])
+    token_count = int(policy_log_dists.shape[0])
+    patch_count = int(sum(replay.token_counts.numel() for replay in policy_replays))
+    return {
+        "ok": True,
+        "trajectory_count": len(eval_payloads),
+        "patch_count": patch_count,
+        "token_count": token_count,
+        "reference_exact_kl": float(exact_categorical_kl(policy_log_dists, reference_log_dists).detach().cpu()),
+        "per_trajectory": per_trajectory,
+        "microbatch_size": microbatch_size,
+    }
+
+
 def run_fixed_eval_batch(
     *,
     policy_model: NotaGenLMHeadModel,
     policy_shape: ModelShape,
-    prompt: str,
-    prompt_idx: int,
-    prompt_name: str,
-    prompt_target: PromptStructuralTarget,
-    target,
-    target_stream_lines: int,
+    prompt_batch: list[PromptBatchItem],
     reward_config: GoldbergRewardConfig,
     similarity_weights: SimilarityRewardWeights,
     aria_similarity_ref: SimilarityReference | None,
     args,
     step_idx: int,
     label: str,
-    prompt_schedule: PromptScheduleSelection | None = None,
+    event_index: int,
+    reference_policy_model: NotaGenLMHeadModel | None = None,
 ) -> dict | None:
     if args.fixed_eval_trajectories <= 0:
         return None
+    if not prompt_batch:
+        raise ValueError("fixed eval prompt batch is empty")
+    prompt_batch_log = prompt_batch_metadata(prompt_batch)
+    first_prompt = prompt_batch[0]
     eval_args = argparse.Namespace(**vars(args))
     eval_args.trajectories_per_step = args.fixed_eval_trajectories
     eval_args.rollout_batch_size = (
@@ -4186,18 +4349,19 @@ def run_fixed_eval_batch(
             rollout_payloads = sample_ppo_rollouts(
                 policy_model=policy_model,
                 policy_shape=policy_shape,
-                prompt=prompt,
-                target_stream_lines=target_stream_lines,
                 step_idx=args.fixed_eval_seed_step,
                 args=eval_args,
+                prompt_batch=prompt_batch,
             )
     except RuntimeError as exc:
         summary = {
             "event": "ppo_fixed_eval_complete",
             "label": label,
             "step": step_idx,
-            "prompt_index": prompt_idx,
-            "prompt_name": prompt_name,
+            "fixed_eval_event_index": event_index,
+            "prompt_index": first_prompt.prompt_idx,
+            "prompt_name": first_prompt.prompt_name,
+            **prompt_batch_log,
             "ok": False,
             "error": str(exc),
             "trajectory_count": args.fixed_eval_trajectories,
@@ -4208,10 +4372,9 @@ def run_fixed_eval_batch(
                 "fixed_eval_total_s": time.perf_counter() - eval_start,
                 "fixed_eval_rollout_s": time.perf_counter() - rollout_start,
                 "fixed_eval_reward_s": 0.0,
+                "fixed_eval_exact_kl_s": 0.0,
             },
         }
-        if prompt_schedule is not None:
-            summary.update(prompt_schedule_metadata(prompt_schedule))
         output_path = fixed_eval_output_path(args)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         with output_path.open("a", encoding="utf-8") as f:
@@ -4222,13 +4385,7 @@ def run_fixed_eval_batch(
     rollout_sampling = _rollout_sampling_summary(rollout_payloads)
 
     reward_start = time.perf_counter()
-    scored = score_ppo_rollout_payloads(
-        prompt=prompt,
-        prompt_idx=prompt_idx,
-        prompt_name=prompt_name,
-        prompt_target=prompt_target,
-        target=target,
-        target_stream_lines=target_stream_lines,
+    scored = score_ppo_rollout_payloads_from_payload_context(
         rollout_payloads=rollout_payloads,
         reward_config=reward_config,
         similarity_weights=similarity_weights,
@@ -4238,19 +4395,34 @@ def run_fixed_eval_batch(
         candidate_name_prefix=f"fixed_eval_{label}_step{step_idx}",
     )
     reward_s = time.perf_counter() - reward_start
+    exact_kl_s = 0.0
+    exact_kl_summary = None
+    if bool(getattr(args, "fixed_eval_reference_kl_check", False)):
+        if reference_policy_model is None:
+            raise RuntimeError("--fixed-eval-reference-kl-check requires a loaded reference policy model")
+        exact_kl_start = time.perf_counter()
+        exact_kl_summary = fixed_eval_reference_kl_diagnostics(
+            policy_model=policy_model,
+            reference_policy_model=reference_policy_model,
+            rollout_payloads=rollout_payloads,
+            args=args,
+        )
+        exact_kl_s = time.perf_counter() - exact_kl_start
     patch_reward_component_sums = aggregate_component_sums(scored.reward_traces)
     rollout_length = _rollout_length_summary(scored.trajectory_logs)
     summary = {
         "event": "ppo_fixed_eval_complete",
         "label": label,
         "step": step_idx,
+        "fixed_eval_event_index": event_index,
         "ok": True,
-        "prompt_index": prompt_idx,
-        "prompt_name": prompt_name,
-        "target_structure_path": prompt_target.structure_path,
-        "target_structure_source_key": prompt_target.source_key,
-        "target_expected_reward_bars": int(target.expected_reward_bars),
-        "target_stream_lines": target_stream_lines,
+        "prompt_index": first_prompt.prompt_idx,
+        "prompt_name": first_prompt.prompt_name,
+        **prompt_batch_log,
+        "target_structure_path": first_prompt.prompt_target.structure_path,
+        "target_structure_source_key": first_prompt.prompt_target.source_key,
+        "target_expected_reward_bars": int(first_prompt.target.expected_reward_bars),
+        "target_stream_lines": first_prompt.target_stream_lines,
         "trajectory_count": len(rollout_payloads),
         "rollout_batch_size": eval_args.rollout_batch_size,
         "rollout_sampling": rollout_sampling,
@@ -4263,6 +4435,13 @@ def run_fixed_eval_batch(
         "reward_max": scored.reward_summary["reward_max"],
         "reward_sum": scored.reward_summary["reward_sum"],
         "sample_rewards": scored.reward_summary["sample_rewards"],
+        "fixed_eval_reference_kl_check": bool(getattr(args, "fixed_eval_reference_kl_check", False)),
+        "fixed_eval_exact_kl": exact_kl_summary,
+        "reference_exact_kl": (
+            None
+            if exact_kl_summary is None or not exact_kl_summary.get("ok")
+            else exact_kl_summary.get("reference_exact_kl")
+        ),
         "patch_reward_component_sums": patch_reward_component_sums,
         "patch_reward_group_sums": component_group_sums(patch_reward_component_sums),
         "rollout_length": rollout_length,
@@ -4278,12 +4457,11 @@ def run_fixed_eval_batch(
             "fixed_eval_total_s": time.perf_counter() - eval_start,
             "fixed_eval_rollout_s": rollout_s,
             "fixed_eval_reward_s": reward_s,
+            "fixed_eval_exact_kl_s": exact_kl_s,
             "fixed_eval_rollout_per_trajectory_s": rollout_s / max(1, len(rollout_payloads)),
             "fixed_eval_reward_per_trajectory_s": reward_s / max(1, len(rollout_payloads)),
         },
     }
-    if prompt_schedule is not None:
-        summary.update(prompt_schedule_metadata(prompt_schedule))
     record = dict(summary)
     if args.fixed_eval_save_trajectories:
         record["trajectories"] = [
@@ -4406,6 +4584,10 @@ def run_ppo_smoke(
     device = next(policy_model.parameters()).device
     rollout_model = behavior_policy_model or policy_model
     old_logprob_model = behavior_policy_model or policy_model
+    training_reference_kl_enabled = bool(
+        reference_policy_model is not None
+        and (args.reference_kl_coef != 0.0 or args.reference_kl_check)
+    )
     optimizer = torch.optim.AdamW(
         [
             {"params": [param for param in policy_model.parameters() if param.requires_grad], "lr": args.learning_rate},
@@ -4490,40 +4672,48 @@ def run_ppo_smoke(
         raise ValueError(f"value_loss_scale_min must be positive, got {args.value_loss_scale_min}")
     if args.fixed_eval_trajectories < 0:
         raise ValueError(f"fixed_eval_trajectories must be non-negative, got {args.fixed_eval_trajectories}")
+    if args.fixed_eval_every_steps < 0:
+        raise ValueError(f"fixed_eval_every_steps must be non-negative, got {args.fixed_eval_every_steps}")
+    if args.fixed_eval_prompt_selection not in {"same", "ordered", "random"}:
+        raise ValueError(f"unsupported fixed_eval_prompt_selection: {args.fixed_eval_prompt_selection!r}")
     if args.fixed_eval_rollout_batch_size < 0:
         raise ValueError(
             f"fixed_eval_rollout_batch_size must be non-negative, got {args.fixed_eval_rollout_batch_size}"
         )
     if args.fixed_eval_rollout_retries <= 0:
         raise ValueError(f"fixed_eval_rollout_retries must be positive, got {args.fixed_eval_rollout_retries}")
+    if args.fixed_eval_kl_replay_microbatch_size < 0:
+        raise ValueError(
+            "fixed_eval_kl_replay_microbatch_size must be non-negative, "
+            f"got {args.fixed_eval_kl_replay_microbatch_size}"
+        )
+    if args.fixed_eval_reference_kl_check and reference_policy_model is None:
+        raise ValueError("--fixed-eval-reference-kl-check requires a loaded reference policy model")
 
     logs: list[dict] = []
     fixed_eval_logs: list[dict] = []
+    fixed_eval_event_cursor = fixed_eval_event_index_before_training(args)
     if args.fixed_eval_trajectories > 0 and args.fixed_eval_before_training:
-        fixed_eval_prompt = build_prompt_batch_for_slots(
+        fixed_eval_event_index = fixed_eval_event_cursor
+        fixed_eval_event_cursor += 1
+        fixed_eval_prompt_batch = build_fixed_eval_prompt_batch(
             prompts=prompts,
             prompt_targets=prompt_targets,
-            selection=args.prompt_selection,
-            seed=args.seed,
-            start_slot=args.step_offset * args.trajectories_per_step,
-            count=1,
-        )[0]
+            args=args,
+            event_index=fixed_eval_event_index,
+        )
         fixed_eval_log = run_fixed_eval_batch(
             policy_model=policy_model,
             policy_shape=policy_shape,
-            prompt=fixed_eval_prompt.prompt,
-            prompt_idx=fixed_eval_prompt.prompt_idx,
-            prompt_name=fixed_eval_prompt.prompt_name,
-            prompt_target=fixed_eval_prompt.prompt_target,
-            target=fixed_eval_prompt.target,
-            target_stream_lines=fixed_eval_prompt.target_stream_lines,
+            prompt_batch=fixed_eval_prompt_batch,
             reward_config=reward_config,
             similarity_weights=similarity_weights,
             aria_similarity_ref=aria_similarity_ref,
             args=args,
             step_idx=args.step_offset,
             label="before_training",
-            prompt_schedule=fixed_eval_prompt.schedule,
+            event_index=fixed_eval_event_index,
+            reference_policy_model=reference_policy_model,
         )
         if fixed_eval_log is not None:
             fixed_eval_logs.append(fixed_eval_log)
@@ -4678,7 +4868,7 @@ def run_ppo_smoke(
                 )
                 old_replay_only_s += time.perf_counter() - old_replay_batch_start
                 reference_replay_batch = None
-                if reference_policy_model is not None:
+                if training_reference_kl_enabled:
                     reference_replay_batch_start = time.perf_counter()
                     reference_replay_batch = batched_trajectory_token_log_dists_by_prompt(
                         reference_policy_model,
@@ -5033,26 +5223,34 @@ def run_ppo_smoke(
         timings["checkpoint_s"] = time.perf_counter() - checkpoint_start
 
         timings["ppo_replay_backward_s"] = time.perf_counter() - replay_start
-        fixed_eval_log = run_fixed_eval_batch(
-            policy_model=policy_model,
-            policy_shape=policy_shape,
-            prompt=prompt,
-            prompt_idx=prompt_idx,
-            prompt_name=prompt_name,
-            prompt_target=prompt_target,
-            target=target,
-            target_stream_lines=target_stream_lines,
-            reward_config=reward_config,
-            similarity_weights=similarity_weights,
-            aria_similarity_ref=aria_similarity_ref,
-            args=args,
-            step_idx=step_idx,
-            label="after_step",
-            prompt_schedule=first_prompt.schedule,
-        )
-        if fixed_eval_log is not None:
-            fixed_eval_logs.append(fixed_eval_log)
-            timings["fixed_eval_s"] = fixed_eval_log["timings"]["fixed_eval_total_s"]
+        fixed_eval_log = None
+        if fixed_eval_should_run_after_step(args, step_idx):
+            fixed_eval_event_index = fixed_eval_event_cursor
+            fixed_eval_event_cursor += 1
+            fixed_eval_prompt_batch = build_fixed_eval_prompt_batch(
+                prompts=prompts,
+                prompt_targets=prompt_targets,
+                args=args,
+                event_index=fixed_eval_event_index,
+            )
+            fixed_eval_log = run_fixed_eval_batch(
+                policy_model=policy_model,
+                policy_shape=policy_shape,
+                prompt_batch=fixed_eval_prompt_batch,
+                reward_config=reward_config,
+                similarity_weights=similarity_weights,
+                aria_similarity_ref=aria_similarity_ref,
+                args=args,
+                step_idx=step_idx,
+                label="after_step",
+                event_index=fixed_eval_event_index,
+                reference_policy_model=reference_policy_model,
+            )
+            if fixed_eval_log is not None:
+                fixed_eval_logs.append(fixed_eval_log)
+                timings["fixed_eval_s"] = fixed_eval_log["timings"]["fixed_eval_total_s"]
+        else:
+            timings["fixed_eval_s"] = 0.0
         timings["total_step_s"] = time.perf_counter() - step_start
 
         sample_rewards = [float(log["reward"]) for log in trajectory_logs]
@@ -5543,9 +5741,33 @@ def main() -> int:
         type=int,
         default=0,
         help=(
-            "After each PPO step, sample this many trajectories from a fixed prompt/seed and score them "
-            "with the same reward path. Use 0 to disable fixed-policy evaluation."
+            "When fixed eval runs, sample this many trajectories from the independent eval prompt schedule "
+            "and score them with the same reward path. Use 0 to disable fixed-policy evaluation."
         ),
+    )
+    parser.add_argument(
+        "--fixed-eval-every-steps",
+        type=int,
+        default=1,
+        help=(
+            "Run fixed eval after every N PPO steps. Use 1 for every step, or 0 to disable "
+            "after-step fixed eval while still allowing --fixed-eval-before-training."
+        ),
+    )
+    parser.add_argument(
+        "--fixed-eval-prompt-selection",
+        choices=("same", "ordered", "random"),
+        default="same",
+        help=(
+            "Prompt schedule used only for fixed eval. 'same' reuses --prompt-selection mode "
+            "with an independent seed/slot counter; ordered/random force a separate eval mode."
+        ),
+    )
+    parser.add_argument(
+        "--fixed-eval-prompt-seed-offset",
+        type=int,
+        default=2_000_000,
+        help="Offset added to --seed for the independent fixed-eval prompt shuffle.",
     )
     parser.add_argument(
         "--fixed-eval-rollout-batch-size",
@@ -5573,6 +5795,23 @@ def main() -> int:
         type=int,
         default=0,
         help="Synthetic step index used for fixed-eval rollout seeds. Keep constant for repeated eval comparability.",
+    )
+    parser.add_argument(
+        "--fixed-eval-reference-kl-check",
+        action="store_true",
+        help=(
+            "For fixed eval, replay generated tokens through the current policy and reference/SFT policy "
+            "and log exact full-character-vocabulary KL(pi_current || pi_reference)."
+        ),
+    )
+    parser.add_argument(
+        "--fixed-eval-kl-replay-microbatch-size",
+        type=int,
+        default=0,
+        help=(
+            "Trajectory microbatch size for fixed-eval exact KL replay. Use 0 to replay the full "
+            "fixed-eval batch per prompt group."
+        ),
     )
     parser.add_argument(
         "--fixed-eval-before-training",
@@ -5624,7 +5863,11 @@ def main() -> int:
     reference_policy_model = None
     reference_payload = None
     reference_policy_weights = None
-    reference_policy_requested = args.reference_kl_coef != 0.0 or args.reference_kl_check
+    reference_policy_requested = (
+        args.reference_kl_coef != 0.0
+        or args.reference_kl_check
+        or args.fixed_eval_reference_kl_check
+    )
     if reference_policy_requested:
         reference_policy_weights = Path(args.reference_policy_weights) if args.reference_policy_weights else policy_weights
         reference_policy_model = build_model(
@@ -5691,6 +5934,22 @@ def main() -> int:
             "one_prompt_per_trajectory": True,
             "seed": args.seed,
             "step_offset": args.step_offset,
+        },
+        "fixed_eval": {
+            "trajectories": args.fixed_eval_trajectories,
+            "every_steps": args.fixed_eval_every_steps,
+            "before_training": args.fixed_eval_before_training,
+            "prompt_selection": args.fixed_eval_prompt_selection,
+            "resolved_prompt_selection": resolve_fixed_eval_prompt_selection(args),
+            "prompt_seed": args.seed + args.fixed_eval_prompt_seed_offset,
+            "prompt_seed_offset": args.fixed_eval_prompt_seed_offset,
+            "consumption_granularity": "trajectory",
+            "rollout_batch_size": args.fixed_eval_rollout_batch_size,
+            "rollout_retries": args.fixed_eval_rollout_retries,
+            "seed_offset": args.fixed_eval_seed_offset,
+            "seed_step": args.fixed_eval_seed_step,
+            "reference_kl_check": args.fixed_eval_reference_kl_check,
+            "kl_replay_microbatch_size": args.fixed_eval_kl_replay_microbatch_size,
         },
         "ppo": {
             "clip_range": args.ppo_clip_range,

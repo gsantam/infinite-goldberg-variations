@@ -22,6 +22,7 @@ try:
         _project_reward_events_to_patches,
         _stream_line_end_patch_indices,
         _stream_line_spans,
+        build_fixed_eval_prompt_batch,
         build_prompt_batch_for_slots,
         batched_trajectory_patch_logprobs_values,
         batched_trajectory_token_log_dists,
@@ -29,6 +30,9 @@ try:
         batch_trajectory_returns_advantages,
         discounted_returns,
         exact_categorical_kl,
+        fixed_eval_event_index_after_step,
+        fixed_eval_event_index_before_training,
+        fixed_eval_should_run_after_step,
         generalized_advantage_estimates,
         load_prompt_structural_targets,
         load_value_head_checkpoint,
@@ -177,6 +181,97 @@ class NotaGenPPOTests(unittest.TestCase):
         self.assertEqual([item.schedule.cycle for item in batch], [0, 0, 1, 1, 1])
         self.assertEqual([item.schedule.cycle_position for item in batch], [28, 29, 0, 1, 2])
         self.assertEqual([item.target_stream_lines for item in batch], [29, 30, 1, 2, 3])
+
+    def test_fixed_eval_cadence_uses_every_steps(self):
+        args = SimpleNamespace(fixed_eval_trajectories=4, fixed_eval_every_steps=3)
+
+        self.assertFalse(fixed_eval_should_run_after_step(args, 1))
+        self.assertFalse(fixed_eval_should_run_after_step(args, 2))
+        self.assertTrue(fixed_eval_should_run_after_step(args, 3))
+        self.assertFalse(fixed_eval_should_run_after_step(args, 4))
+        self.assertTrue(fixed_eval_should_run_after_step(args, 6))
+        self.assertEqual(fixed_eval_event_index_after_step(args, 3), 0)
+        self.assertEqual(fixed_eval_event_index_after_step(args, 6), 1)
+
+        disabled = SimpleNamespace(fixed_eval_trajectories=4, fixed_eval_every_steps=0)
+        self.assertFalse(fixed_eval_should_run_after_step(disabled, 3))
+        no_eval = SimpleNamespace(fixed_eval_trajectories=0, fixed_eval_every_steps=1)
+        self.assertFalse(fixed_eval_should_run_after_step(no_eval, 1))
+
+    def test_fixed_eval_before_training_event_index_accounts_for_resume_offset(self):
+        fresh = SimpleNamespace(step_offset=0, fixed_eval_every_steps=5)
+        resumed = SimpleNamespace(step_offset=12, fixed_eval_every_steps=5)
+        disabled = SimpleNamespace(step_offset=12, fixed_eval_every_steps=0)
+
+        self.assertEqual(fixed_eval_event_index_before_training(fresh), 0)
+        self.assertEqual(fixed_eval_event_index_before_training(resumed), 2)
+        self.assertEqual(fixed_eval_event_index_before_training(disabled), 0)
+
+    def test_fixed_eval_prompt_batch_has_independent_ordered_rotation(self):
+        prompts = [{"name": f"p{idx}", "prompt": f"prompt {idx}\n"} for idx in range(30)]
+        prompt_targets = [
+            PromptStructuralTarget(
+                target=StructuralTarget(expected_bars=idx + 1, expected_structure_bars=idx + 1),
+                structure_path=f"target_{idx}.abc",
+                source_key="test",
+            )
+            for idx in range(30)
+        ]
+        args = SimpleNamespace(
+            fixed_eval_trajectories=4,
+            fixed_eval_prompt_selection="ordered",
+            prompt_selection="random",
+            seed=3,
+            fixed_eval_prompt_seed_offset=100,
+        )
+
+        first_eval = build_fixed_eval_prompt_batch(
+            prompts=prompts,
+            prompt_targets=prompt_targets,
+            args=args,
+            event_index=0,
+        )
+        second_eval = build_fixed_eval_prompt_batch(
+            prompts=prompts,
+            prompt_targets=prompt_targets,
+            args=args,
+            event_index=1,
+        )
+
+        self.assertEqual([item.prompt_idx for item in first_eval], [0, 1, 2, 3])
+        self.assertEqual([item.prompt_idx for item in second_eval], [4, 5, 6, 7])
+        self.assertEqual([item.target_stream_lines for item in first_eval], [1, 2, 3, 4])
+        self.assertTrue(all(item.schedule.selection == "ordered" for item in first_eval + second_eval))
+
+    def test_fixed_eval_same_selection_uses_independent_shuffle_seed(self):
+        prompts = [{"name": f"p{idx}", "prompt": f"prompt {idx}\n"} for idx in range(30)]
+        prompt_targets = [
+            PromptStructuralTarget(
+                target=StructuralTarget(expected_bars=idx + 1, expected_structure_bars=idx + 1),
+                structure_path=f"target_{idx}.abc",
+                source_key="test",
+            )
+            for idx in range(30)
+        ]
+        args = SimpleNamespace(
+            fixed_eval_trajectories=5,
+            fixed_eval_prompt_selection="same",
+            prompt_selection="random",
+            seed=17,
+            fixed_eval_prompt_seed_offset=99,
+        )
+
+        fixed_eval = build_fixed_eval_prompt_batch(
+            prompts=prompts,
+            prompt_targets=prompt_targets,
+            args=args,
+            event_index=0,
+        )
+        training_order = prompt_cycle_order(30, selection="random", seed=17, cycle=0)
+        eval_order = prompt_cycle_order(30, selection="random", seed=116, cycle=0)
+
+        self.assertEqual([item.prompt_idx for item in fixed_eval], eval_order[:5])
+        self.assertNotEqual([item.prompt_idx for item in fixed_eval], training_order[:5])
 
     def test_mixed_prompt_rollout_passes_per_row_target_lengths_to_batch_sampler(self):
         prompts = [{"name": "p0", "prompt": "prompt 0\n"}, {"name": "p1", "prompt": "prompt 1\n"}]
