@@ -456,8 +456,8 @@ def sample_completions_cached_batch(
     temperature: float,
     top_k: int,
     top_p: float,
-    target_stream_lines: int,
-    target_new_stream_lines: bool,
+    target_stream_lines: int | list[int],
+    target_new_stream_lines: bool | list[bool],
     max_chars: int,
     max_generated_patches: int,
     timeout_s: int,
@@ -465,6 +465,22 @@ def sample_completions_cached_batch(
 ) -> list[BatchedSampleResult]:
     if len(prompts) != len(seeds):
         raise ValueError("prompts and seeds must have the same length")
+    if isinstance(target_stream_lines, int):
+        target_stream_lines_batch = [int(target_stream_lines)] * len(prompts)
+    else:
+        target_stream_lines_batch = [int(item) for item in target_stream_lines]
+        if len(target_stream_lines_batch) != len(prompts):
+            raise ValueError(
+                "target_stream_lines must be an int or a list with the same length as prompts"
+            )
+    if isinstance(target_new_stream_lines, bool):
+        target_new_stream_lines_batch = [bool(target_new_stream_lines)] * len(prompts)
+    else:
+        target_new_stream_lines_batch = [bool(item) for item in target_new_stream_lines]
+        if len(target_new_stream_lines_batch) != len(prompts):
+            raise ValueError(
+                "target_new_stream_lines must be a bool or a list with the same length as prompts"
+            )
 
     patchilizer = Patchilizer(stream=PATCH_STREAM)
     contexts: list[_BatchContext] = []
@@ -473,16 +489,22 @@ def sample_completions_cached_batch(
     timings: dict[str, float] = {}
     counters: dict[str, int] = {}
 
-    for prompt, seed in zip(prompts, seeds, strict=True):
+    for prompt, seed, row_target_stream_lines, row_target_new_stream_lines in zip(
+        prompts,
+        seeds,
+        target_stream_lines_batch,
+        target_new_stream_lines_batch,
+        strict=True,
+    ):
         t0 = time.perf_counter()
         prefix = prompt
         if count_stream_lines(prefix) == 0:
-            prefix = prefix + f"[r:0/{target_stream_lines - 1}]"
+            prefix = prefix + f"[r:0/{row_target_stream_lines - 1}]"
         prompt_stream_lines = count_stream_lines(prefix)
         target_total_stream_lines = (
-            prompt_stream_lines + target_stream_lines
-            if target_new_stream_lines
-            else target_stream_lines
+            prompt_stream_lines + row_target_stream_lines
+            if row_target_new_stream_lines
+            else row_target_stream_lines
         )
         input_patches = patchilizer.encode_generate(prefix)
         flat_ids = [int(item) for sublist in input_patches for item in sublist]

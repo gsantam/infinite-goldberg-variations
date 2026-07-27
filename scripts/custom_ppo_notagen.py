@@ -5,6 +5,7 @@ import bisect
 import math
 import multiprocessing as mp
 import json
+import random
 import re
 import time
 from concurrent.futures import ProcessPoolExecutor
@@ -168,6 +169,13 @@ class PPORolloutPayload:
     full_text: str
     generated_patches: list[list[int]]
     meta: dict
+    prompt_idx: int = 0
+    prompt_name: str = ""
+    prompt: str = ""
+    prompt_target: PromptStructuralTarget | None = None
+    target: object | None = None
+    target_stream_lines: int = 0
+    prompt_schedule: PromptScheduleSelection | None = None
 
 
 @dataclass(frozen=True)
@@ -175,6 +183,29 @@ class PromptStructuralTarget:
     target: object
     structure_path: str
     source_key: str
+
+
+@dataclass(frozen=True)
+class PromptScheduleSelection:
+    prompt_idx: int
+    selection: str
+    slot_index: int
+    cycle: int
+    cycle_position: int
+    cycle_length: int
+    cycle_order: list[int]
+
+
+@dataclass(frozen=True)
+class PromptBatchItem:
+    trajectory_index: int
+    prompt_idx: int
+    prompt_name: str
+    prompt: str
+    prompt_target: PromptStructuralTarget
+    target: object
+    target_stream_lines: int
+    schedule: PromptScheduleSelection
 
 
 @dataclass
@@ -398,6 +429,200 @@ def prompt_structural_target_metadata(prompt_targets: list[PromptStructuralTarge
         }
         for item in prompt_targets
     ]
+
+
+def prompt_cycle_order(
+    prompt_count: int,
+    *,
+    selection: str,
+    seed: int,
+    cycle: int,
+) -> list[int]:
+    if prompt_count <= 0:
+        raise ValueError(f"prompt_count must be positive, got {prompt_count}")
+    if cycle < 0:
+        raise ValueError(f"cycle must be non-negative, got {cycle}")
+
+    order = list(range(prompt_count))
+    if selection == "ordered":
+        return order
+    if selection == "random":
+        cycle_seed = int(seed) + (int(cycle) + 1) * 1_000_003
+        random.Random(cycle_seed).shuffle(order)
+        return order
+    raise ValueError(f"unsupported prompt selection mode: {selection!r}")
+
+
+def select_prompt_for_slot(
+    *,
+    slot_index: int,
+    prompt_count: int,
+    selection: str,
+    seed: int,
+) -> PromptScheduleSelection:
+    if slot_index < 0:
+        raise ValueError(f"slot_index must be non-negative, got {slot_index}")
+    cycle = slot_index // prompt_count
+    cycle_position = slot_index % prompt_count
+    order = prompt_cycle_order(prompt_count, selection=selection, seed=seed, cycle=cycle)
+    return PromptScheduleSelection(
+        prompt_idx=int(order[cycle_position]),
+        selection=selection,
+        slot_index=int(slot_index),
+        cycle=int(cycle),
+        cycle_position=int(cycle_position),
+        cycle_length=int(prompt_count),
+        cycle_order=order,
+    )
+
+
+def select_prompt_for_update(
+    *,
+    update_index: int,
+    prompt_count: int,
+    selection: str,
+    seed: int,
+) -> PromptScheduleSelection:
+    return select_prompt_for_slot(
+        slot_index=update_index,
+        prompt_count=prompt_count,
+        selection=selection,
+        seed=seed,
+    )
+
+
+def prompt_schedule_metadata(selection: PromptScheduleSelection) -> dict:
+    return {
+        "prompt_selection": selection.selection,
+        "prompt_schedule_slot": selection.slot_index,
+        "prompt_cycle": selection.cycle,
+        "prompt_cycle_position": selection.cycle_position,
+        "prompt_cycle_length": selection.cycle_length,
+        "prompt_cycle_order": selection.cycle_order,
+    }
+
+
+def build_prompt_batch_for_slots(
+    *,
+    prompts: list[dict],
+    prompt_targets: list[PromptStructuralTarget],
+    selection: str,
+    seed: int,
+    start_slot: int,
+    count: int,
+) -> list[PromptBatchItem]:
+    if count < 0:
+        raise ValueError(f"prompt batch count must be non-negative, got {count}")
+    if len(prompt_targets) != len(prompts):
+        raise ValueError(f"prompt target count mismatch: prompts={len(prompts)} targets={len(prompt_targets)}")
+    items: list[PromptBatchItem] = []
+    for trajectory_index in range(count):
+        schedule = select_prompt_for_slot(
+            slot_index=start_slot + trajectory_index,
+            prompt_count=len(prompts),
+            selection=selection,
+            seed=seed,
+        )
+        row = prompts[schedule.prompt_idx]
+        prompt_target = prompt_targets[schedule.prompt_idx]
+        target = prompt_target.target
+        items.append(
+            PromptBatchItem(
+                trajectory_index=trajectory_index,
+                prompt_idx=schedule.prompt_idx,
+                prompt_name=prompt_row_name(row, schedule.prompt_idx),
+                prompt=row["prompt"],
+                prompt_target=prompt_target,
+                target=target,
+                target_stream_lines=int(target.expected_reward_bars),
+                schedule=schedule,
+            )
+        )
+    return items
+
+
+def build_prompt_batch_for_step(
+    *,
+    prompts: list[dict],
+    prompt_targets: list[PromptStructuralTarget],
+    args,
+    step_idx: int,
+    trajectories_per_step: int | None = None,
+) -> list[PromptBatchItem]:
+    trajectory_count = args.trajectories_per_step if trajectories_per_step is None else int(trajectories_per_step)
+    start_slot = (int(step_idx) - 1) * int(args.trajectories_per_step)
+    return build_prompt_batch_for_slots(
+        prompts=prompts,
+        prompt_targets=prompt_targets,
+        selection=args.prompt_selection,
+        seed=args.seed,
+        start_slot=start_slot,
+        count=trajectory_count,
+    )
+
+
+def prompt_batch_metadata(prompt_batch: list[PromptBatchItem]) -> dict:
+    if not prompt_batch:
+        return {
+            "prompt_selection": None,
+            "prompt_batch_size": 0,
+            "prompt_batch_multiple_prompts": False,
+            "prompt_batch_prompt_indices": [],
+            "prompt_batch_prompt_names": [],
+            "prompt_batch_target_stream_lines": [],
+            "prompt_batch_assignments": [],
+        }
+    first = prompt_batch[0]
+    prompt_indices = [int(item.prompt_idx) for item in prompt_batch]
+    prompt_names = [item.prompt_name for item in prompt_batch]
+    target_stream_lines = [int(item.target_stream_lines) for item in prompt_batch]
+    return {
+        "prompt_selection": first.schedule.selection,
+        "prompt_batch_size": len(prompt_batch),
+        "prompt_batch_multiple_prompts": len(set(prompt_indices)) > 1,
+        "prompt_batch_unique_prompt_indices": sorted(set(prompt_indices)),
+        "prompt_batch_prompt_indices": prompt_indices,
+        "prompt_batch_prompt_names": prompt_names,
+        "prompt_batch_target_stream_lines": target_stream_lines,
+        "prompt_batch_target_stream_lines_min": min(target_stream_lines),
+        "prompt_batch_target_stream_lines_max": max(target_stream_lines),
+        "prompt_batch_schedule_start_slot": int(first.schedule.slot_index),
+        "prompt_batch_schedule_end_slot": int(prompt_batch[-1].schedule.slot_index),
+        "prompt_batch_cycles": sorted({int(item.schedule.cycle) for item in prompt_batch}),
+        "prompt_batch_assignments": [
+            {
+                "trajectory_index": int(item.trajectory_index),
+                "prompt_index": int(item.prompt_idx),
+                "prompt_name": item.prompt_name,
+                "target_stream_lines": int(item.target_stream_lines),
+                **prompt_schedule_metadata(item.schedule),
+            }
+            for item in prompt_batch
+        ],
+    }
+
+
+def prompt_context_from_payload(payload: PPORolloutPayload) -> PromptBatchItem:
+    if (
+        not payload.prompt
+        or payload.prompt_target is None
+        or payload.target is None
+        or payload.target_stream_lines <= 0
+        or payload.prompt_schedule is None
+    ):
+        raise RuntimeError(
+            f"rollout payload {payload.trajectory_index} is missing prompt context for multi-prompt PPO"
+        )
+    return PromptBatchItem(
+        trajectory_index=payload.trajectory_index,
+        prompt_idx=payload.prompt_idx,
+        prompt_name=payload.prompt_name,
+        prompt=payload.prompt,
+        prompt_target=payload.prompt_target,
+        target=payload.target,
+        target_stream_lines=payload.target_stream_lines,
+        schedule=payload.prompt_schedule,
+    )
 
 
 def value_from_last_patch(
@@ -1197,6 +1422,120 @@ def batched_trajectory_patch_values(
         else:
             result.append(torch.empty(0, device=device))
     return result
+
+
+def flat_prompt_ids_for_payload(payload: PPORolloutPayload, patchilizer: Patchilizer) -> list[int]:
+    if not payload.prompt or payload.target_stream_lines <= 0:
+        raise RuntimeError(
+            f"rollout payload {payload.trajectory_index} is missing prompt text/target length for replay"
+        )
+    rollout_prompt = build_rollout_prefix(payload.prompt, payload.target_stream_lines)
+    return [item for sublist in patchilizer.encode_generate(rollout_prompt) for item in sublist]
+
+
+def _rollout_prompt_groups(rollout_payloads: list[PPORolloutPayload]) -> dict[tuple[int, int, str], list[int]]:
+    groups: dict[tuple[int, int, str], list[int]] = {}
+    for payload_idx, payload in enumerate(rollout_payloads):
+        if not payload.prompt or payload.target_stream_lines <= 0:
+            raise RuntimeError(
+                f"rollout payload {payload.trajectory_index} is missing prompt context for grouped replay"
+            )
+        key = (int(payload.prompt_idx), int(payload.target_stream_lines), payload.prompt)
+        groups.setdefault(key, []).append(payload_idx)
+    return groups
+
+
+def batched_trajectory_patch_logprobs_values_by_prompt(
+    model: NotaGenLMHeadModel,
+    value_head: PatchValueHead,
+    rollout_payloads: list[PPORolloutPayload],
+    precision: str,
+    replay_context_patches: int | None = None,
+    target_chunk_patches: int = 0,
+    replay_batch_size: int = 0,
+) -> list[PatchReplayChunk]:
+    patchilizer = Patchilizer(stream=PATCH_STREAM)
+    outputs: list[PatchReplayChunk | None] = [None] * len(rollout_payloads)
+    for indices in _rollout_prompt_groups(rollout_payloads).values():
+        group_payloads = [rollout_payloads[idx] for idx in indices]
+        flat_prompt_ids = flat_prompt_ids_for_payload(group_payloads[0], patchilizer)
+        group_outputs = batched_trajectory_patch_logprobs_values(
+            model,
+            value_head,
+            flat_prompt_ids,
+            [payload.generated_patches for payload in group_payloads],
+            precision,
+            replay_context_patches=replay_context_patches,
+            target_chunk_patches=target_chunk_patches,
+            replay_batch_size=replay_batch_size,
+        )
+        for output_idx, replay in zip(indices, group_outputs, strict=True):
+            outputs[output_idx] = replay
+    if any(item is None for item in outputs):
+        raise RuntimeError("grouped PPO replay did not produce an output for every trajectory")
+    return [item for item in outputs if item is not None]
+
+
+def batched_trajectory_token_log_dists_by_prompt(
+    model: NotaGenLMHeadModel,
+    rollout_payloads: list[PPORolloutPayload],
+    precision: str,
+    replay_context_patches: int | None = None,
+    target_chunk_patches: int = 0,
+    replay_batch_size: int = 0,
+) -> list[TokenDistributionReplay]:
+    patchilizer = Patchilizer(stream=PATCH_STREAM)
+    outputs: list[TokenDistributionReplay | None] = [None] * len(rollout_payloads)
+    for indices in _rollout_prompt_groups(rollout_payloads).values():
+        group_payloads = [rollout_payloads[idx] for idx in indices]
+        flat_prompt_ids = flat_prompt_ids_for_payload(group_payloads[0], patchilizer)
+        group_outputs = batched_trajectory_token_log_dists(
+            model,
+            flat_prompt_ids,
+            [payload.generated_patches for payload in group_payloads],
+            precision,
+            replay_context_patches=replay_context_patches,
+            target_chunk_patches=target_chunk_patches,
+            replay_batch_size=replay_batch_size,
+        )
+        for output_idx, replay in zip(indices, group_outputs, strict=True):
+            outputs[output_idx] = replay
+    if any(item is None for item in outputs):
+        raise RuntimeError("grouped PPO token-distribution replay did not produce an output for every trajectory")
+    return [item for item in outputs if item is not None]
+
+
+def batched_trajectory_patch_values_by_prompt(
+    model: NotaGenLMHeadModel,
+    value_head: PatchValueHead,
+    rollout_payloads: list[PPORolloutPayload],
+    precision: str,
+    replay_context_patches: int | None = None,
+    target_chunk_patches: int = 0,
+    replay_batch_size: int = 0,
+    detach_policy: bool = True,
+) -> list[torch.Tensor]:
+    patchilizer = Patchilizer(stream=PATCH_STREAM)
+    outputs: list[torch.Tensor | None] = [None] * len(rollout_payloads)
+    for indices in _rollout_prompt_groups(rollout_payloads).values():
+        group_payloads = [rollout_payloads[idx] for idx in indices]
+        flat_prompt_ids = flat_prompt_ids_for_payload(group_payloads[0], patchilizer)
+        group_outputs = batched_trajectory_patch_values(
+            model,
+            value_head,
+            flat_prompt_ids,
+            [payload.generated_patches for payload in group_payloads],
+            precision,
+            replay_context_patches=replay_context_patches,
+            target_chunk_patches=target_chunk_patches,
+            replay_batch_size=replay_batch_size,
+            detach_policy=detach_policy,
+        )
+        for output_idx, values in zip(indices, group_outputs, strict=True):
+            outputs[output_idx] = values
+    if any(item is None for item in outputs):
+        raise RuntimeError("grouped PPO value replay did not produce an output for every trajectory")
+    return [item for item in outputs if item is not None]
 
 
 def trajectory_patch_hidden_state_chunks(
@@ -2862,11 +3201,10 @@ def run_ppo_replay_epoch_microbatched(
         expected_patches = patch_end - patch_start
         expected_tokens = token_end - token_start
         trajectory_batch = rollout_payloads[trajectory_start:trajectory_end]
-        chunk_replays = batched_trajectory_patch_logprobs_values(
+        chunk_replays = batched_trajectory_patch_logprobs_values_by_prompt(
             policy_model,
             value_head,
-            flat_prompt_ids,
-            [payload.generated_patches for payload in trajectory_batch],
+            trajectory_batch,
             args.precision,
             replay_context_patches=args.replay_context_patches,
             target_chunk_patches=args.score_chunk_patches,
@@ -2995,11 +3333,10 @@ def post_step_replay_microbatched(
         for trajectory_start in range(0, len(rollout_payloads), microbatch_size):
             trajectory_end = min(len(rollout_payloads), trajectory_start + microbatch_size)
             trajectory_batch = rollout_payloads[trajectory_start:trajectory_end]
-            replay_batch = batched_trajectory_patch_logprobs_values(
+            replay_batch = batched_trajectory_patch_logprobs_values_by_prompt(
                 policy_model,
                 value_head,
-                flat_prompt_ids,
-                [payload.generated_patches for payload in trajectory_batch],
+                trajectory_batch,
                 args.precision,
                 replay_context_patches=args.replay_context_patches,
                 target_chunk_patches=args.score_chunk_patches,
@@ -3053,15 +3390,45 @@ def sample_ppo_rollouts(
     *,
     policy_model: NotaGenLMHeadModel,
     policy_shape: ModelShape,
-    prompt: str,
-    target_stream_lines: int,
     step_idx: int,
     args,
+    prompt: str | None = None,
+    target_stream_lines: int | None = None,
+    prompt_batch: list[PromptBatchItem] | None = None,
 ) -> list[PPORolloutPayload]:
     if args.trajectories_per_step <= 0:
         raise ValueError(f"trajectories_per_step must be positive, got {args.trajectories_per_step}")
     if args.rollout_batch_size <= 0:
         raise ValueError(f"rollout_batch_size must be positive, got {args.rollout_batch_size}")
+    if prompt_batch is None:
+        if prompt is None or target_stream_lines is None:
+            raise ValueError("sample_ppo_rollouts requires either prompt_batch or prompt plus target_stream_lines")
+        prompt_batch = [
+            PromptBatchItem(
+                trajectory_index=trajectory_idx,
+                prompt_idx=0,
+                prompt_name="prompt_0",
+                prompt=prompt,
+                prompt_target=None,
+                target=None,
+                target_stream_lines=int(target_stream_lines),
+                schedule=PromptScheduleSelection(
+                    prompt_idx=0,
+                    selection="ordered",
+                    slot_index=trajectory_idx,
+                    cycle=0,
+                    cycle_position=0,
+                    cycle_length=1,
+                    cycle_order=[0],
+                ),
+            )
+            for trajectory_idx in range(args.trajectories_per_step)
+        ]
+    if len(prompt_batch) != args.trajectories_per_step:
+        raise ValueError(
+            f"prompt_batch length must match trajectories_per_step: "
+            f"{len(prompt_batch)} != {args.trajectories_per_step}"
+        )
 
     failure_policy = getattr(args, "rollout_failure_policy", "error")
     if failure_policy not in {"error", "zero", "spares"}:
@@ -3071,26 +3438,61 @@ def sample_ppo_rollouts(
         raise ValueError(f"rollout_spares_percent must be non-negative, got {spares_percent}")
     max_attempts = 1 if failure_policy in {"zero", "spares"} else args.rollout_retries
 
+    def payload_prompt_meta(spec: PromptBatchItem) -> dict:
+        return {
+            "prompt_index": int(spec.prompt_idx),
+            "prompt_name": spec.prompt_name,
+            "rollout_target_stream_lines": int(spec.target_stream_lines),
+            **prompt_schedule_metadata(spec.schedule),
+        }
+
+    def build_payload(
+        spec: PromptBatchItem,
+        rollout_seed: int,
+        full_text: str,
+        generated_patches: list[list[int]],
+        *,
+        batched_rollout: bool,
+        extra_meta: dict | None = None,
+    ) -> PPORolloutPayload:
+        return PPORolloutPayload(
+            trajectory_index=spec.trajectory_index,
+            rollout_seed=rollout_seed,
+            full_text=full_text,
+            generated_patches=generated_patches,
+            meta={
+                "cached_rollout": bool(args.cached_rollout),
+                "batched_rollout": bool(batched_rollout),
+                "rollout_batch_size": args.rollout_batch_size if batched_rollout else 1,
+                "rollout_failure_policy": failure_policy,
+                **payload_prompt_meta(spec),
+                **(extra_meta or {}),
+            },
+            prompt_idx=spec.prompt_idx,
+            prompt_name=spec.prompt_name,
+            prompt=spec.prompt,
+            prompt_target=spec.prompt_target,
+            target=spec.target,
+            target_stream_lines=spec.target_stream_lines,
+            prompt_schedule=spec.schedule,
+        )
+
     def failed_payload(
-        trajectory_idx: int,
+        spec: PromptBatchItem,
         rollout_seed: int,
         error: str,
         *,
         batched_rollout: bool,
     ) -> PPORolloutPayload:
-        return PPORolloutPayload(
-            trajectory_index=trajectory_idx,
+        return build_payload(
+            spec,
             rollout_seed=rollout_seed,
-            full_text=prompt,
+            full_text=spec.prompt,
             generated_patches=[],
-            meta={
-                "cached_rollout": bool(args.cached_rollout),
-                "batched_rollout": bool(batched_rollout),
-                "rollout_batch_size": args.rollout_batch_size if batched_rollout else 1,
-                "rollout_target_stream_lines": target_stream_lines,
+            batched_rollout=batched_rollout,
+            extra_meta={
                 "rollout_failed": True,
                 "zero_contribution_rollout": True,
-                "rollout_failure_policy": failure_policy,
                 "stop_reason": "rollout_failed",
                 "error": error,
             },
@@ -3099,28 +3501,38 @@ def sample_ppo_rollouts(
     if failure_policy == "spares":
         if args.rollout_batch_size <= 1 or not args.cached_rollout:
             raise RuntimeError("--rollout-failure-policy spares requires cached batched rollout")
-        requested_successes = args.trajectories_per_step
+        requested_successes = len(prompt_batch)
         extra_candidates = int(math.ceil(requested_successes * spares_percent / 100.0))
-        candidate_count = requested_successes + extra_candidates
+        candidate_specs: list[tuple[PromptBatchItem, int]] = [(spec, 0) for spec in prompt_batch]
+        candidate_specs.extend(
+            (prompt_batch[extra_idx % requested_successes], 1 + extra_idx // requested_successes)
+            for extra_idx in range(extra_candidates)
+        )
+        candidate_count = len(candidate_specs)
         effective_batch_size = args.rollout_batch_size
         if args.rollout_batch_size == requested_successes:
             effective_batch_size = candidate_count
 
-        successes: list[PPORolloutPayload] = []
+        successes_by_trajectory: dict[int, PPORolloutPayload] = {}
+        success_candidate_count = 0
         candidate_errors: dict[int, str] = {}
         for batch_start in range(0, candidate_count, effective_batch_size):
             batch_indices = list(range(batch_start, min(candidate_count, batch_start + effective_batch_size)))
-            seeds = [_rollout_seed(args.seed, step_idx, candidate_idx, 0) for candidate_idx in batch_indices]
+            batch_specs = [candidate_specs[candidate_idx] for candidate_idx in batch_indices]
+            seeds = [
+                _rollout_seed(args.seed, step_idx, spec.trajectory_index, attempt_idx)
+                for spec, attempt_idx in batch_specs
+            ]
             try:
                 batch_results = sample_completions_cached_batch(
                     model=policy_model,
                     model_shape=policy_shape,
-                    prompts=[prompt] * len(batch_indices),
+                    prompts=[spec.prompt for spec, _attempt_idx in batch_specs],
                     seeds=seeds,
                     temperature=args.temperature,
                     top_k=args.top_k,
                     top_p=args.top_p,
-                    target_stream_lines=target_stream_lines,
+                    target_stream_lines=[spec.target_stream_lines for spec, _attempt_idx in batch_specs],
                     target_new_stream_lines=False,
                     max_chars=args.max_chars,
                     max_generated_patches=args.max_generated_patches,
@@ -3131,55 +3543,59 @@ def sample_ppo_rollouts(
                 for candidate_idx in batch_indices:
                     candidate_errors[candidate_idx] = str(exc)
                 continue
-            for candidate_idx, rollout_seed, result in zip(batch_indices, seeds, batch_results, strict=True):
+            for candidate_idx, (spec, attempt_idx), rollout_seed, result in zip(
+                batch_indices,
+                batch_specs,
+                seeds,
+                batch_results,
+                strict=True,
+            ):
                 if result.ok and result.full_text is not None and result.generated_patches is not None:
-                    successes.append(
-                        PPORolloutPayload(
-                            trajectory_index=candidate_idx,
+                    success_candidate_count += 1
+                    successes_by_trajectory.setdefault(
+                        spec.trajectory_index,
+                        build_payload(
+                            spec,
                             rollout_seed=rollout_seed,
                             full_text=result.full_text,
                             generated_patches=result.generated_patches,
-                            meta={
-                                "cached_rollout": True,
-                                "batched_rollout": True,
+                            batched_rollout=True,
+                            extra_meta={
                                 "rollout_batch_size": effective_batch_size,
                                 "rollout_requested_batch_size": args.rollout_batch_size,
-                                "rollout_target_stream_lines": target_stream_lines,
                                 "rollout_candidate_index": candidate_idx,
+                                "rollout_spare_attempt": attempt_idx,
                                 "rollout_sampled_candidates": candidate_count,
                                 "rollout_spares_percent": spares_percent,
                                 **(result.meta or {}),
                             },
-                        )
+                        ),
                     )
                 else:
                     candidate_errors[candidate_idx] = result.error or "unknown batch rollout error"
 
-        if len(successes) < requested_successes:
+        if len(successes_by_trajectory) < requested_successes:
             raise RuntimeError(
                 "failed to fill PPO rollout batch with spares: "
-                f"requested_successes={requested_successes} successes={len(successes)} "
+                f"requested_successes={requested_successes} successes={len(successes_by_trajectory)} "
                 f"sampled_candidates={candidate_count} failures={len(candidate_errors)} "
                 f"errors={candidate_errors}"
             )
 
-        kept_payloads = successes[:requested_successes]
+        kept_payloads = [successes_by_trajectory[spec.trajectory_index] for spec in prompt_batch]
         rollout_meta = {
             "rollout_failure_policy": "spares",
             "rollout_sampled_candidates": candidate_count,
-            "rollout_success_candidates": len(successes),
-            "rollout_failed_candidates": candidate_count - len(successes),
-            "rollout_dropped_success_candidates": len(successes) - requested_successes,
+            "rollout_success_candidates": success_candidate_count,
+            "rollout_failed_candidates": candidate_count - success_candidate_count,
+            "rollout_dropped_success_candidates": success_candidate_count - requested_successes,
             "rollout_dropped_candidates": candidate_count - requested_successes,
             "rollout_spares_percent": spares_percent,
             "rollout_effective_batch_size": effective_batch_size,
             "rollout_requested_batch_size": args.rollout_batch_size,
         }
-        for kept_idx, payload in enumerate(kept_payloads):
-            candidate_idx = payload.trajectory_index
-            payload.trajectory_index = kept_idx
+        for payload in kept_payloads:
             payload.meta.update(rollout_meta)
-            payload.meta["rollout_candidate_index"] = candidate_idx
         return kept_payloads
 
     rollout_payloads: list[PPORolloutPayload] = []
@@ -3187,73 +3603,72 @@ def sample_ppo_rollouts(
         if not args.cached_rollout:
             raise RuntimeError("--rollout-batch-size > 1 requires --cached-rollout")
 
-        pending = list(range(args.trajectories_per_step))
+        pending = list(prompt_batch)
         last_errors: dict[int, str] = {}
         for retry_idx in range(max_attempts):
-            next_pending: list[int] = []
+            next_pending: list[PromptBatchItem] = []
             for batch_start in range(0, len(pending), args.rollout_batch_size):
-                batch_indices = pending[batch_start : batch_start + args.rollout_batch_size]
-                seeds = [_rollout_seed(args.seed, step_idx, trajectory_idx, retry_idx) for trajectory_idx in batch_indices]
+                batch_specs = pending[batch_start : batch_start + args.rollout_batch_size]
+                seeds = [
+                    _rollout_seed(args.seed, step_idx, spec.trajectory_index, retry_idx)
+                    for spec in batch_specs
+                ]
                 try:
                     batch_results = sample_completions_cached_batch(
                         model=policy_model,
                         model_shape=policy_shape,
-                        prompts=[prompt] * len(batch_indices),
+                        prompts=[spec.prompt for spec in batch_specs],
                         seeds=seeds,
                         temperature=args.temperature,
                         top_k=args.top_k,
                         top_p=args.top_p,
-                        target_stream_lines=target_stream_lines,
+                        target_stream_lines=[spec.target_stream_lines for spec in batch_specs],
                         target_new_stream_lines=False,
                         max_chars=args.max_chars,
                         max_generated_patches=args.max_generated_patches,
                         timeout_s=args.timeout_s,
                         precision=args.precision,
-                    )
+                )
                 except RuntimeError as exc:
                     if failure_policy != "zero":
                         raise
-                    for trajectory_idx, rollout_seed in zip(batch_indices, seeds, strict=True):
+                    for spec, rollout_seed in zip(batch_specs, seeds, strict=True):
                         rollout_payloads.append(
                             failed_payload(
-                                trajectory_idx,
+                                spec,
                                 rollout_seed,
                                 str(exc),
                                 batched_rollout=True,
                             )
                         )
                     continue
-                for trajectory_idx, rollout_seed, result in zip(batch_indices, seeds, batch_results, strict=True):
+                for spec, rollout_seed, result in zip(batch_specs, seeds, batch_results, strict=True):
                     if result.ok and result.full_text is not None and result.generated_patches is not None:
                         rollout_payloads.append(
-                            PPORolloutPayload(
-                                trajectory_index=trajectory_idx,
+                            build_payload(
+                                spec,
                                 rollout_seed=rollout_seed,
                                 full_text=result.full_text,
                                 generated_patches=result.generated_patches,
-                                meta={
-                                    "cached_rollout": True,
-                                    "batched_rollout": True,
-                                    "rollout_batch_size": args.rollout_batch_size,
-                                    "rollout_target_stream_lines": target_stream_lines,
-                                    "rollout_failure_policy": failure_policy,
+                                batched_rollout=True,
+                                extra_meta={
                                     **(result.meta or {}),
                                 },
                             )
                         )
                     else:
-                        last_errors[trajectory_idx] = result.error or "unknown batch rollout error"
+                        last_errors[spec.trajectory_index] = result.error or "unknown batch rollout error"
                         if failure_policy == "zero":
                             rollout_payloads.append(
                                 failed_payload(
-                                    trajectory_idx,
+                                    spec,
                                     rollout_seed,
-                                    last_errors[trajectory_idx],
+                                    last_errors[spec.trajectory_index],
                                     batched_rollout=True,
                                 )
                             )
                         else:
-                            next_pending.append(trajectory_idx)
+                            next_pending.append(spec)
             if not next_pending:
                 pending = []
                 break
@@ -3261,23 +3676,23 @@ def sample_ppo_rollouts(
         if pending:
             raise RuntimeError(f"failed to sample PPO rollouts after retries: {last_errors}")
     else:
-        for trajectory_idx in range(args.trajectories_per_step):
+        for spec in prompt_batch:
             sample_built = False
             last_error: Exception | None = None
-            last_rollout_seed = _rollout_seed(args.seed, step_idx, trajectory_idx, 0)
+            last_rollout_seed = _rollout_seed(args.seed, step_idx, spec.trajectory_index, 0)
             for retry_idx in range(max_attempts):
-                rollout_seed = _rollout_seed(args.seed, step_idx, trajectory_idx, retry_idx)
+                rollout_seed = _rollout_seed(args.seed, step_idx, spec.trajectory_index, retry_idx)
                 last_rollout_seed = rollout_seed
                 set_seed(rollout_seed)
                 try:
                     full_text, generated_patches = sample_completion(
                         model=policy_model,
                         model_shape=policy_shape,
-                        prompt=prompt,
+                        prompt=spec.prompt,
                         temperature=args.temperature,
                         top_k=args.top_k,
                         top_p=args.top_p,
-                        target_stream_lines=target_stream_lines,
+                        target_stream_lines=spec.target_stream_lines,
                         max_chars=args.max_chars,
                         max_generated_patches=args.max_generated_patches,
                         timeout_s=args.timeout_s,
@@ -3285,18 +3700,12 @@ def sample_ppo_rollouts(
                         cached_rollout=args.cached_rollout,
                     )
                     rollout_payloads.append(
-                        PPORolloutPayload(
-                            trajectory_index=trajectory_idx,
+                        build_payload(
+                            spec,
                             rollout_seed=rollout_seed,
                             full_text=full_text,
                             generated_patches=generated_patches,
-                            meta={
-                                "cached_rollout": bool(args.cached_rollout),
-                                "batched_rollout": False,
-                                "rollout_batch_size": 1,
-                                "rollout_target_stream_lines": target_stream_lines,
-                                "rollout_failure_policy": failure_policy,
-                            },
+                            batched_rollout=False,
                         )
                     )
                     sample_built = True
@@ -3308,14 +3717,14 @@ def sample_ppo_rollouts(
                 if failure_policy == "zero":
                     rollout_payloads.append(
                         failed_payload(
-                            trajectory_idx,
+                            spec,
                             last_rollout_seed,
                             str(last_error) if last_error is not None else "unknown rollout error",
                             batched_rollout=False,
                         )
                     )
                     continue
-                raise RuntimeError(f"failed to sample PPO rollout {trajectory_idx} after retries: {last_error}")
+                raise RuntimeError(f"failed to sample PPO rollout {spec.trajectory_index} after retries: {last_error}")
 
     rollout_payloads.sort(key=lambda item: item.trajectory_index)
     if len(rollout_payloads) != args.trajectories_per_step:
@@ -3357,7 +3766,51 @@ def _init_ppo_reward_worker(context: dict) -> None:
 def _score_ppo_rollout_payload_worker(payload: PPORolloutPayload) -> tuple[PatchRewardTrace, dict]:
     if _PPO_REWARD_WORKER_CONTEXT is None:
         raise RuntimeError("PPO reward worker context was not initialized")
-    return _score_ppo_rollout_payload(payload=payload, **_PPO_REWARD_WORKER_CONTEXT)
+    return _score_ppo_rollout_payload_from_context(payload, _PPO_REWARD_WORKER_CONTEXT)
+
+
+def _ppo_reward_scoring_options_from_args(args) -> PPORewardScoringOptions:
+    return PPORewardScoringOptions(
+        similarity_chroma_bins=int(args.similarity_chroma_bins),
+        similarity_band_ratio=float(args.similarity_band_ratio),
+        similarity_timeout_s=float(args.similarity_timeout_s),
+        max_similarity_reward=float(args.max_similarity_reward),
+        patch_reward_attribution=str(getattr(args, "patch_reward_attribution", "single_pass")),
+        reward_mode=str(getattr(args, "reward_mode", "goldberg")),
+        simple_reward_note=str(getattr(args, "simple_reward_note", "G")),
+        simple_reward_max_count=float(getattr(args, "simple_reward_max_count", 64.0)),
+        simple_reward_length_unit=str(getattr(args, "simple_reward_length_unit", "patches")),
+        simple_reward_length_target=float(getattr(args, "simple_reward_length_target", 160.0)),
+        simple_reward_scale=float(getattr(args, "simple_reward_scale", 1.0)),
+    )
+
+
+def _score_ppo_rollout_payload_from_context(
+    payload: PPORolloutPayload,
+    context: dict,
+) -> tuple[PatchRewardTrace, dict]:
+    if context.get("use_payload_prompt_context"):
+        prompt_context = prompt_context_from_payload(payload)
+        prompt_stream_lines = count_stream_lines(
+            build_rollout_prefix(prompt_context.prompt, prompt_context.target_stream_lines)
+        )
+        return _score_ppo_rollout_payload(
+            prompt=prompt_context.prompt,
+            prompt_idx=prompt_context.prompt_idx,
+            prompt_name=prompt_context.prompt_name,
+            prompt_target=prompt_context.prompt_target,
+            target=prompt_context.target,
+            target_stream_lines=prompt_context.target_stream_lines,
+            payload=payload,
+            prompt_stream_lines=prompt_stream_lines,
+            reward_config=context["reward_config"],
+            similarity_weights=context["similarity_weights"],
+            aria_similarity_ref=context["aria_similarity_ref"],
+            scoring_options=context["scoring_options"],
+            candidate_name_prefix=context["candidate_name_prefix"],
+        )
+
+    return _score_ppo_rollout_payload(payload=payload, **context)
 
 
 def _score_ppo_rollout_payload(
@@ -3584,19 +4037,7 @@ def score_ppo_rollout_payloads(
     candidate_name_prefix: str,
 ) -> ScoredRolloutBatch:
     prompt_stream_lines = count_stream_lines(build_rollout_prefix(prompt, target_stream_lines))
-    scoring_options = PPORewardScoringOptions(
-        similarity_chroma_bins=int(args.similarity_chroma_bins),
-        similarity_band_ratio=float(args.similarity_band_ratio),
-        similarity_timeout_s=float(args.similarity_timeout_s),
-        max_similarity_reward=float(args.max_similarity_reward),
-        patch_reward_attribution=str(getattr(args, "patch_reward_attribution", "single_pass")),
-        reward_mode=str(getattr(args, "reward_mode", "goldberg")),
-        simple_reward_note=str(getattr(args, "simple_reward_note", "G")),
-        simple_reward_max_count=float(getattr(args, "simple_reward_max_count", 64.0)),
-        simple_reward_length_unit=str(getattr(args, "simple_reward_length_unit", "patches")),
-        simple_reward_length_target=float(getattr(args, "simple_reward_length_target", 160.0)),
-        simple_reward_scale=float(getattr(args, "simple_reward_scale", 1.0)),
-    )
+    scoring_options = _ppo_reward_scoring_options_from_args(args)
     context = {
         "prompt": prompt,
         "prompt_idx": prompt_idx,
@@ -3624,6 +4065,50 @@ def score_ppo_rollout_payloads(
     else:
         scored_items = [
             _score_ppo_rollout_payload(payload=payload, **context)
+            for payload in rollout_payloads
+        ]
+
+    reward_traces = [reward_trace for reward_trace, _trajectory_log in scored_items]
+    trajectory_logs = [trajectory_log for _reward_trace, trajectory_log in scored_items]
+    return ScoredRolloutBatch(
+        trajectory_logs=trajectory_logs,
+        reward_traces=reward_traces,
+        reward_summary=_reward_summary_from_logs(trajectory_logs),
+    )
+
+
+def score_ppo_rollout_payloads_from_payload_context(
+    *,
+    rollout_payloads: list[PPORolloutPayload],
+    reward_config: GoldbergRewardConfig,
+    similarity_weights: SimilarityRewardWeights,
+    aria_similarity_ref: SimilarityReference | None,
+    args,
+    step_idx: int,
+    candidate_name_prefix: str,
+) -> ScoredRolloutBatch:
+    scoring_options = _ppo_reward_scoring_options_from_args(args)
+    context = {
+        "use_payload_prompt_context": True,
+        "reward_config": reward_config,
+        "similarity_weights": similarity_weights,
+        "aria_similarity_ref": aria_similarity_ref,
+        "scoring_options": scoring_options,
+        "candidate_name_prefix": candidate_name_prefix,
+    }
+
+    reward_workers = int(getattr(args, "reward_workers", 0) or 0)
+    if reward_workers > 1 and len(rollout_payloads) > 1:
+        start_method = getattr(args, "reward_worker_start_method", None) or _default_reward_worker_start_method()
+        scored_items = _score_ppo_rollouts_parallel(
+            rollout_payloads=rollout_payloads,
+            max_workers=reward_workers,
+            start_method=start_method,
+            context=context,
+        )
+    else:
+        scored_items = [
+            _score_ppo_rollout_payload_from_context(payload, context)
             for payload in rollout_payloads
         ]
 
@@ -3680,6 +4165,7 @@ def run_fixed_eval_batch(
     args,
     step_idx: int,
     label: str,
+    prompt_schedule: PromptScheduleSelection | None = None,
 ) -> dict | None:
     if args.fixed_eval_trajectories <= 0:
         return None
@@ -3724,6 +4210,8 @@ def run_fixed_eval_batch(
                 "fixed_eval_reward_s": 0.0,
             },
         }
+        if prompt_schedule is not None:
+            summary.update(prompt_schedule_metadata(prompt_schedule))
         output_path = fixed_eval_output_path(args)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         with output_path.open("a", encoding="utf-8") as f:
@@ -3794,6 +4282,8 @@ def run_fixed_eval_batch(
             "fixed_eval_reward_per_trajectory_s": reward_s / max(1, len(rollout_payloads)),
         },
     }
+    if prompt_schedule is not None:
+        summary.update(prompt_schedule_metadata(prompt_schedule))
     record = dict(summary)
     if args.fixed_eval_save_trajectories:
         record["trajectories"] = [
@@ -3816,7 +4306,6 @@ def train_value_head_on_returns(
     policy_model: NotaGenLMHeadModel,
     value_head: PatchValueHead,
     value_optimizer: torch.optim.Optimizer,
-    flat_prompt_ids: list[int],
     rollout_payloads: list[PPORolloutPayload],
     return_tensors: list[torch.Tensor],
     args,
@@ -3839,11 +4328,10 @@ def train_value_head_on_returns(
             trajectory_end = min(len(rollout_payloads), trajectory_start + microbatch_size)
             trajectory_batch = rollout_payloads[trajectory_start:trajectory_end]
             return_batch = return_tensors[trajectory_start:trajectory_end]
-            value_batch = batched_trajectory_patch_values(
+            value_batch = batched_trajectory_patch_values_by_prompt(
                 policy_model,
                 value_head,
-                flat_prompt_ids,
-                [payload.generated_patches for payload in trajectory_batch],
+                trajectory_batch,
                 args.precision,
                 replay_context_patches=args.replay_context_patches,
                 target_chunk_patches=args.score_chunk_patches,
@@ -3962,6 +4450,8 @@ def run_ppo_smoke(
         raise ValueError("no prompt rows loaded")
     if len(prompt_targets) != len(prompts):
         raise ValueError(f"prompt target count mismatch: prompts={len(prompts)} targets={len(prompt_targets)}")
+    if args.prompt_selection not in {"ordered", "random"}:
+        raise ValueError(f"unsupported prompt_selection: {args.prompt_selection!r}")
     if not 0.0 <= args.gae_lambda <= 1.0:
         raise ValueError(f"gae_lambda must be in [0, 1], got {args.gae_lambda}")
     if args.patch_reward_attribution not in {"single_pass", "terminal"}:
@@ -4010,27 +4500,30 @@ def run_ppo_smoke(
     logs: list[dict] = []
     fixed_eval_logs: list[dict] = []
     if args.fixed_eval_trajectories > 0 and args.fixed_eval_before_training:
-        prompt_idx = args.step_offset % len(prompts)
-        row = prompts[prompt_idx]
-        prompt_target = prompt_targets[prompt_idx]
-        target = prompt_target.target
-        target_stream_lines = int(target.expected_reward_bars)
-        prompt_name = prompt_row_name(row, prompt_idx)
+        fixed_eval_prompt = build_prompt_batch_for_slots(
+            prompts=prompts,
+            prompt_targets=prompt_targets,
+            selection=args.prompt_selection,
+            seed=args.seed,
+            start_slot=args.step_offset * args.trajectories_per_step,
+            count=1,
+        )[0]
         fixed_eval_log = run_fixed_eval_batch(
             policy_model=policy_model,
             policy_shape=policy_shape,
-            prompt=row["prompt"],
-            prompt_idx=prompt_idx,
-            prompt_name=prompt_name,
-            prompt_target=prompt_target,
-            target=target,
-            target_stream_lines=target_stream_lines,
+            prompt=fixed_eval_prompt.prompt,
+            prompt_idx=fixed_eval_prompt.prompt_idx,
+            prompt_name=fixed_eval_prompt.prompt_name,
+            prompt_target=fixed_eval_prompt.prompt_target,
+            target=fixed_eval_prompt.target,
+            target_stream_lines=fixed_eval_prompt.target_stream_lines,
             reward_config=reward_config,
             similarity_weights=similarity_weights,
             aria_similarity_ref=aria_similarity_ref,
             args=args,
             step_idx=args.step_offset,
             label="before_training",
+            prompt_schedule=fixed_eval_prompt.schedule,
         )
         if fixed_eval_log is not None:
             fixed_eval_logs.append(fixed_eval_log)
@@ -4038,35 +4531,35 @@ def run_ppo_smoke(
         step_start = time.perf_counter()
         timings: dict[str, float] = {}
         step_idx = args.step_offset + local_step_idx
-        prompt_idx = (step_idx - 1) % len(prompts)
-        row = prompts[prompt_idx]
-        prompt_target = prompt_targets[prompt_idx]
-        target = prompt_target.target
-        target_stream_lines = int(target.expected_reward_bars)
-        prompt_name = prompt_row_name(row, prompt_idx)
-        prompt = row["prompt"]
+        prompt_batch = build_prompt_batch_for_step(
+            prompts=prompts,
+            prompt_targets=prompt_targets,
+            args=args,
+            step_idx=step_idx,
+        )
+        prompt_batch_log = prompt_batch_metadata(prompt_batch)
+        first_prompt = prompt_batch[0]
+        prompt_idx = first_prompt.prompt_idx
+        prompt_name = first_prompt.prompt_name
+        prompt_target = first_prompt.prompt_target
+        target = first_prompt.target
+        target_stream_lines = first_prompt.target_stream_lines
+        prompt = first_prompt.prompt
 
         rollout_start = time.perf_counter()
         rollout_payloads = sample_ppo_rollouts(
             policy_model=rollout_model,
             policy_shape=policy_shape,
-            prompt=prompt,
-            target_stream_lines=target_stream_lines,
             step_idx=step_idx,
             args=args,
+            prompt_batch=prompt_batch,
         )
         timings["rollout_s"] = time.perf_counter() - rollout_start
         timings["rollout_per_trajectory_s"] = timings["rollout_s"] / max(1, len(rollout_payloads))
         rollout_sampling = _rollout_sampling_summary(rollout_payloads)
 
         reward_start = time.perf_counter()
-        scored_rollouts = score_ppo_rollout_payloads(
-            prompt=prompt,
-            prompt_idx=prompt_idx,
-            prompt_name=prompt_name,
-            prompt_target=prompt_target,
-            target=target,
-            target_stream_lines=target_stream_lines,
+        scored_rollouts = score_ppo_rollout_payloads_from_payload_context(
             rollout_payloads=rollout_payloads,
             reward_config=reward_config,
             similarity_weights=similarity_weights,
@@ -4118,6 +4611,7 @@ def run_ppo_smoke(
                 "step": step_idx,
                 "prompt_index": prompt_idx,
                 "prompt_name": prompt_name,
+                **prompt_batch_log,
                 "target_structure_path": prompt_target.structure_path,
                 "target_structure_source_key": prompt_target.source_key,
                 "target_expected_reward_bars": int(target.expected_reward_bars),
@@ -4160,8 +4654,6 @@ def run_ppo_smoke(
         update_trajectory_logs = [item[2] for item in update_items]
 
         replay_start = time.perf_counter()
-        rollout_prompt = build_rollout_prefix(prompt, target_stream_lines)
-        prompt_flat = [item for sublist in patchilizer.encode_generate(rollout_prompt) for item in sublist]
         old_replay_start = time.perf_counter()
         old_replays: list[PatchReplayChunk] = []
         reference_replays: list[TokenDistributionReplay] = []
@@ -4175,11 +4667,10 @@ def run_ppo_smoke(
                 trajectory_batch = update_rollout_payloads[trajectory_start:trajectory_end]
                 reward_trace_batch = update_reward_traces[trajectory_start:trajectory_end]
                 old_replay_batch_start = time.perf_counter()
-                old_replay_batch = batched_trajectory_patch_logprobs_values(
+                old_replay_batch = batched_trajectory_patch_logprobs_values_by_prompt(
                     old_logprob_model,
                     value_head,
-                    prompt_flat,
-                    [payload.generated_patches for payload in trajectory_batch],
+                    trajectory_batch,
                     args.precision,
                     replay_context_patches=args.replay_context_patches,
                     target_chunk_patches=args.score_chunk_patches,
@@ -4189,10 +4680,9 @@ def run_ppo_smoke(
                 reference_replay_batch = None
                 if reference_policy_model is not None:
                     reference_replay_batch_start = time.perf_counter()
-                    reference_replay_batch = batched_trajectory_token_log_dists(
+                    reference_replay_batch = batched_trajectory_token_log_dists_by_prompt(
                         reference_policy_model,
-                        prompt_flat,
-                        [payload.generated_patches for payload in trajectory_batch],
+                        trajectory_batch,
                         args.precision,
                         replay_context_patches=args.replay_context_patches,
                         target_chunk_patches=args.score_chunk_patches,
@@ -4273,7 +4763,6 @@ def run_ppo_smoke(
             policy_model=policy_model,
             value_head=value_head,
             value_optimizer=value_optimizer,
-            flat_prompt_ids=prompt_flat,
             rollout_payloads=update_rollout_payloads,
             return_tensors=return_tensors,
             args=args,
@@ -4291,11 +4780,10 @@ def run_ppo_smoke(
                     trajectory_end = min(len(update_rollout_payloads), trajectory_start + microbatch_size)
                     trajectory_batch = update_rollout_payloads[trajectory_start:trajectory_end]
                     old_value_tensors.extend(
-                        batched_trajectory_patch_values(
+                        batched_trajectory_patch_values_by_prompt(
                             policy_model,
                             value_head,
-                            prompt_flat,
-                            [payload.generated_patches for payload in trajectory_batch],
+                            trajectory_batch,
                             args.precision,
                             replay_context_patches=args.replay_context_patches,
                             target_chunk_patches=args.score_chunk_patches,
@@ -4343,7 +4831,7 @@ def run_ppo_smoke(
                 policy_model=policy_model,
                 value_head=value_head,
                 optimizer=optimizer,
-                flat_prompt_ids=prompt_flat,
+                flat_prompt_ids=[],
                 rollout_payloads=update_rollout_payloads,
                 trajectory_lengths=trajectory_lengths,
                 old_logprobs=old_logprobs,
@@ -4372,7 +4860,7 @@ def run_ppo_smoke(
                 post_epoch_replay = post_step_replay_microbatched(
                     policy_model=policy_model,
                     value_head=value_head,
-                    flat_prompt_ids=prompt_flat,
+                    flat_prompt_ids=[],
                     rollout_payloads=update_rollout_payloads,
                     args=args,
                 )
@@ -4458,6 +4946,9 @@ def run_ppo_smoke(
                             "event": "ppo_epoch_complete",
                             "step": step_idx,
                             "epoch": ppo_epoch_idx,
+                            "prompt_index": prompt_idx,
+                            "prompt_name": prompt_name,
+                            **prompt_batch_log,
                             "loss": epoch_log["loss"],
                             "policy_loss": epoch_log["policy_loss"],
                             "approx_kl": epoch_log["approx_kl"],
@@ -4492,7 +4983,7 @@ def run_ppo_smoke(
             post_step_replay = post_step_replay_microbatched(
                 policy_model=policy_model,
                 value_head=value_head,
-                flat_prompt_ids=prompt_flat,
+                flat_prompt_ids=[],
                 rollout_payloads=update_rollout_payloads,
                 args=args,
             )
@@ -4557,6 +5048,7 @@ def run_ppo_smoke(
             args=args,
             step_idx=step_idx,
             label="after_step",
+            prompt_schedule=first_prompt.schedule,
         )
         if fixed_eval_log is not None:
             fixed_eval_logs.append(fixed_eval_log)
@@ -4589,6 +5081,7 @@ def run_ppo_smoke(
             "step": step_idx,
             "prompt_index": prompt_idx,
             "prompt_name": prompt_name,
+            **prompt_batch_log,
             "target_structure_path": prompt_target.structure_path,
             "target_structure_source_key": prompt_target.source_key,
             "target_expected_reward_bars": int(target.expected_reward_bars),
@@ -4843,7 +5336,22 @@ def main() -> int:
         help="Simple reward multiplier; for note_count/length this is the reward after clipping to the target.",
     )
     parser.add_argument("--output-json", required=True)
-    parser.add_argument("--prompt-limit", type=int, default=1)
+    parser.add_argument(
+        "--prompt-limit",
+        type=int,
+        default=1,
+        help="Number of prompt rows to load from --prompts-jsonl. Use 30 for the full Goldberg PPO prompt set.",
+    )
+    parser.add_argument(
+        "--prompt-selection",
+        choices=("ordered", "random"),
+        default="ordered",
+        help=(
+            "How PPO selects one prompt per update step. ordered preserves modulo order. "
+            "random uses a deterministic seeded shuffle cycle: every loaded prompt appears "
+            "once per cycle, then the next cycle is reshuffled."
+        ),
+    )
     parser.add_argument("--max-steps", type=int, default=1)
     parser.add_argument(
         "--trajectories-per-step",
@@ -5174,6 +5682,15 @@ def main() -> int:
             "simple_reward_length_unit": args.simple_reward_length_unit,
             "simple_reward_length_target": args.simple_reward_length_target,
             "simple_reward_scale": args.simple_reward_scale,
+        },
+        "prompt_schedule": {
+            "prompt_limit": args.prompt_limit,
+            "loaded_prompt_count": len(prompts),
+            "prompt_selection": args.prompt_selection,
+            "consumption_granularity": "trajectory",
+            "one_prompt_per_trajectory": True,
+            "seed": args.seed,
+            "step_offset": args.step_offset,
         },
         "ppo": {
             "clip_range": args.ppo_clip_range,

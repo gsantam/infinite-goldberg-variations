@@ -22,6 +22,7 @@ try:
         _project_reward_events_to_patches,
         _stream_line_end_patch_indices,
         _stream_line_spans,
+        build_prompt_batch_for_slots,
         batched_trajectory_patch_logprobs_values,
         batched_trajectory_token_log_dists,
         batched_trajectory_patch_values,
@@ -33,6 +34,7 @@ try:
         load_value_head_checkpoint,
         normalize_advantages,
         normalize_advantages_token_weighted,
+        prompt_cycle_order,
         patch_rewards_single_pass,
         patch_rewards_simple_test,
         patch_rewards_terminal,
@@ -40,6 +42,8 @@ try:
         save_value_head_checkpoint,
         sample_ppo_rollouts,
         score_ppo_rollout_payloads,
+        score_ppo_rollout_payloads_from_payload_context,
+        select_prompt_for_update,
         terminal_returns,
         token_patch_indices_from_counts,
         trajectory_patch_hidden_states,
@@ -95,6 +99,230 @@ def _generated_patches_from_text(text: str) -> list[list[int]]:
 
 @unittest.skipIf(torch is None, f"NotaGen torch dependencies unavailable: {IMPORT_ERROR}")
 class NotaGenPPOTests(unittest.TestCase):
+    def test_ordered_prompt_schedule_cycles_by_update_index(self):
+        selections = [
+            select_prompt_for_update(
+                update_index=update_index,
+                prompt_count=3,
+                selection="ordered",
+                seed=123,
+            )
+            for update_index in range(8)
+        ]
+
+        self.assertEqual([item.prompt_idx for item in selections], [0, 1, 2, 0, 1, 2, 0, 1])
+        self.assertEqual([item.cycle for item in selections], [0, 0, 0, 1, 1, 1, 2, 2])
+        self.assertEqual([item.cycle_position for item in selections], [0, 1, 2, 0, 1, 2, 0, 1])
+
+    def test_random_prompt_schedule_is_seeded_shuffle_cycle(self):
+        first_cycle = [
+            select_prompt_for_update(
+                update_index=update_index,
+                prompt_count=30,
+                selection="random",
+                seed=11,
+            ).prompt_idx
+            for update_index in range(30)
+        ]
+        repeated_first_cycle = prompt_cycle_order(30, selection="random", seed=11, cycle=0)
+        second_cycle = [
+            select_prompt_for_update(
+                update_index=30 + update_index,
+                prompt_count=30,
+                selection="random",
+                seed=11,
+            ).prompt_idx
+            for update_index in range(30)
+        ]
+
+        self.assertEqual(first_cycle, repeated_first_cycle)
+        self.assertEqual(sorted(first_cycle), list(range(30)))
+        self.assertEqual(sorted(second_cycle), list(range(30)))
+        self.assertNotEqual(first_cycle, second_cycle)
+
+    def test_random_prompt_schedule_honors_step_offset_position(self):
+        selection = select_prompt_for_update(
+            update_index=37,
+            prompt_count=30,
+            selection="random",
+            seed=19,
+        )
+        cycle_order = prompt_cycle_order(30, selection="random", seed=19, cycle=1)
+
+        self.assertEqual(selection.cycle, 1)
+        self.assertEqual(selection.cycle_position, 7)
+        self.assertEqual(selection.prompt_idx, cycle_order[7])
+
+    def test_prompt_batch_consumes_slots_across_cycle_boundary(self):
+        prompts = [{"name": f"p{idx}", "prompt": f"prompt {idx}\n"} for idx in range(30)]
+        prompt_targets = [
+            PromptStructuralTarget(
+                target=StructuralTarget(expected_bars=idx + 1, expected_structure_bars=idx + 1),
+                structure_path=f"target_{idx}.abc",
+                source_key="test",
+            )
+            for idx in range(30)
+        ]
+
+        batch = build_prompt_batch_for_slots(
+            prompts=prompts,
+            prompt_targets=prompt_targets,
+            selection="ordered",
+            seed=0,
+            start_slot=28,
+            count=5,
+        )
+
+        self.assertEqual([item.prompt_idx for item in batch], [28, 29, 0, 1, 2])
+        self.assertEqual([item.schedule.cycle for item in batch], [0, 0, 1, 1, 1])
+        self.assertEqual([item.schedule.cycle_position for item in batch], [28, 29, 0, 1, 2])
+        self.assertEqual([item.target_stream_lines for item in batch], [29, 30, 1, 2, 3])
+
+    def test_mixed_prompt_rollout_passes_per_row_target_lengths_to_batch_sampler(self):
+        prompts = [{"name": "p0", "prompt": "prompt 0\n"}, {"name": "p1", "prompt": "prompt 1\n"}]
+        prompt_targets = [
+            PromptStructuralTarget(
+                target=StructuralTarget(expected_bars=3, expected_structure_bars=3),
+                structure_path="target_0.abc",
+                source_key="test",
+            ),
+            PromptStructuralTarget(
+                target=StructuralTarget(expected_bars=5, expected_structure_bars=5),
+                structure_path="target_1.abc",
+                source_key="test",
+            ),
+        ]
+        prompt_batch = build_prompt_batch_for_slots(
+            prompts=prompts,
+            prompt_targets=prompt_targets,
+            selection="ordered",
+            seed=0,
+            start_slot=0,
+            count=2,
+        )
+
+        def fake_batch(**kwargs):
+            self.assertEqual(kwargs["prompts"], ["prompt 0\n", "prompt 1\n"])
+            self.assertEqual(kwargs["target_stream_lines"], [3, 5])
+            return [
+                SimpleNamespace(
+                    ok=True,
+                    full_text="prompt 0\n[r:0/2][V:1]C|\n",
+                    generated_patches=[[ord("C")]],
+                    meta={"stop_reason": "target_stream_lines"},
+                    error=None,
+                ),
+                SimpleNamespace(
+                    ok=True,
+                    full_text="prompt 1\n[r:0/4][V:1]D|\n",
+                    generated_patches=[[ord("D")]],
+                    meta={"stop_reason": "target_stream_lines"},
+                    error=None,
+                ),
+            ]
+
+        args = SimpleNamespace(
+            trajectories_per_step=2,
+            rollout_batch_size=2,
+            cached_rollout=True,
+            rollout_retries=1,
+            rollout_failure_policy="error",
+            rollout_spares_percent=10.0,
+            seed=7,
+            temperature=1.0,
+            top_k=8,
+            top_p=0.95,
+            max_chars=100,
+            max_generated_patches=10,
+            timeout_s=5,
+            precision="fp32",
+        )
+        with patch("scripts.custom_ppo_notagen.sample_completions_cached_batch", side_effect=fake_batch):
+            payloads = sample_ppo_rollouts(
+                policy_model=object(),
+                policy_shape=object(),
+                step_idx=1,
+                args=args,
+                prompt_batch=prompt_batch,
+            )
+
+        self.assertEqual([payload.prompt_idx for payload in payloads], [0, 1])
+        self.assertEqual([payload.target_stream_lines for payload in payloads], [3, 5])
+        self.assertEqual([payload.meta["rollout_target_stream_lines"] for payload in payloads], [3, 5])
+
+    def test_mixed_prompt_scorer_uses_each_payload_target_context(self):
+        prompts = [{"name": "p0", "prompt": "prompt 0\n"}, {"name": "p1", "prompt": "prompt 1\n"}]
+        prompt_targets = [
+            PromptStructuralTarget(
+                target=StructuralTarget(expected_bars=3, expected_structure_bars=3),
+                structure_path="target_0.abc",
+                source_key="test0",
+            ),
+            PromptStructuralTarget(
+                target=StructuralTarget(expected_bars=5, expected_structure_bars=5),
+                structure_path="target_1.abc",
+                source_key="test1",
+            ),
+        ]
+        prompt_batch = build_prompt_batch_for_slots(
+            prompts=prompts,
+            prompt_targets=prompt_targets,
+            selection="ordered",
+            seed=0,
+            start_slot=0,
+            count=2,
+        )
+        payloads = [
+            PPORolloutPayload(
+                trajectory_index=item.trajectory_index,
+                rollout_seed=10 + item.trajectory_index,
+                full_text=item.prompt + "abc",
+                generated_patches=[[ord("a") + item.trajectory_index]],
+                meta={"stop_reason": "max_generated_patches"},
+                prompt_idx=item.prompt_idx,
+                prompt_name=item.prompt_name,
+                prompt=item.prompt,
+                prompt_target=item.prompt_target,
+                target=item.target,
+                target_stream_lines=item.target_stream_lines,
+                prompt_schedule=item.schedule,
+            )
+            for item in prompt_batch
+        ]
+        args = SimpleNamespace(
+            similarity_chroma_bins=8,
+            similarity_band_ratio=0.25,
+            similarity_timeout_s=5.0,
+            max_similarity_reward=2.0,
+            patch_reward_attribution="single_pass",
+            reward_mode="length",
+            simple_reward_note="G",
+            simple_reward_max_count=64.0,
+            simple_reward_length_unit="patches",
+            simple_reward_length_target=1.0,
+            simple_reward_scale=1.0,
+            reward_workers=0,
+        )
+
+        scored = score_ppo_rollout_payloads_from_payload_context(
+            rollout_payloads=payloads,
+            reward_config=GoldbergRewardConfig(parse_validation_mode="abc-tokenize"),
+            similarity_weights=SimilarityRewardWeights(),
+            aria_similarity_ref=None,
+            args=args,
+            step_idx=1,
+            candidate_name_prefix="mixed_prompt_score",
+        )
+
+        self.assertEqual(
+            [log["reward_breakdown"]["target_stream_lines"] for log in scored.trajectory_logs],
+            [3, 5],
+        )
+        self.assertEqual(
+            [log["reward_breakdown"]["target_structure_source_key"] for log in scored.trajectory_logs],
+            ["test0", "test1"],
+        )
+
     def test_rollout_seeds_do_not_collide_for_batched_spares_across_steps(self):
         seeds = [
             _rollout_seed(base_seed=0, step_idx=step_idx, group_idx=candidate_idx, retry_idx=retry_idx)
@@ -261,7 +489,7 @@ class NotaGenPPOTests(unittest.TestCase):
         self.assertEqual(payloads[1].generated_patches, [])
         self.assertEqual(payloads[1].full_text, prompt)
 
-    def test_spares_policy_keeps_first_successful_candidates_without_retrying(self):
+    def test_spares_policy_fills_scheduled_slots_without_retrying(self):
         prompt = "X:1\nT:Spares rollout test\nM:3/4\nL:1/8\nK:C\n"
 
         def fake_batch(**kwargs):
@@ -318,8 +546,9 @@ class NotaGenPPOTests(unittest.TestCase):
 
         self.assertEqual(mocked.call_count, 1)
         self.assertEqual([payload.trajectory_index for payload in payloads], [0, 1])
-        self.assertEqual([payload.meta["rollout_candidate_index"] for payload in payloads], [1, 2])
-        self.assertEqual([payload.generated_patches for payload in payloads], [[[ord("C")]], [[ord("F")]]])
+        self.assertEqual([payload.meta["rollout_candidate_index"] for payload in payloads], [2, 1])
+        self.assertEqual([payload.meta["rollout_spare_attempt"] for payload in payloads], [1, 0])
+        self.assertEqual([payload.generated_patches for payload in payloads], [[[ord("F")]], [[ord("C")]]])
         self.assertEqual(payloads[0].meta["rollout_sampled_candidates"], 3)
         self.assertEqual(payloads[0].meta["rollout_success_candidates"], 2)
         self.assertEqual(payloads[0].meta["rollout_failed_candidates"], 1)
