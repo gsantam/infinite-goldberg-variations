@@ -160,6 +160,7 @@ class PPORewardScoringOptions:
     simple_reward_length_unit: str = "patches"
     simple_reward_length_target: float = 160.0
     simple_reward_scale: float = 1.0
+    rollout_failure_terminal_reward: float = -1.0
 
 
 @dataclass
@@ -3539,19 +3540,28 @@ def sample_ppo_rollouts(
         error: str,
         *,
         batched_rollout: bool,
+        full_text: str | None = None,
+        generated_patches: list[list[int]] | None = None,
+        result_meta: dict | None = None,
     ) -> PPORolloutPayload:
+        failed_patches = generated_patches or []
+        failure_meta = dict(result_meta or {})
+        failure_meta.update(
+            {
+                "rollout_failed": True,
+                "zero_contribution_rollout": len(failed_patches) == 0,
+                "stop_reason": failure_meta.get("stop_reason", "rollout_failed"),
+                "error": error,
+                "failed_generated_patches": len(failed_patches),
+            }
+        )
         return build_payload(
             spec,
             rollout_seed=rollout_seed,
-            full_text=spec.prompt,
-            generated_patches=[],
+            full_text=full_text if full_text is not None else spec.prompt,
+            generated_patches=failed_patches,
             batched_rollout=batched_rollout,
-            extra_meta={
-                "rollout_failed": True,
-                "zero_contribution_rollout": True,
-                "stop_reason": "rollout_failed",
-                "error": error,
-            },
+            extra_meta=failure_meta,
         )
 
     if failure_policy == "spares":
@@ -3721,6 +3731,9 @@ def sample_ppo_rollouts(
                                     rollout_seed,
                                     last_errors[spec.trajectory_index],
                                     batched_rollout=True,
+                                    full_text=result.full_text,
+                                    generated_patches=result.generated_patches,
+                                    result_meta=result.meta,
                                 )
                             )
                         else:
@@ -3838,6 +3851,7 @@ def _ppo_reward_scoring_options_from_args(args) -> PPORewardScoringOptions:
         simple_reward_length_unit=str(getattr(args, "simple_reward_length_unit", "patches")),
         simple_reward_length_target=float(getattr(args, "simple_reward_length_target", 160.0)),
         simple_reward_scale=float(getattr(args, "simple_reward_scale", 1.0)),
+        rollout_failure_terminal_reward=float(getattr(args, "rollout_failure_terminal_reward", -1.0)),
     )
 
 
@@ -3887,23 +3901,47 @@ def _score_ppo_rollout_payload(
 ) -> tuple[PatchRewardTrace, dict]:
     patchilizer = Patchilizer(stream=PATCH_STREAM)
     if (payload.meta or {}).get("rollout_failed"):
-        completion_text = ""
+        completion_text = "".join(patchilizer.decode(payload.generated_patches))
+        generated_patch_count = len(payload.generated_patches)
+        generated_tokens = generated_token_slots(payload.generated_patches)
         stop_reason = (payload.meta or {}).get("stop_reason", "rollout_failed")
         length_diagnostics = _rollout_length_diagnostics(
             full_text=payload.full_text,
             completion_text=completion_text,
-            generated_patch_count=0,
+            generated_patch_count=generated_patch_count,
             prompt_stream_lines=prompt_stream_lines,
             target_stream_lines=target_stream_lines,
             stop_reason=stop_reason,
         )
+        failure_reward = float(scoring_options.rollout_failure_terminal_reward)
+        component_rewards = (
+            {"rollout_failure_terminal_reward": _terminal_patch_rewards(generated_patch_count, failure_reward)}
+            if generated_patch_count > 0
+            else {}
+        )
+        patch_rewards = (
+            component_rewards["rollout_failure_terminal_reward"][:]
+            if generated_patch_count > 0
+            else []
+        )
+        patch_reward_component_sums = component_reward_sums(component_rewards)
+        patch_reward_groups = component_group_rewards(component_rewards, len(patch_rewards))
+        zero_contribution_rollout = generated_patch_count == 0
         reward_breakdown = {
-            "reward": 0.0,
-            "total_reward": 0.0,
+            "reward": failure_reward,
+            "total_reward": failure_reward,
+            "parse_valid": False,
+            "parse_reward": 0.0,
+            "structural_total_reward": failure_reward,
+            "raw_similarity_reward": 0.0,
+            "clipped_similarity_reward": 0.0,
+            "similarity_validity_gate": 0.0,
+            "effective_similarity_reward": 0.0,
+            "rollout_failure_terminal_reward": failure_reward,
             "rollout_failed": True,
-            "zero_contribution_rollout": True,
-            "generated_patches": 0,
-            "generated_token_slots": 0,
+            "zero_contribution_rollout": zero_contribution_rollout,
+            "generated_patches": generated_patch_count,
+            "generated_token_slots": generated_tokens,
             "prompt_index": prompt_idx,
             "prompt_name": prompt_name,
             "target_structure_path": prompt_target.structure_path,
@@ -3913,41 +3951,42 @@ def _score_ppo_rollout_payload(
             "trajectory_index": payload.trajectory_index,
             "rollout_seed": payload.rollout_seed,
             "rollout_prefix_stream_lines": prompt_stream_lines,
-            "patch_reward_mode": "zero_contribution_failed_rollout",
-            "patch_reward_count": 0,
-            "patch_reward_sum": 0.0,
-            "patch_reward_component_sums": {},
-            "patch_reward_group_sums": {},
+            "patch_reward_mode": "terminal_failed_rollout_reward",
+            "patch_reward_count": len(patch_rewards),
+            "patch_reward_sum": float(sum(patch_rewards)),
+            "patch_reward_component_sums": patch_reward_component_sums,
+            "patch_reward_group_sums": component_group_sums(patch_reward_component_sums),
         }
         reward_breakdown.update(payload.meta)
+        reward_breakdown["zero_contribution_rollout"] = zero_contribution_rollout
         reward_breakdown.update(length_diagnostics)
         reward_trace = PatchRewardTrace(
-            rewards=[],
-            prefix_totals=[],
-            final_score=RewardScore(total=0.0, breakdown=reward_breakdown),
-            component_rewards={},
-            component_prefix_totals={},
+            rewards=patch_rewards,
+            prefix_totals=prefix_totals(patch_rewards),
+            final_score=RewardScore(total=failure_reward, breakdown=reward_breakdown),
+            component_rewards=component_rewards,
+            component_prefix_totals=component_prefix_totals(component_rewards),
         )
         trajectory_log = {
             "trajectory_index": payload.trajectory_index,
             "rollout_seed": payload.rollout_seed,
-            "reward": 0.0,
+            "reward": failure_reward,
             "full_text": payload.full_text,
             "completion_text": completion_text,
-            "generated_patches": [],
-            "generated_patch_count": 0,
-            "generated_token_slots": 0,
+            "generated_patches": payload.generated_patches,
+            "generated_patch_count": generated_patch_count,
+            "generated_token_slots": generated_tokens,
             "rollout_length_diagnostics": length_diagnostics,
-            "patch_reward_mean": 0.0,
-            "patch_reward_std": 0.0,
-            "patch_rewards": [],
-            "patch_reward_prefix_totals": [],
-            "patch_reward_components": {},
-            "patch_reward_component_prefix_totals": {},
-            "patch_reward_component_sums": {},
-            "patch_reward_groups": {},
-            "patch_reward_group_prefix_totals": {},
-            "patch_reward_group_sums": {},
+            "patch_reward_mean": float(np.mean(patch_rewards)) if patch_rewards else 0.0,
+            "patch_reward_std": float(np.std(patch_rewards)) if patch_rewards else 0.0,
+            "patch_rewards": patch_rewards,
+            "patch_reward_prefix_totals": reward_trace.prefix_totals,
+            "patch_reward_components": component_rewards,
+            "patch_reward_component_prefix_totals": reward_trace.component_prefix_totals,
+            "patch_reward_component_sums": patch_reward_component_sums,
+            "patch_reward_groups": patch_reward_groups,
+            "patch_reward_group_prefix_totals": component_prefix_totals(patch_reward_groups),
+            "patch_reward_group_sums": component_group_sums(patch_reward_component_sums),
             "reward_breakdown": reward_breakdown,
         }
         return reward_trace, trajectory_log
@@ -4770,7 +4809,7 @@ def run_ppo_smoke(
                 trajectory_logs,
                 strict=True,
             )
-            if not (payload.meta or {}).get("rollout_failed") and len(reward_trace.rewards) > 0
+            if len(reward_trace.rewards) > 0
         ]
         skipped_update_logs = [
             trajectory_log
@@ -4780,7 +4819,7 @@ def run_ppo_smoke(
                 trajectory_logs,
                 strict=True,
             )
-            if (payload.meta or {}).get("rollout_failed") or len(reward_trace.rewards) == 0
+            if len(reward_trace.rewards) == 0
         ]
         failed_rollout_count = int(
             sum(1 for payload in rollout_payloads if (payload.meta or {}).get("rollout_failed"))
@@ -5495,6 +5534,25 @@ def main() -> int:
     )
     parser.add_argument("--music21-parse-timeout-s", type=float, default=5.0)
     parser.add_argument("--parse-reward-weight", type=float, default=1.0)
+    parser.add_argument("--countdown-reward-weight", type=float, default=0.25)
+    parser.add_argument("--line-closure-reward-weight", type=float, default=0.25)
+    parser.add_argument("--bar-token-reward-weight", type=float, default=0.10)
+    parser.add_argument("--meter-alignment-reward-weight", type=float, default=0.75)
+    parser.add_argument("--meter-duration-closeness-reward-weight", type=float, default=0.75)
+    parser.add_argument("--bar-meter-consistency-reward-weight", type=float, default=0.75)
+    parser.add_argument("--bar-count-reward-weight", type=float, default=3.0)
+    parser.add_argument("--voice-declaration-reward-weight", type=float, default=1.0)
+    parser.add_argument("--score-voice-reward-weight", type=float, default=0.5)
+    parser.add_argument(
+        "--rollout-failure-terminal-reward",
+        type=float,
+        default=-1.0,
+        help=(
+            "Terminal reward assigned to inference-failed PPO trajectories. If the failed trajectory "
+            "has generated patches, this is placed on the final generated patch; empty failures are "
+            "logged with this reward but cannot contribute a PPO gradient."
+        ),
+    )
     parser.add_argument(
         "--reward-mode",
         choices=("goldberg", "note_count", "note_fraction", "length"),
@@ -5571,10 +5629,11 @@ def main() -> int:
         default="error",
         help=(
             "How PPO handles rollout sampling failures. 'error' preserves strict retry/abort "
-            "behavior. 'zero' records failed trajectories with zero reward and no generated "
-            "patches, then excludes them from the PPO loss after one attempt. 'spares' "
-            "oversamples candidates in the batched rollout and keeps the first successful "
-            "trajectories_per_step candidates."
+            "behavior. 'zero' records failed trajectory slots after one attempt and scores "
+            "them with --rollout-failure-terminal-reward; partial failed generations can "
+            "contribute to the PPO loss, while empty failures are logged but have no tokens "
+            "to update. 'spares' oversamples candidates in the batched rollout and keeps the "
+            "first successful trajectories_per_step candidates."
         ),
     )
     parser.add_argument(
@@ -5888,6 +5947,15 @@ def main() -> int:
     prompt_targets = load_prompt_structural_targets(prompts, args)
     reward_config = GoldbergRewardConfig(
         parse_weight=args.parse_reward_weight,
+        countdown_weight=args.countdown_reward_weight,
+        line_closure_weight=args.line_closure_reward_weight,
+        bar_token_weight=args.bar_token_reward_weight,
+        meter_alignment_weight=args.meter_alignment_reward_weight,
+        meter_duration_closeness_weight=args.meter_duration_closeness_reward_weight,
+        bar_meter_consistency_weight=args.bar_meter_consistency_reward_weight,
+        bar_count_weight=args.bar_count_reward_weight,
+        voice_declaration_weight=args.voice_declaration_reward_weight,
+        score_voice_weight=args.score_voice_reward_weight,
         parse_validation_mode=args.parse_validation_mode,
         music21_parse_timeout_s=args.music21_parse_timeout_s,
     )
@@ -5925,6 +5993,7 @@ def main() -> int:
             "simple_reward_length_unit": args.simple_reward_length_unit,
             "simple_reward_length_target": args.simple_reward_length_target,
             "simple_reward_scale": args.simple_reward_scale,
+            "rollout_failure_terminal_reward": args.rollout_failure_terminal_reward,
         },
         "prompt_schedule": {
             "prompt_limit": args.prompt_limit,

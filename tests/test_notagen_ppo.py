@@ -584,6 +584,54 @@ class NotaGenPPOTests(unittest.TestCase):
         self.assertEqual(payloads[1].generated_patches, [])
         self.assertEqual(payloads[1].full_text, prompt)
 
+    def test_zero_policy_preserves_partial_failed_batched_rollout(self):
+        prompt = "X:1\nT:Partial zero failed rollout test\nM:3/4\nL:1/8\nK:C\n"
+        completion = "[r:0/0][V:1]C2 D2 E2|\n"
+        generated_patches = _generated_patches_from_text(completion)
+
+        def fake_batch(**kwargs):
+            return [
+                SimpleNamespace(
+                    ok=False,
+                    full_text=prompt + completion,
+                    generated_patches=generated_patches,
+                    meta={"stop_reason": "timeout"},
+                    error="generation exceeded 1s",
+                ),
+            ]
+
+        args = SimpleNamespace(
+            trajectories_per_step=1,
+            rollout_batch_size=2,
+            cached_rollout=True,
+            rollout_retries=3,
+            rollout_failure_policy="zero",
+            seed=7,
+            temperature=1.0,
+            top_k=8,
+            top_p=0.95,
+            max_chars=100,
+            max_generated_patches=10,
+            timeout_s=5,
+            precision="fp32",
+        )
+        with patch("scripts.custom_ppo_notagen.sample_completions_cached_batch", side_effect=fake_batch):
+            payloads = sample_ppo_rollouts(
+                policy_model=object(),
+                policy_shape=object(),
+                prompt=prompt,
+                target_stream_lines=1,
+                step_idx=2,
+                args=args,
+            )
+
+        self.assertEqual(len(payloads), 1)
+        self.assertTrue(payloads[0].meta["rollout_failed"])
+        self.assertFalse(payloads[0].meta["zero_contribution_rollout"])
+        self.assertEqual(payloads[0].meta["stop_reason"], "timeout")
+        self.assertEqual(payloads[0].generated_patches, generated_patches)
+        self.assertEqual(payloads[0].full_text, prompt + completion)
+
     def test_spares_policy_fills_scheduled_slots_without_retrying(self):
         prompt = "X:1\nT:Spares rollout test\nM:3/4\nL:1/8\nK:C\n"
 
@@ -651,7 +699,7 @@ class NotaGenPPOTests(unittest.TestCase):
         self.assertEqual(payloads[0].meta["rollout_dropped_success_candidates"], 0)
         self.assertEqual(payloads[0].meta["rollout_effective_batch_size"], 3)
 
-    def test_failed_rollout_scores_as_empty_zero_contribution_trace(self):
+    def test_failed_rollout_scores_terminal_penalty_even_when_empty(self):
         prompt = "X:1\nT:Failed rollout score test\nM:3/4\nL:1/8\nK:C\n"
         target = StructuralTarget(expected_bars=1, expected_structure_bars=1)
         prompt_target = PromptStructuralTarget(
@@ -693,19 +741,85 @@ class NotaGenPPOTests(unittest.TestCase):
                 similarity_timeout_s=5.0,
                 max_similarity_reward=2.0,
                 reward_workers=0,
+                rollout_failure_terminal_reward=-2.5,
             ),
             step_idx=0,
             candidate_name_prefix="failed_rollout",
         )
 
-        self.assertEqual(scored.reward_summary["sample_rewards"], [0.0])
-        self.assertEqual(scored.reward_summary["reward_sum"], 0.0)
+        self.assertEqual(scored.reward_summary["sample_rewards"], [-2.5])
+        self.assertEqual(scored.reward_summary["reward_sum"], -2.5)
         self.assertEqual(scored.reward_traces[0].rewards, [])
-        self.assertEqual(scored.reward_traces[0].final_score.total, 0.0)
-        self.assertEqual(scored.trajectory_logs[0]["reward"], 0.0)
+        self.assertEqual(scored.reward_traces[0].final_score.total, -2.5)
+        self.assertEqual(scored.trajectory_logs[0]["reward"], -2.5)
         self.assertEqual(scored.trajectory_logs[0]["patch_rewards"], [])
+        self.assertEqual(scored.trajectory_logs[0]["reward_breakdown"]["rollout_failure_terminal_reward"], -2.5)
         self.assertTrue(scored.trajectory_logs[0]["reward_breakdown"]["rollout_failed"])
         self.assertTrue(scored.trajectory_logs[0]["reward_breakdown"]["zero_contribution_rollout"])
+
+    def test_failed_rollout_with_partial_patches_gets_terminal_patch_penalty(self):
+        prompt = "X:1\nT:Partial failed rollout score test\nM:3/4\nL:1/8\nK:C\n"
+        completion = "[r:0/0][V:1]C2 D2 E2|\n"
+        generated_patches = _generated_patches_from_text(completion)
+        target = StructuralTarget(expected_bars=1, expected_structure_bars=1)
+        prompt_target = PromptStructuralTarget(
+            target=target,
+            structure_path="<test>",
+            source_key="partial_failed_rollout_test",
+        )
+        payload = PPORolloutPayload(
+            trajectory_index=4,
+            rollout_seed=45,
+            full_text=prompt + completion,
+            generated_patches=generated_patches,
+            meta={
+                "cached_rollout": True,
+                "batched_rollout": True,
+                "rollout_batch_size": 2,
+                "rollout_target_stream_lines": 1,
+                "rollout_failed": True,
+                "zero_contribution_rollout": False,
+                "stop_reason": "timeout",
+                "error": "generation exceeded 1s",
+            },
+        )
+
+        scored = score_ppo_rollout_payloads(
+            prompt=prompt,
+            prompt_idx=0,
+            prompt_name="partial_failed_rollout_test",
+            prompt_target=prompt_target,
+            target=target,
+            target_stream_lines=1,
+            rollout_payloads=[payload],
+            reward_config=GoldbergRewardConfig(parse_validation_mode="abc-tokenize"),
+            similarity_weights=SimilarityRewardWeights(),
+            aria_similarity_ref=None,
+            args=SimpleNamespace(
+                similarity_chroma_bins=8,
+                similarity_band_ratio=0.25,
+                similarity_timeout_s=5.0,
+                max_similarity_reward=2.0,
+                reward_workers=0,
+                rollout_failure_terminal_reward=-3.0,
+            ),
+            step_idx=0,
+            candidate_name_prefix="partial_failed_rollout",
+        )
+
+        self.assertEqual(scored.reward_summary["sample_rewards"], [-3.0])
+        self.assertAlmostEqual(sum(scored.reward_traces[0].rewards), -3.0)
+        self.assertEqual(scored.reward_traces[0].rewards[:-1], [0.0 for _idx in generated_patches[:-1]])
+        self.assertEqual(scored.reward_traces[0].rewards[-1], -3.0)
+        self.assertEqual(
+            scored.reward_traces[0].component_rewards["rollout_failure_terminal_reward"],
+            [0.0 for _idx in generated_patches[:-1]] + [-3.0],
+        )
+        self.assertFalse(scored.trajectory_logs[0]["reward_breakdown"]["zero_contribution_rollout"])
+        self.assertEqual(
+            scored.trajectory_logs[0]["patch_reward_group_sums"]["structural_total_reward"],
+            -3.0,
+        )
 
     def test_simple_note_count_reward_can_be_dense_or_terminal(self):
         completion = "[r:0/0][V:1]G G A g|\n"

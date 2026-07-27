@@ -38,6 +38,7 @@ STRUCTURAL_REWARD_COMPONENTS = (
     "voice_declaration_reward",
     "score_voice_reward",
     "structural_validity_gate_adjustment",
+    "rollout_failure_terminal_reward",
 )
 
 

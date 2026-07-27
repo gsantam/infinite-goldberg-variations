@@ -568,8 +568,17 @@ def sample_completions_cached_batch(
 
         if unresolved:
             for unresolved_pos in unresolved:
+                ctx = pending[unresolved_pos]
                 results[active[unresolved_pos]] = BatchedSampleResult(
                     ok=False,
+                    full_text="".join(ctx.byte_list),
+                    generated_patches=ctx.generated_patches,
+                    meta={
+                        "stop_reason": "early_eos_before_target",
+                        "cache_resets": ctx.resets,
+                        "prompt_stream_lines": ctx.prompt_stream_lines,
+                        "target_total_stream_lines": ctx.target_total_stream_lines,
+                    },
                     error="decoder produced only early EOS candidates before target stream line completion",
                 )
             active = [idx for pos, idx in enumerate(active) if pos not in set(unresolved)]
@@ -581,7 +590,18 @@ def sample_completions_cached_batch(
             ctx = contexts[sample_idx]
             predicted_patch = chosen_patches[local_idx]
             if predicted_patch is None:
-                results[sample_idx] = BatchedSampleResult(ok=False, error="internal error: missing predicted patch")
+                results[sample_idx] = BatchedSampleResult(
+                    ok=False,
+                    full_text="".join(ctx.byte_list),
+                    generated_patches=ctx.generated_patches,
+                    meta={
+                        "stop_reason": "missing_predicted_patch",
+                        "cache_resets": ctx.resets,
+                        "prompt_stream_lines": ctx.prompt_stream_lines,
+                        "target_total_stream_lines": ctx.target_total_stream_lines,
+                    },
+                    error="internal error: missing predicted patch",
+                )
                 continue
 
             if (
@@ -676,7 +696,18 @@ def sample_completions_cached_batch(
                 continue
 
             if time.time() - ctx.start_time > timeout_s:
-                results[sample_idx] = BatchedSampleResult(ok=False, error=f"generation exceeded {timeout_s}s")
+                results[sample_idx] = BatchedSampleResult(
+                    ok=False,
+                    full_text=current_text,
+                    generated_patches=ctx.generated_patches,
+                    meta={
+                        "stop_reason": "timeout",
+                        "cache_resets": ctx.resets,
+                        "prompt_stream_lines": ctx.prompt_stream_lines,
+                        "target_total_stream_lines": ctx.target_total_stream_lines,
+                    },
+                    error=f"generation exceeded {timeout_s}s",
+                )
                 _add_timing(timings, "stop_check", time.perf_counter() - t0)
                 continue
 
