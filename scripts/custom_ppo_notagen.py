@@ -28,8 +28,8 @@ from evaluation.rewards import (
     _stream_line_local_metrics,
     score_candidate_text_with_local_metrics,
 )
-from grpo.notagen_cached_generation_batch import sample_completions_cached_batch
-from grpo.notagen_replay import (
+from notagen_runtime.notagen_cached_generation_batch import sample_completions_cached_batch
+from notagen_runtime.notagen_replay import (
     PATCH_SIZE,
     _encoded_last_patch,
     autocast_context,

@@ -10,7 +10,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from grpo.notagen_hf_adapter import build_trl_ready_notagen
+from notagen_runtime.notagen_hf_adapter import build_trl_ready_notagen
 
 
 def load_prompts(path: str | Path, limit: int) -> list[str]:

@@ -6,13 +6,13 @@ try:
     import torch
     from transformers import GPT2Config
 
-    from grpo.notagen_cached_generation import (
+    from notagen_runtime.notagen_cached_generation import (
         PATCH_SIZE,
         CachedNotaGenPatchGenerator,
         normalize_patch_for_context,
     )
-    from grpo.notagen_cached_generation_batch import _accept_patches_batch, _BatchContext
-    from grpo.notagen_wrapper import NotaGenLMHeadModel
+    from notagen_runtime.notagen_cached_generation_batch import _accept_patches_batch, _BatchContext
+    from notagen_runtime.notagen_wrapper import NotaGenLMHeadModel
 except ModuleNotFoundError as exc:
     np = None
     torch = None
@@ -115,7 +115,7 @@ class CachedNotaGenPatchGeneratorTests(unittest.TestCase):
             batched_contexts.append(
                 _BatchContext(
                     generator=batched,
-                    rng=np.random.default_rng(seed),
+                    torch_rng=torch.Generator().manual_seed(seed),
                     prompt_stream_lines=1,
                     target_total_stream_lines=32,
                     byte_list=[],

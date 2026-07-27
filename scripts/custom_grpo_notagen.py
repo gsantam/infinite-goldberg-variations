@@ -24,9 +24,9 @@ if str(RL_DIR) not in sys.path:
     sys.path.insert(0, str(RL_DIR))
 
 from grpo import GoldbergRewardConfig, compute_group_advantages, load_structural_target  # noqa: E402
-from grpo.notagen_cached_generation import CachedNotaGenPatchGenerator  # noqa: E402
-from grpo.notagen_cached_generation_batch import sample_completions_cached_batch  # noqa: E402
-from grpo.notagen_replay import (  # noqa: E402
+from notagen_runtime.notagen_cached_generation import CachedNotaGenPatchGenerator  # noqa: E402
+from notagen_runtime.notagen_cached_generation_batch import sample_completions_cached_batch  # noqa: E402
+from notagen_runtime.notagen_replay import (  # noqa: E402
     PATCH_SIZE,
     _encoded_last_patch,
     _pad_generated_patch,
