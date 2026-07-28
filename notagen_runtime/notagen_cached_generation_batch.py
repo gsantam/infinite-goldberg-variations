@@ -19,6 +19,7 @@ from .notagen_wrapper import (
     PATCH_STREAM,
     Patchilizer,
     count_stream_lines,
+    fit_repatch_context_to_limit,
     latest_stream_line_closed,
     split_metadata_and_tunebody_lines,
     trim_to_stream_lines,
@@ -258,14 +259,17 @@ def _maybe_roll_cache(ctx: _BatchContext, *, model_shape, patchilizer: Patchiliz
         return
 
     current_text = "".join(ctx.byte_list)
-    metadata_lines, tunebody_lines = split_metadata_and_tunebody_lines(current_text)
+    _metadata_lines, tunebody_lines = split_metadata_and_tunebody_lines(current_text)
     if not tunebody_lines:
         raise RuntimeError("stream rollover hit before tunebody generation")
     if ctx.cut_index is None:
         ctx.cut_index = max(1, len(tunebody_lines) // 2)
-    abc_slice = "".join(metadata_lines + tunebody_lines[-ctx.cut_index :])
-    repatched = patchilizer.encode_generate(abc_slice)
-    flat_ids = [int(item) for sublist in repatched for item in sublist]
+    flat_ids, ctx.cut_index = fit_repatch_context_to_limit(
+        current_text,
+        patchilizer,
+        max_context_tokens=(model_shape.patch_length - 1) * PATCH_SIZE,
+        preferred_cut_index=ctx.cut_index,
+    )
     ctx.generator.reset(flat_ids)
     ctx.resets += 1
 

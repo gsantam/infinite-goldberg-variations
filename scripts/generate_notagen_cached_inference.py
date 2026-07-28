@@ -18,6 +18,7 @@ from notagen_runtime.notagen_wrapper import (
     Patchilizer,
     build_model,
     count_stream_lines,
+    fit_repatch_context_to_limit,
     latest_stream_line_closed,
     set_seed,
     split_metadata_and_tunebody_lines,
@@ -146,14 +147,17 @@ def sample_completion_cached(
 
         state = generator.state
         if state is not None and len(state.flat_ids) >= model_shape.patch_length * PATCH_SIZE:
-            metadata_lines, tunebody_lines = split_metadata_and_tunebody_lines(current_text)
+            _metadata_lines, tunebody_lines = split_metadata_and_tunebody_lines(current_text)
             if not tunebody_lines:
                 raise RuntimeError("stream rollover hit before tunebody generation")
             if cut_index is None:
                 cut_index = max(1, len(tunebody_lines) // 2)
-            abc_slice = "".join(metadata_lines + tunebody_lines[-cut_index:])
-            repatched = patchilizer.encode_generate(abc_slice)
-            flat_ids = [int(item) for sublist in repatched for item in sublist]
+            flat_ids, cut_index = fit_repatch_context_to_limit(
+                current_text,
+                patchilizer,
+                max_context_tokens=(model_shape.patch_length - 1) * PATCH_SIZE,
+                preferred_cut_index=cut_index,
+            )
             generator.reset(flat_ids)
             resets += 1
 

@@ -166,6 +166,46 @@ def split_metadata_and_tunebody_lines(abc_text: str) -> tuple[list[str], list[st
     return lines[:tunebody_index], lines[tunebody_index:]
 
 
+def fit_repatch_context_to_limit(
+    abc_text: str,
+    patchilizer,
+    *,
+    max_context_tokens: int,
+    preferred_cut_index: int | None = None,
+) -> tuple[list[int], int]:
+    metadata_lines, tunebody_lines = split_metadata_and_tunebody_lines(abc_text)
+    if not tunebody_lines:
+        raise RuntimeError("stream rollover hit before tunebody generation")
+
+    max_context_tokens = max(PATCH_SIZE, (max_context_tokens // PATCH_SIZE) * PATCH_SIZE)
+    cut_index = preferred_cut_index
+    if cut_index is None:
+        cut_index = max(1, len(tunebody_lines) // 2)
+    cut_index = min(max(1, cut_index), len(tunebody_lines))
+
+    last_flat_ids: list[int] | None = None
+    for candidate_cut_index in range(cut_index, 0, -1):
+        abc_slice = "".join(metadata_lines + tunebody_lines[-candidate_cut_index:])
+        repatched = patchilizer.encode_generate(abc_slice)
+        flat_ids = [int(item) for sublist in repatched for item in sublist]
+        last_flat_ids = flat_ids
+        if PATCH_SIZE <= len(flat_ids) <= max_context_tokens:
+            return flat_ids, candidate_cut_index
+
+    if last_flat_ids is None:
+        raise RuntimeError("stream rollover could not build a repatched context")
+    if len(last_flat_ids) < PATCH_SIZE:
+        raise RuntimeError("stream rollover repatched context is shorter than one patch")
+
+    flat_ids = last_flat_ids[-max_context_tokens:]
+    rem = len(flat_ids) % PATCH_SIZE
+    if rem:
+        flat_ids = flat_ids[rem:]
+    if len(flat_ids) < PATCH_SIZE:
+        raise RuntimeError("stream rollover fallback context is shorter than one patch")
+    return flat_ids, 1
+
+
 def trim_to_stream_lines(abc_text: str, target_lines: int) -> str:
     return _trim_to_stream_lines(abc_text, target_lines)
 
@@ -277,14 +317,17 @@ def sample_completion(
                 raise RuntimeError(f"generation exceeded {timeout_s}s")
             if input_tensor.shape[1] >= model_shape.patch_length * PATCH_SIZE:
                 current_text = "".join(byte_list)
-                metadata_lines, tunebody_lines = split_metadata_and_tunebody_lines(current_text)
+                _metadata_lines, tunebody_lines = split_metadata_and_tunebody_lines(current_text)
                 if not tunebody_lines:
                     raise RuntimeError("stream rollover hit before tunebody generation")
                 if cut_index is None:
                     cut_index = max(1, len(tunebody_lines) // 2)
-                abc_slice = "".join(metadata_lines + tunebody_lines[-cut_index:])
-                repatched = patchilizer.encode_generate(abc_slice)
-                flat_ids = [item for sublist in repatched for item in sublist]
+                flat_ids, cut_index = fit_repatch_context_to_limit(
+                    current_text,
+                    patchilizer,
+                    max_context_tokens=(model_shape.patch_length - 1) * PATCH_SIZE,
+                    preferred_cut_index=cut_index,
+                )
                 input_tensor = torch.tensor([flat_ids], device=device).reshape(1, -1)
 
     return "".join(byte_list), generated_patches
