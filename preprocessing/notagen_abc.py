@@ -113,6 +113,219 @@ def _parse_length_multiplier(token: str | None) -> Fraction:
     return Fraction(int(token), 1)
 
 
+def _format_length_multiplier(multiplier: Fraction) -> str:
+    multiplier = Fraction(multiplier)
+    if multiplier == 1:
+        return ""
+    if multiplier.denominator == 1:
+        return str(multiplier.numerator)
+    if multiplier.numerator == 1:
+        return f"/{multiplier.denominator}"
+    return f"{multiplier.numerator}/{multiplier.denominator}"
+
+
+LENGTH_SUFFIX_RE = re.compile(r"\d+(?:/\d*)?|/\d+|/")
+VOICE_MARKER_RE = re.compile(r"\[V:(\d+)[^\]]*\]")
+HEADER_DIRECTIVE_RE = re.compile(r"^(?:%%score\b|[A-Za-z]:)")
+
+
+def _parse_length_suffix_at(text: str, index: int) -> tuple[str, int]:
+    match = LENGTH_SUFFIX_RE.match(text, index)
+    if match is None:
+        return "", index
+    return match.group(0), match.end()
+
+
+def _scale_length_suffix(suffix: str, factor: Fraction) -> str:
+    return _format_length_multiplier(_parse_length_multiplier(suffix) * factor)
+
+
+def _scale_abc_body_lengths(segment: str, factor: Fraction) -> str:
+    if factor == 1:
+        return segment
+
+    output: list[str] = []
+    index = 0
+    while index < len(segment):
+        char = segment[index]
+
+        if char == "%":
+            output.append(segment[index:])
+            break
+
+        if char == '"':
+            end = segment.find('"', index + 1)
+            if end == -1:
+                output.append(segment[index:])
+                break
+            output.append(segment[index : end + 1])
+            index = end + 1
+            continue
+
+        if char == "!":
+            end = segment.find("!", index + 1)
+            if end == -1:
+                output.append(char)
+                index += 1
+                continue
+            output.append(segment[index : end + 1])
+            index = end + 1
+            continue
+
+        if char == "{":
+            end = segment.find("}", index + 1)
+            if end == -1:
+                output.append(char)
+                index += 1
+                continue
+            output.append(segment[index : end + 1])
+            index = end + 1
+            continue
+
+        if char == "[":
+            end = segment.find("]", index + 1)
+            if end == -1:
+                output.append(char)
+                index += 1
+                continue
+            bracket_token = segment[index : end + 1]
+            bracket_body = bracket_token[1:-1]
+            if ":" in bracket_body:
+                output.append(bracket_token)
+                index = end + 1
+                continue
+            suffix, next_index = _parse_length_suffix_at(segment, end + 1)
+            output.append(bracket_token)
+            output.append(_scale_length_suffix(suffix, factor))
+            index = next_index
+            continue
+
+        start = index
+        while index < len(segment) and segment[index] in "^_=":
+            index += 1
+        if index < len(segment) and segment[index] in "ABCDEFGabcdefgzZx":
+            index += 1
+            while index < len(segment) and segment[index] in "',":
+                index += 1
+            suffix, next_index = _parse_length_suffix_at(segment, index)
+            output.append(segment[start:index])
+            output.append(_scale_length_suffix(suffix, factor))
+            index = next_index
+            continue
+
+        if index != start:
+            output.append(segment[start:index])
+            continue
+
+        output.append(char)
+        index += 1
+
+    return "".join(output)
+
+
+def _scale_abc_stream_line_lengths(
+    line: str,
+    *,
+    default_length: Fraction,
+    voice_lengths: dict[int, Fraction],
+    target_length: Fraction,
+) -> str:
+    output: list[str] = []
+    position = 0
+    current_voice: int | None = None
+    for match in VOICE_MARKER_RE.finditer(line):
+        if match.start() > position:
+            base_length = (
+                voice_lengths.get(current_voice, default_length)
+                if current_voice is not None
+                else default_length
+            )
+            output.append(_scale_abc_body_lengths(line[position : match.start()], base_length / target_length))
+        output.append(match.group(0))
+        current_voice = int(match.group(1))
+        position = match.end()
+    if position < len(line):
+        base_length = (
+            voice_lengths.get(current_voice, default_length)
+            if current_voice is not None
+            else default_length
+        )
+        output.append(_scale_abc_body_lengths(line[position:], base_length / target_length))
+    if not output:
+        return _scale_abc_body_lengths(line, default_length / target_length)
+    return "".join(output)
+
+
+def normalize_abc_default_length(text: str, target_length: Fraction | str = Fraction(1, 8)) -> str:
+    """Normalize ABC ``L:`` default note lengths while preserving durations.
+
+    NotaGen generation is empirically calibrated around ``L:1/8``. For SFT
+    retrains we canonicalize the training ABC to that default length and rewrite
+    body note/chord/rest length suffixes so meter and renderable duration remain
+    equivalent to the source.
+    """
+
+    if not isinstance(target_length, Fraction):
+        target_length = _parse_fraction_token(str(target_length), Fraction(1, 8))
+    if target_length <= 0:
+        raise ValueError(f"target_length must be positive, got {target_length}")
+
+    default_length = Fraction(1, 8)
+    voice_lengths: dict[int, Fraction] = {}
+    current_voice: int | None = None
+    in_body = False
+    changed = False
+    output_lines: list[str] = []
+
+    for raw_line in text.splitlines(keepends=True):
+        line_body = raw_line[:-1] if raw_line.endswith("\n") else raw_line
+        newline = "\n" if raw_line.endswith("\n") else ""
+        stripped = line_body.lstrip()
+        is_stream_body = stripped.startswith("[r:") or stripped.startswith("[V:")
+        is_header_directive = HEADER_DIRECTIVE_RE.match(stripped) is not None
+
+        if in_body and is_header_directive:
+            default_length = Fraction(1, 8)
+            voice_lengths = {}
+            current_voice = None
+            in_body = False
+
+        if not in_body and not is_stream_body:
+            voice_match = re.match(r"^\s*V:(\d+)", line_body)
+            if voice_match:
+                current_voice = int(voice_match.group(1))
+                voice_lengths.setdefault(current_voice, default_length)
+
+            length_match = re.match(r"^(\s*L:\s*)(\S+)(.*)$", line_body)
+            if length_match:
+                source_length = _parse_fraction_token(length_match.group(2), default_length)
+                if current_voice is None:
+                    default_length = source_length
+                else:
+                    voice_lengths[current_voice] = source_length
+                normalized_line = f"{length_match.group(1)}{target_length}{length_match.group(3)}"
+                output_lines.append(normalized_line + newline)
+                changed = changed or normalized_line != line_body
+                continue
+
+            output_lines.append(raw_line)
+            continue
+
+        in_body = True
+        normalized_body = _scale_abc_stream_line_lengths(
+            line_body,
+            default_length=default_length,
+            voice_lengths=voice_lengths,
+            target_length=target_length,
+        )
+        output_lines.append(normalized_body + newline)
+        changed = changed or normalized_body != line_body
+
+    if not changed:
+        return text
+    return "".join(output_lines)
+
+
 def _voice_segment_duration(segment: str, base_length: Fraction) -> Fraction:
     cleaned = re.sub(r'"[^"\n]*"', " ", segment)
     cleaned = re.sub(r"![^!\n]*!", " ", cleaned)
@@ -403,7 +616,11 @@ def expand_notagen_rest_omitted_voice_segments(text: str) -> str:
     return "".join(output_lines)
 
 
-def preprocess_notagen_abc(text: str) -> str:
+def preprocess_notagen_abc(
+    text: str,
+    *,
+    target_default_length: Fraction | str | None = None,
+) -> str:
     """Apply explicit dataset-level preprocessing to NotaGen ABC.
 
     This step is intentionally separate from reward scoring. Run it before SFT
@@ -412,6 +629,8 @@ def preprocess_notagen_abc(text: str) -> str:
     """
 
     text = strip_unsupported_abc_instructions(text)
+    if target_default_length is not None:
+        text = normalize_abc_default_length(text, target_default_length)
     text = expand_notagen_rest_omitted_voice_segments(text)
     text = strip_dangling_terminal_ties(text)
     return text

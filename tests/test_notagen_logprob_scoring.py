@@ -11,6 +11,10 @@ try:
         patch_logprobs,
         trajectory_logprob_chunks,
     )
+    from notagen_runtime.notagen_replay import (
+        batched_trajectory_token_log_dists,
+        exact_categorical_kl,
+    )
     from utils import NotaGenLMHeadModel
 except ModuleNotFoundError as exc:
     torch = None
@@ -167,6 +171,64 @@ class NotaGenLogprobScoringTests(unittest.TestCase):
                 chunk_patches,
                 replay_context_patches=5,
             )
+
+    def assert_token_dists_match_selected_logprobs(self, prompt_ids, generated_batch, chunk_patches):
+        torch.manual_seed(0)
+        model = _tiny_notagen()
+        with torch.no_grad():
+            expected = batched_trajectory_logprobs(
+                model,
+                prompt_ids,
+                generated_batch,
+                precision="fp32",
+                replay_context_patches=0,
+                target_chunk_patches=chunk_patches,
+            )
+            actual = batched_trajectory_token_log_dists(
+                model,
+                prompt_ids,
+                generated_batch,
+                precision="fp32",
+                replay_context_patches=0,
+                target_chunk_patches=chunk_patches,
+            )
+        self.assertEqual(len(expected), len(actual))
+        special = model.special_token_id
+        for sample_idx, (exp, replay, generated_patches) in enumerate(zip(expected, actual, generated_batch, strict=True)):
+            target_tokens = torch.tensor(
+                [tok for patch in generated_patches for tok in patch if tok != special],
+                dtype=torch.long,
+            )
+            self.assertEqual(exp.shape[0], target_tokens.shape[0], msg=f"sample_idx={sample_idx}")
+            self.assertEqual(replay.token_log_dists.shape[0], target_tokens.shape[0], msg=f"sample_idx={sample_idx}")
+            selected = replay.token_log_dists.cpu().gather(dim=-1, index=target_tokens[:, None]).squeeze(-1)
+            self.assertTrue(
+                torch.allclose(exp.cpu(), selected, atol=1e-5, rtol=1e-5),
+                msg=f"sample_idx={sample_idx} chunk_patches={chunk_patches} max_abs={(exp.cpu() - selected).abs().max().item()}",
+            )
+            kl_self = exact_categorical_kl(replay.token_log_dists, replay.token_log_dists)
+            self.assertLess(abs(float(kl_self.detach().cpu())), 1e-7)
+
+    def test_batched_token_distributions_match_selected_logprobs(self):
+        prompt_ids = [3 + (i % 80) for i in range(PATCH_SIZE * 4)]
+        generated_batch = [
+            [[11 + ((patch_idx * 17 + i) % 50) for i in range(PATCH_SIZE)] for patch_idx in range(2)],
+            [[19 + ((patch_idx * 13 + i) % 60) for i in range(PATCH_SIZE)] for patch_idx in range(5)],
+        ]
+        for chunk_patches in (0, 1, 4):
+            self.assert_token_dists_match_selected_logprobs(prompt_ids, generated_batch, chunk_patches)
+
+    def test_batched_token_distributions_match_selected_logprobs_for_unaligned_prompt(self):
+        prompt_ids = [3 + (i % 80) for i in range(PATCH_SIZE * 3 + 5)]
+        first_patch_len = PATCH_SIZE - 5
+        generated_batch = [
+            [[11 + (i % 50) for i in range(first_patch_len)]]
+            + [[23 + ((patch_idx * 11 + i) % 50) for i in range(PATCH_SIZE)] for patch_idx in range(2)],
+            [[31 + (i % 40) for i in range(first_patch_len)]]
+            + [[41 + ((patch_idx * 9 + i) % 40) for i in range(PATCH_SIZE)] for patch_idx in range(4)],
+        ]
+        for chunk_patches in (0, 1, 3):
+            self.assert_token_dists_match_selected_logprobs(prompt_ids, generated_batch, chunk_patches)
 
 
 if __name__ == "__main__":

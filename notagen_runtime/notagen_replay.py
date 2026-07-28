@@ -1,12 +1,19 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
+from dataclasses import dataclass
 from typing import Any
 
 import torch
 
 
 PATCH_SIZE = 16
+
+
+@dataclass
+class TokenDistributionReplay:
+    token_log_dists: torch.Tensor
+    token_counts: torch.Tensor
 
 
 def autocast_context(device: torch.device, precision: str):
@@ -24,6 +31,17 @@ def normalize_patch_for_context(patch: list[int], eos_token_id: int, special_tok
         if tok == eos_token_id:
             patch_end = True
     return out
+
+
+def normalize_and_pad_patch_for_context(patch: list[int], eos_token_id: int, special_token_id: int) -> list[int]:
+    return _pad_generated_patch(
+        normalize_patch_for_context(
+            patch,
+            eos_token_id=eos_token_id,
+            special_token_id=special_token_id,
+        ),
+        special_token_id,
+    )
 
 
 def _encoded_last_patch(
@@ -105,6 +123,52 @@ def patch_logprobs(
         )
 
     return all_logprobs
+
+
+def patch_token_log_dists(
+    model: Any,
+    flat_prompt_ids: list[int],
+    generated_patches: list[list[int]],
+    precision: str,
+    replay_context_patches: int | None = None,
+) -> list[torch.Tensor]:
+    device = next(model.parameters()).device
+    current_ids = list(flat_prompt_ids)
+    all_log_dists: list[torch.Tensor] = []
+
+    for patch in generated_patches:
+        encoded_patch, tokens = _encoded_last_patch(
+            model,
+            current_ids,
+            device,
+            precision,
+            replay_context_patches=replay_context_patches,
+        )
+        for tok in patch:
+            if tok == model.special_token_id:
+                break
+            token_embeddings = torch.nn.functional.embedding(
+                tokens.reshape(1, -1),
+                model.char_level_decoder.base.transformer.wte.weight,
+            )
+            inputs_embeds = torch.cat((encoded_patch.reshape(1, 1, -1), token_embeddings[:, 1:, :]), dim=1)
+            with autocast_context(device, precision):
+                outputs = model.char_level_decoder.base(inputs_embeds=inputs_embeds)
+                logits = outputs.logits[0, -1]
+            all_log_dists.append(torch.log_softmax(logits.float(), dim=-1))
+            if len(tokens) >= PATCH_SIZE:
+                break
+            tokens = torch.cat((tokens, torch.tensor([tok], device=device, dtype=torch.long)), dim=0)
+
+        current_ids.extend(
+            normalize_patch_for_context(
+                patch,
+                eos_token_id=model.eos_token_id,
+                special_token_id=model.special_token_id,
+            )
+        )
+
+    return all_log_dists
 
 
 def char_patch_logprobs(
@@ -243,7 +307,7 @@ def tail_encoded_targets(
     error_context: str = "trajectory replay",
 ) -> tuple[torch.Tensor, list[list[int]]]:
     normalized_prefix = [
-        normalize_patch_for_context(
+        normalize_and_pad_patch_for_context(
             patch,
             eos_token_id=model.eos_token_id,
             special_token_id=model.special_token_id,
@@ -305,7 +369,7 @@ def batched_tail_encoded_targets(
             chunk_end = min(chunk_end, chunk_start + target_chunk_patches)
 
         normalized_prefix = [
-            normalize_patch_for_context(
+            normalize_and_pad_patch_for_context(
                 patch,
                 eos_token_id=model.eos_token_id,
                 special_token_id=special_token_id,
@@ -408,6 +472,65 @@ def batched_tail_logprobs_chunk(
     return dict(zip(sample_indices, split_logprobs, strict=True))
 
 
+def batched_tail_token_log_dist_chunk(
+    model: Any,
+    current_ids_batch: list[list[int]],
+    remaining_patches_batch: list[list[list[int]]],
+    chunk_start: int,
+    target_chunk_patches: int,
+    precision: str,
+    replay_context_patches: int | None = None,
+    replay_batch_size: int = 0,
+) -> dict[int, TokenDistributionReplay]:
+    payload = batched_tail_encoded_targets(
+        model=model,
+        current_ids_batch=current_ids_batch,
+        remaining_patches_batch=remaining_patches_batch,
+        chunk_start=chunk_start,
+        target_chunk_patches=target_chunk_patches,
+        precision=precision,
+        replay_context_patches=replay_context_patches,
+        replay_batch_size=replay_batch_size,
+        detach_policy=True,
+        error_context="batched token-distribution replay",
+    )
+    if not payload:
+        return {}
+
+    sample_indices: list[int] = []
+    encoded_targets: list[torch.Tensor] = []
+    target_patches: list[list[int]] = []
+    patch_counts: list[int] = []
+    for sample_idx, (encoded, targets) in payload.items():
+        sample_indices.append(sample_idx)
+        encoded_targets.append(encoded)
+        target_patches.extend(targets)
+        patch_counts.append(len(targets))
+
+    encoded_target_tensor = torch.cat(encoded_targets, dim=0)
+    _flat_logprobs, token_log_dists, token_counts = char_patch_token_logprobs_dists_and_counts(
+        model,
+        encoded_target_tensor,
+        target_patches,
+        precision,
+    )
+    split_token_counts = split_tensor_by_counts(token_counts, patch_counts)
+    token_sample_counts = [int(counts.detach().sum().cpu()) for counts in split_token_counts]
+    split_token_log_dists = split_tensor_by_counts(token_log_dists, token_sample_counts)
+    return {
+        sample_idx: TokenDistributionReplay(
+            token_log_dists=sample_token_log_dists,
+            token_counts=sample_token_counts,
+        )
+        for sample_idx, sample_token_log_dists, sample_token_counts in zip(
+            sample_indices,
+            split_token_log_dists,
+            split_token_counts,
+            strict=True,
+        )
+    }
+
+
 def batched_trajectory_logprobs(
     model: Any,
     flat_prompt_ids: list[int],
@@ -473,6 +596,99 @@ def batched_trajectory_logprobs(
         else:
             result.append(torch.empty(0, device=device))
     return result
+
+
+def batched_trajectory_token_log_dists(
+    model: Any,
+    flat_prompt_ids: list[int],
+    generated_patches_batch: list[list[list[int]]],
+    precision: str,
+    replay_context_patches: int | None = None,
+    target_chunk_patches: int = 0,
+    replay_batch_size: int = 0,
+) -> list[TokenDistributionReplay]:
+    current_ids_batch = [list(flat_prompt_ids) for _ in generated_patches_batch]
+    remaining_batch: list[list[list[int]]] = []
+    prefix_log_dists: list[list[torch.Tensor]] = [[] for _ in generated_patches_batch]
+    prefix_token_counts: list[list[int]] = [[] for _ in generated_patches_batch]
+
+    for sample_idx, generated_patches in enumerate(generated_patches_batch):
+        current_ids = current_ids_batch[sample_idx]
+        start_idx = 0
+        while start_idx < len(generated_patches) and len(current_ids) % PATCH_SIZE != 0:
+            patch = generated_patches[start_idx]
+            log_dist_list = patch_token_log_dists(
+                model,
+                current_ids,
+                [patch],
+                precision,
+                replay_context_patches=replay_context_patches,
+            )
+            if log_dist_list:
+                prefix_log_dists[sample_idx].append(torch.stack(log_dist_list))
+                prefix_token_counts[sample_idx].append(len(log_dist_list))
+            current_ids.extend(
+                normalize_patch_for_context(
+                    patch,
+                    eos_token_id=model.eos_token_id,
+                    special_token_id=model.special_token_id,
+                )
+            )
+            start_idx += 1
+        current_ids_batch[sample_idx] = current_ids
+        remaining_batch.append(generated_patches[start_idx:])
+
+    outputs: list[list[torch.Tensor]] = [chunks[:] for chunks in prefix_log_dists]
+    output_counts: list[list[int]] = [counts[:] for counts in prefix_token_counts]
+    max_remaining = max((len(remaining) for remaining in remaining_batch), default=0)
+    chunk_size = max_remaining if target_chunk_patches <= 0 else target_chunk_patches
+    if chunk_size > 0:
+        for chunk_start in range(0, max_remaining, chunk_size):
+            chunk_payload = batched_tail_token_log_dist_chunk(
+                model,
+                current_ids_batch,
+                remaining_batch,
+                chunk_start,
+                target_chunk_patches,
+                precision,
+                replay_context_patches=replay_context_patches,
+                replay_batch_size=replay_batch_size,
+            )
+            for sample_idx, replay in chunk_payload.items():
+                if replay.token_log_dists.shape[0] > 0:
+                    outputs[sample_idx].append(replay.token_log_dists)
+                    output_counts[sample_idx].extend([int(item) for item in replay.token_counts.detach().cpu().tolist()])
+
+    result: list[TokenDistributionReplay] = []
+    device = next(model.parameters()).device
+    for chunks, counts in zip(outputs, output_counts, strict=True):
+        if chunks:
+            token_log_dists = torch.cat(chunks)
+        else:
+            token_log_dists = torch.empty((0, model.char_level_decoder.base.config.vocab_size), device=device)
+        result.append(
+            TokenDistributionReplay(
+                token_log_dists=token_log_dists,
+                token_counts=torch.tensor(counts, device=device, dtype=torch.long),
+            )
+        )
+    return result
+
+
+def exact_categorical_kl(policy_log_dists: torch.Tensor, reference_log_dists: torch.Tensor) -> torch.Tensor:
+    if policy_log_dists.shape != reference_log_dists.shape:
+        raise RuntimeError(
+            "exact categorical KL shape mismatch: "
+            f"policy={tuple(policy_log_dists.shape)} reference={tuple(reference_log_dists.shape)}"
+        )
+    if policy_log_dists.ndim != 2:
+        raise RuntimeError(f"exact categorical KL expects [tokens, vocab], got {tuple(policy_log_dists.shape)}")
+    if policy_log_dists.shape[0] == 0:
+        raise RuntimeError("exact categorical KL needs at least one generated token")
+    policy_log_dists = policy_log_dists.float()
+    reference_log_dists = reference_log_dists.detach().float()
+    policy_probs = policy_log_dists.exp()
+    return (policy_probs * (policy_log_dists - reference_log_dists)).sum(dim=-1).mean()
 
 
 def tail_logprobs_chunk(

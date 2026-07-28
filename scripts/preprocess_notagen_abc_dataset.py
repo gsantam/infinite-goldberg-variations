@@ -21,7 +21,11 @@ INDEX_NAMES = (
 )
 
 
-def preprocess_augmented_abc(source_root: Path, out_root: Path) -> dict[str, int]:
+def preprocess_augmented_abc(
+    source_root: Path,
+    out_root: Path,
+    target_default_length: str | None = None,
+) -> dict[str, int]:
     source_augmented = source_root / "augmented"
     out_augmented = out_root / "augmented"
     if not source_augmented.is_dir():
@@ -34,7 +38,7 @@ def preprocess_augmented_abc(source_root: Path, out_root: Path) -> dict[str, int
         out_path = out_augmented / rel_path
         out_path.parent.mkdir(parents=True, exist_ok=True)
         source_text = source_path.read_text(encoding="utf-8")
-        out_text = preprocess_notagen_abc(source_text)
+        out_text = preprocess_notagen_abc(source_text, target_default_length=target_default_length)
         out_path.write_text(out_text, encoding="utf-8")
         files += 1
         changed += int(out_text != source_text)
@@ -100,6 +104,14 @@ def main() -> int:
         action="store_true",
         help="Allow writing into an existing output root.",
     )
+    parser.add_argument(
+        "--target-default-length",
+        default=None,
+        help=(
+            "Optionally normalize ABC L: default note lengths to this value, "
+            "for example 1/8, while rescaling body durations."
+        ),
+    )
     args = parser.parse_args()
 
     source_root = args.source_root.resolve()
@@ -110,7 +122,11 @@ def main() -> int:
         raise FileExistsError(f"output root is not empty: {out_root}")
     out_root.mkdir(parents=True, exist_ok=True)
 
-    abc_stats = preprocess_augmented_abc(source_root, out_root)
+    abc_stats = preprocess_augmented_abc(
+        source_root,
+        out_root,
+        target_default_length=args.target_default_length,
+    )
     index_counts = preprocess_indices(source_root, out_root)
     copied_metadata = copy_metadata_files(source_root, out_root)
 
@@ -119,7 +135,13 @@ def main() -> int:
         "out_root": str(out_root),
         "preprocessing": [
             "strip_unsupported_abc_instructions",
+            *(
+                [f"normalize_abc_default_length:{args.target_default_length}"]
+                if args.target_default_length is not None
+                else []
+            ),
             "expand_notagen_rest_omitted_voice_segments",
+            "strip_dangling_terminal_ties",
         ],
         "abc": abc_stats,
         "indices": index_counts,
