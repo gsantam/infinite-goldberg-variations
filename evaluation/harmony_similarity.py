@@ -72,24 +72,44 @@ def parse_bar_notes(bar: str) -> list[tuple[int, int, float]]:
     return [note_midi_pc(match) for match in NOTE_RE.finditer(strip_inline_tags(bar))]
 
 
+def strip_stream_tag(line: str) -> str:
+    return re.sub(r"^\[r:\d+/\d+\]\s*", "", line.strip())
+
+
 def voice_bars_from_text(text: str) -> list[list[str]]:
-    voices: list[list[str]] = []
+    voices: dict[str, list[str]] = {}
+    current_voice: str | None = None
     for raw_line in text.splitlines():
-        line = raw_line.strip()
-        if not line.startswith("[V:"):
+        line = strip_stream_tag(raw_line)
+        if not line:
             continue
-        body = re.sub(r"^\[V:[^\]]+\]\s*", "", line)
+
+        voice_header = re.match(r"^V:([^\s]+)\s*(.*)$", line)
+        if voice_header:
+            current_voice = voice_header.group(1)
+            line = voice_header.group(2).strip()
+            if not line:
+                continue
+
+        inline_voice = re.match(r"^\[V:([^\]]+)\]\s*(.*)$", line)
+        if inline_voice:
+            current_voice = inline_voice.group(1).split()[0]
+            line = inline_voice.group(2).strip()
+
+        if current_voice is None or "|" not in line:
+            continue
+        body = line
         parts = re.split(r"\|+", body)
         bars = [part.strip(" []") for part in parts if part.strip(" []")]
         if bars:
-            voices.append(bars)
-    return voices
+            voices.setdefault(current_voice, []).extend(bars)
+    return list(voices.values())
 
 
 def stream_bars_from_text(text: str) -> list[str]:
     bars = []
     for raw_line in text.splitlines():
-        line = raw_line.strip()
+        line = strip_stream_tag(raw_line)
         if line.startswith("[V:") and "|" in line:
             bars.append(line)
     return bars
@@ -104,10 +124,9 @@ def looks_like_stream_bars(text: str) -> bool:
         match = re.match(r"^\[V:([^\]]+)\]", line)
         if match:
             voice_ids.append(match.group(1))
-    repeated_leading_voice = len(voice_ids) != len(set(voice_ids))
     mostly_single_bar_lines = sum(line.count("|") <= 2 for line in bars) >= len(bars) * 0.75
     multi_voice_stream_lines = sum(line.count("[V:") > 1 for line in bars) >= len(bars) * 0.25
-    return repeated_leading_voice or mostly_single_bar_lines or multi_voice_stream_lines
+    return mostly_single_bar_lines or multi_voice_stream_lines
 
 
 def piece_bars_from_text(text: str) -> list[list[tuple[int, int, float]]]:
