@@ -123,7 +123,7 @@ python3 - <<'PY'
 import json
 from pathlib import Path
 
-root = Path("data/processed/notagen/goldberg_metadata_only_split2")
+root = Path("data/processed/notagen/goldberg_metadata_only_split2_l18")
 src = root / "header_prefix_manifest_G.jsonl"
 out = Path("data/processed/notagen/goldberg_ppo_prompts_e3_header_allvoices.jsonl")
 
@@ -147,6 +147,63 @@ PY
 ```
 
 Keep the `source` or `continuation` fields in each prompt row. PPO uses them to load the prompt-specific NotaGen structure target for `bar_count_reward` and rollout stopping length. `--target-structure-abc` is only a fallback for prompt rows that do not provide their own target path. This matters because the Goldberg NotaGen structure-line count is variation-dependent after preprocessing/augmentation.
+
+## Normalized-L SFT Checkpoint Selection
+
+For PPO, use E3 SFT: metadata + header, all voices, no aria. The data and PPO prompts must come from `goldberg_metadata_only_split2_l18`, where all ABC `L:` default lengths are normalized to `1/8` and durations are rescaled.
+
+Train longer than we expect to use, retain every epoch checkpoint, and select the epoch from a fixed PPO-like eval set rather than from train/eval loss alone. The eval set should use the same prompt type as PPO, fixed seeds, and all 30 Goldberg prompts. A good first run is 10 epochs with 60 samples per epoch, which gives two fixed seeds per prompt.
+
+```bash
+RUN_DIR=data/processed/notagen/remote_runs/SFT_E3_L18_fixedeval_$(date -u +%Y%m%dT%H%M%SZ)
+mkdir -p "$RUN_DIR"
+
+$REMOTE_PY scripts/run_notagen_sft_epoch_sampling.py \
+  --notagen-dir "$REMOTE_NOTAGEN" \
+  --project-dir "$REMOTE_REPO" \
+  --venv-python "$REMOTE_PY" \
+  --pretrained "$REMOTE_ROOT/models/weights_notagen_pretrain-finetune_p_size_16_p_length_1024_p_layers_c_layers_6_20_h_size_1280_lr_1e-05_batch_1.pth" \
+  --train-jsonl data/processed/notagen/goldberg_metadata_only_split2_l18/augmented_train.jsonl \
+  --eval-jsonl data/processed/notagen/goldberg_metadata_only_split2_l18/augmented_eval.jsonl \
+  --train-prefix-mask-root data/processed/notagen/goldberg_metadata_only_split2_l18/prefix_mask \
+  --train-prefix-mask-source-root data/processed/notagen/goldberg_metadata_only_split2_l18/augmented \
+  --train-prefix-mask-manifest data/processed/notagen/goldberg_metadata_only_split2_l18/prefix_mask_manifest.jsonl \
+  --prefix-manifest data/processed/notagen/goldberg_metadata_only_split2_l18/header_prefix_manifest_G.jsonl \
+  --reward-target-json data/processed/goldberg/structure/aria_bar_skeleton.json \
+  --reward-target-structure-abc data/processed/notagen/goldberg_metadata_only_split2_l18/augmented/G/variation-01_G.abc \
+  --aria-reference data/processed/goldberg/abc/aria-bwv-988.abc \
+  --output-dir "$RUN_DIR" \
+  --epochs 10 \
+  --samples-per-epoch 60 \
+  --max-generation-attempts 90 \
+  --sampling-batch-size 16 \
+  --prefix-shuffle-seed 0 \
+  --save-epoch-checkpoints \
+  --exact-pretrained-kl \
+  --exact-kl-score-chunk-patches 64 \
+  --exact-kl-replay-context-patches 128 \
+  --exact-kl-replay-batch-size 4 \
+  --lr 1e-6 \
+  --batch-size 1 \
+  --grad-accumulation-steps 1 \
+  --target-stream-lines 32 \
+  --temperature 1.0 \
+  --top-k 8 \
+  --top-p 0.95 \
+  --max-generated-patches 256 \
+  --timeout-s 900 \
+  --precision bf16 \
+  --skip-clamp2 \
+  --aria-chroma-reward-weight 0 \
+  --aria-harmony-reward-weight 1
+```
+
+Selection rule:
+
+- Hard reject epochs with nonzero `meter_half`/`meter_double` spikes or prompt-specific exact-meter failures.
+- Among the remaining epochs, prefer high `mean_reward`, high `mean_structural_total_reward`, high `mean_effective_similarity_reward`, and low eval loss.
+- Track `mean_exact_kl_to_pretrained`; use it as a drift guard, not as the primary objective. If two epochs have similar reward/structure, choose the lower-KL epoch.
+- Do not choose by train loss alone. In previous SFT sweeps, train/eval loss could keep improving while meter behavior degraded.
 
 ## PPO Objective
 
@@ -224,8 +281,8 @@ rsync -az -e "$RSYNC_RSH" \
   "$HOST:$REMOTE_REPO/data/processed/goldberg/"
 
 rsync -az -e "$RSYNC_RSH" \
-  data/processed/notagen/goldberg_metadata_only_split2/ \
-  "$HOST:$REMOTE_REPO/data/processed/notagen/goldberg_metadata_only_split2/"
+  data/processed/notagen/goldberg_metadata_only_split2_l18/ \
+  "$HOST:$REMOTE_REPO/data/processed/notagen/goldberg_metadata_only_split2_l18/"
 
 rsync -az -e "$RSYNC_RSH" \
   data/processed/notagen/goldberg_ppo_prompts_e3_header_allvoices.jsonl \
@@ -234,13 +291,13 @@ rsync -az -e "$RSYNC_RSH" \
 
 Do not sync `.venv`, rendered audio, all checkpoints, or old remote runs.
 
-The `model-sft` snapshot already contained the E3 SFT checkpoint here:
+The PPO SFT baseline should be the normalized-`L` E3 checkpoint here:
 
 ```text
-data/processed/notagen/remote_runs/E3_metadata_header_allvoices_noaug_e8_s0_rebuild_20260702_142840/checkpoints/current.pth
+data/processed/notagen/remote_runs/SFT_E3_L18_variant_compare_retry_20260728T120959Z/E3_L18_canonical/checkpoints/current.pth
 ```
 
-Use that path for PPO before uploading the local 5.8 GB checkpoint.
+If the remote machine does not already have it, upload this local 5.8 GB checkpoint once before launching PPO. Do not fall back to the older mixed-`L` E3 checkpoint for PPO meter experiments.
 
 ## One-Step PPO Dry Run
 
@@ -251,9 +308,9 @@ $SSH "$HOST" "cd $REMOTE_REPO && \
   export PYTHONPATH=$REMOTE_NOTAGEN:$REMOTE_REPO:\$PYTHONPATH && \
   mkdir -p data/processed/notagen/remote_runs && \
   $REMOTE_PY scripts/custom_ppo_notagen.py \
-    --policy-weights data/processed/notagen/remote_runs/E3_metadata_header_allvoices_noaug_e8_s0_rebuild_20260702_142840/checkpoints/current.pth \
+    --policy-weights data/processed/notagen/remote_runs/SFT_E3_L18_variant_compare_retry_20260728T120959Z/E3_L18_canonical/checkpoints/current.pth \
     --prompts-jsonl data/processed/notagen/goldberg_ppo_prompts_e3_header_allvoices.jsonl \
-    --target-structure-abc data/processed/notagen/goldberg_metadata_only_split2/augmented/G/variation-01_G.abc \
+    --target-structure-abc data/processed/notagen/goldberg_metadata_only_split2_l18/augmented/G/variation-01_G.abc \
     --output-json data/processed/notagen/remote_runs/ppo_e3_dryrun_\$(date -u +%Y%m%dT%H%M%SZ).json \
     --max-steps 1 \
     --prompt-limit 1 \
@@ -399,9 +456,9 @@ Collect critic data cheaply on Thunder with rollout-only mode. This samples and 
 $SSH "$HOST" "cd $REMOTE_REPO && \
   export PYTHONPATH=$REMOTE_NOTAGEN:$REMOTE_REPO:\$PYTHONPATH && \
   $REMOTE_PY scripts/custom_ppo_notagen.py \
-    --policy-weights data/processed/notagen/remote_runs/E3_metadata_header_allvoices_noaug_e8_s0_rebuild_20260702_142840/checkpoints/current.pth \
+    --policy-weights data/processed/notagen/remote_runs/SFT_E3_L18_variant_compare_retry_20260728T120959Z/E3_L18_canonical/checkpoints/current.pth \
     --prompts-jsonl data/processed/notagen/goldberg_ppo_prompts_e3_header_allvoices.jsonl \
-    --target-structure-abc data/processed/notagen/goldberg_metadata_only_split2/augmented/G/variation-01_G.abc \
+    --target-structure-abc data/processed/notagen/goldberg_metadata_only_split2_l18/augmented/G/variation-01_G.abc \
     --output-json data/processed/notagen/remote_runs/ppo_e3_rollout_only.json \
     --max-steps 3 \
     --prompt-limit 3 \
@@ -415,11 +472,44 @@ $SSH "$HOST" "cd $REMOTE_REPO && \
     --target-stream-lines 32"
 ```
 
+For prompt-effect debugging, keep the policy, decoding settings, reward code, and number of trajectories fixed, but repeat one selected prompt across the whole step. This isolates prompt-conditioned structural reward variance:
+
+```bash
+$SSH "$HOST" "cd $REMOTE_REPO && \
+  export PYTHONPATH=$REMOTE_NOTAGEN:$REMOTE_REPO:\$PYTHONPATH && \
+  RUN_DIR=data/processed/notagen/remote_runs/ppo_e3_prompt_structural_sweep_\$(date -u +%Y%m%dT%H%M%SZ) && \
+  mkdir -p \$RUN_DIR && \
+  $REMOTE_PY scripts/custom_ppo_notagen.py \
+    --policy-weights data/processed/notagen/remote_runs/SFT_E3_L18_variant_compare_retry_20260728T120959Z/E3_L18_canonical/checkpoints/current.pth \
+    --prompts-jsonl data/processed/notagen/goldberg_ppo_prompts_e3_header_allvoices.jsonl \
+    --target-structure-abc data/processed/notagen/goldberg_metadata_only_split2_l18/augmented/G/variation-01_G.abc \
+    --output-json \$RUN_DIR/result.json \
+    --max-steps 30 \
+    --prompt-limit 30 \
+    --prompt-selection ordered \
+    --prompt-batch-mode step \
+    --rollout-seed-scope run \
+    --trajectories-per-step 16 \
+    --rollout-batch-size 16 \
+    --rollout-only \
+    --cached-rollout \
+    --precision bf16 \
+    --max-generated-patches 256 \
+    --timeout-s 900 \
+    --rollout-failure-policy spares \
+    --rollout-spares-percent 10 \
+    --parse-validation-mode abc-tokenize \
+    --aria-chroma-reward-weight 0 \
+    --aria-harmony-reward-weight 0"
+```
+
+In this mode, step 1 scores all trajectories for prompt 1, step 2 scores all trajectories for prompt 2, and so on. The resulting `result.json` records `prompt_batch_mode: "step"` and `prompt_batch_multiple_prompts: false` for each step. If structural reward still varies strongly, the cause is prompt/header/target-conditioned behavior, not mixed-prompt batching or PPO updates.
+
 First precompute frozen SFT patch hidden states and train a critic:
 
 ```bash
 python scripts/train_notagen_ppo_value_head_offline.py \
-  --policy-weights data/processed/notagen/remote_runs/E3_metadata_header_allvoices_noaug_e8_s0_rebuild_20260702_142840/checkpoints/current.pth \
+  --policy-weights data/processed/notagen/remote_runs/SFT_E3_L18_variant_compare_retry_20260728T120959Z/E3_L18_canonical/checkpoints/current.pth \
   --ppo-json data/processed/notagen/remote_runs/<ppo_run_with_generated_patches>.json \
   --prompts-jsonl data/processed/notagen/goldberg_ppo_prompts_e3_header_allvoices.jsonl \
   --hidden-cache-out data/processed/notagen/remote_runs/ppo_value_hidden_cache.pt \
@@ -477,7 +567,7 @@ The matching command shape is:
 python scripts/train_notagen_ppo_value_head_offline.py \
   --ppo-json data/processed/notagen/remote_runs/ppo_e3_rollout_only_t200_seedfix_20260712T135300Z_combined.json \
   --prompts-jsonl data/processed/notagen/goldberg_ppo_prompts_e3_header_allvoices.jsonl \
-  --policy-weights data/processed/notagen/remote_runs/E3_metadata_header_allvoices_noaug_e8_s0_rebuild_20260702_142840/checkpoints/current.pth \
+  --policy-weights data/processed/notagen/remote_runs/SFT_E3_L18_variant_compare_retry_20260728T120959Z/E3_L18_canonical/checkpoints/current.pth \
   --output-value-head data/processed/notagen/remote_runs/ppo_e3_rollout_only_t200_seedfix_20260712T135300Z_combined_full_reward_value_head_e80_all200.pt \
   --output-json data/processed/notagen/remote_runs/ppo_e3_rollout_only_t200_seedfix_20260712T135300Z_combined_full_reward_value_head_e80_all200.json \
   --epochs 80 \
@@ -528,9 +618,9 @@ Remove `--no-step` to perform one optimizer update:
 $SSH "$HOST" "cd $REMOTE_REPO && \
   export PYTHONPATH=$REMOTE_NOTAGEN:$REMOTE_REPO:\$PYTHONPATH && \
   $REMOTE_PY scripts/custom_ppo_notagen.py \
-    --policy-weights data/processed/notagen/remote_runs/E3_metadata_header_allvoices_noaug_e8_s0_rebuild_20260702_142840/checkpoints/current.pth \
+    --policy-weights data/processed/notagen/remote_runs/SFT_E3_L18_variant_compare_retry_20260728T120959Z/E3_L18_canonical/checkpoints/current.pth \
     --prompts-jsonl data/processed/notagen/goldberg_ppo_prompts_e3_header_allvoices.jsonl \
-    --target-structure-abc data/processed/notagen/goldberg_metadata_only_split2/augmented/G/variation-01_G.abc \
+    --target-structure-abc data/processed/notagen/goldberg_metadata_only_split2_l18/augmented/G/variation-01_G.abc \
     --output-json data/processed/notagen/remote_runs/ppo_e3_step1_\$(date -u +%Y%m%dT%H%M%SZ).json \
     --max-steps 1 \
     --prompt-limit 1 \
@@ -558,9 +648,9 @@ $SSH "$HOST" "cd $REMOTE_REPO && \
   OUT=data/processed/notagen/remote_runs/ppo_e3_step1_t4_batch4_\$(date -u +%Y%m%dT%H%M%SZ).json && \
   LOG=\${OUT%.json}.log && \
   $REMOTE_PY scripts/custom_ppo_notagen.py \
-    --policy-weights data/processed/notagen/remote_runs/E3_metadata_header_allvoices_noaug_e8_s0_rebuild_20260702_142840/checkpoints/current.pth \
+    --policy-weights data/processed/notagen/remote_runs/SFT_E3_L18_variant_compare_retry_20260728T120959Z/E3_L18_canonical/checkpoints/current.pth \
     --prompts-jsonl data/processed/notagen/goldberg_ppo_prompts_e3_header_allvoices.jsonl \
-    --target-structure-abc data/processed/notagen/goldberg_metadata_only_split2/augmented/G/variation-01_G.abc \
+    --target-structure-abc data/processed/notagen/goldberg_metadata_only_split2_l18/augmented/G/variation-01_G.abc \
     --output-json \$OUT \
     --max-steps 1 \
     --prompt-limit 1 \
@@ -609,9 +699,9 @@ $SSH "$HOST" "cd $REMOTE_REPO && \
   RUN_DIR=data/processed/notagen/remote_runs/ppo_e3_full_update_t16_mb4_\$(date -u +%Y%m%dT%H%M%SZ) && \
   mkdir -p \$RUN_DIR && \
   $REMOTE_PY scripts/custom_ppo_notagen.py \
-    --policy-weights data/processed/notagen/remote_runs/E3_metadata_header_allvoices_noaug_e8_s0_rebuild_20260702_142840/checkpoints/current.pth \
+    --policy-weights data/processed/notagen/remote_runs/SFT_E3_L18_variant_compare_retry_20260728T120959Z/E3_L18_canonical/checkpoints/current.pth \
     --prompts-jsonl data/processed/notagen/goldberg_ppo_prompts_e3_header_allvoices.jsonl \
-    --target-structure-abc data/processed/notagen/goldberg_metadata_only_split2/augmented/G/variation-01_G.abc \
+    --target-structure-abc data/processed/notagen/goldberg_metadata_only_split2_l18/augmented/G/variation-01_G.abc \
     --output-json \$RUN_DIR/result.json \
     --max-steps 1 \
     --prompt-limit 1 \

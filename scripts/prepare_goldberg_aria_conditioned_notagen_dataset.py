@@ -3,10 +3,14 @@ from __future__ import annotations
 import argparse
 import json
 import random
+import re
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+
+VOICE_SWITCH_RE = re.compile(r"^V:[^\s]+$")
 
 
 def split_metadata_and_body(text: str) -> tuple[str, str]:
@@ -20,6 +24,18 @@ def split_metadata_and_body(text: str) -> tuple[str, str]:
     if body_index is None:
         raise ValueError("could not find tune body")
     return "".join(lines[:body_index]), "".join(lines[body_index:])
+
+
+def split_header_and_music(text: str) -> tuple[str, str]:
+    lines = text.splitlines(keepends=True)
+    music_index = None
+    for i, line in enumerate(lines):
+        if VOICE_SWITCH_RE.match(line.strip()):
+            music_index = i
+            break
+    if music_index is None:
+        raise ValueError("could not find first music voice switch")
+    return "".join(lines[:music_index]), "".join(lines[music_index:])
 
 
 def run_checked(cmd: list[str], cwd: Path) -> None:
@@ -68,6 +84,7 @@ def main() -> int:
         help="Python interpreter with NotaGen preprocessing dependencies installed",
     )
     parser.add_argument("--eval-count", type=int, default=3)
+    parser.add_argument("--eval-variations-file", default=None)
     args = parser.parse_args()
 
     source_abc_dir = Path(args.source_abc_dir).resolve()
@@ -85,16 +102,26 @@ def main() -> int:
         path.mkdir(parents=True, exist_ok=True)
 
     aria_text = (source_abc_dir / "aria.abc").read_text(encoding="utf-8")
-    aria_metadata, aria_body = split_metadata_and_body(aria_text)
+    _, aria_music = split_header_and_music(aria_text)
     variation_names = sorted(src_file.stem for src_file in source_abc_dir.glob("variation-*.abc"))
-    if args.eval_count <= 0 or args.eval_count >= len(variation_names):
-        raise ValueError("eval-count must be between 1 and the number of variations - 1")
-    eval_variations = set(random.sample(variation_names, args.eval_count))
+    if args.eval_variations_file is not None:
+        eval_variations = {
+            line.strip()
+            for line in Path(args.eval_variations_file).read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        }
+        unknown = sorted(eval_variations.difference(variation_names))
+        if unknown:
+            raise ValueError(f"unknown eval variations: {unknown}")
+    else:
+        if args.eval_count <= 0 or args.eval_count >= len(variation_names):
+            raise ValueError("eval-count must be between 1 and the number of variations - 1")
+        eval_variations = set(random.sample(variation_names, args.eval_count))
 
     for src_file in sorted(source_abc_dir.glob("variation-*.abc")):
         variation_text = src_file.read_text(encoding="utf-8")
-        _, variation_body = split_metadata_and_body(variation_text)
-        conditioned_text = aria_metadata + aria_body + variation_body
+        variation_header, variation_music = split_header_and_music(variation_text)
+        conditioned_text = variation_header + aria_music + variation_music
         (conditioned_abc_dir / src_file.name).write_text(conditioned_text, encoding="utf-8")
 
     preprocess_script = notagen_root / "data" / "2_data_preprocess.py"
@@ -105,6 +132,11 @@ def main() -> int:
     patched = patched.replace("INTERLEAVED_FOLDER = ''", f"INTERLEAVED_FOLDER = {str(interleaved_dir)!r}", 1)
     patched = patched.replace("AUGMENTED_FOLDER = ''", f"AUGMENTED_FOLDER = {str(augmented_dir)!r}", 1)
     patched = patched.replace("EVAL_SPLIT = 0.1", "EVAL_SPLIT = 0.0", 1)
+    patched = patched.replace(
+        "from tqdm import tqdm",
+        "try:\n    from tqdm import tqdm\nexcept ModuleNotFoundError:\n    def tqdm(x):\n        return x",
+        1,
+    )
     preprocess_tmp.write_text(patched, encoding="utf-8")
     try:
         run_checked([str(python_exe), str(preprocess_tmp)], cwd=out_root)

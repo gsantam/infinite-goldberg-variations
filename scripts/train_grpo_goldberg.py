@@ -13,7 +13,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from grpo import GoldbergRewardConfig, load_structural_target
-from grpo.rewards import make_trl_reward_func
+from evaluation.rewards import make_trl_reward_func
 
 
 def load_prompt_dataset(path: str | Path) -> Dataset:
@@ -49,6 +49,11 @@ def main() -> int:
             / "aria_bar_skeleton.json"
         ),
     )
+    parser.add_argument(
+        "--target-structure-abc",
+        required=True,
+        help="Reference NotaGen ABC whose body/stream-line count is used for the bar-count reward.",
+    )
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--num-generations", type=int, default=4)
     parser.add_argument("--max-completion-length", type=int, default=1024)
@@ -58,7 +63,7 @@ def main() -> int:
     parser.add_argument("--num-train-epochs", type=float, default=1.0)
     args = parser.parse_args()
 
-    target = load_structural_target(args.target_json)
+    target = load_structural_target(args.target_json, structure_path=args.target_structure_abc)
     reward_config = GoldbergRewardConfig()
     reward_func = make_trl_reward_func(target=target, config=reward_config)
     dataset = load_prompt_dataset(args.prompts_jsonl)

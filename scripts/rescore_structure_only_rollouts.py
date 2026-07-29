@@ -187,6 +187,39 @@ def _terminal_patch_rewards(patch_count: int, value: float) -> list[float]:
     return rewards
 
 
+def _terminal_structure_component_rewards(
+    *,
+    breakdown: dict,
+    reward_config: GoldbergRewardConfig,
+    patch_count: int,
+) -> dict[str, list[float]]:
+    component_weights = {
+        "parse_reward": reward_config.parse_weight,
+        "countdown_reward": reward_config.countdown_weight,
+        "line_closure_reward": reward_config.line_closure_weight,
+        "bar_token_reward": reward_config.bar_token_weight,
+        "meter_alignment_reward": reward_config.meter_alignment_weight,
+        "meter_duration_closeness_reward": reward_config.meter_duration_closeness_weight,
+        "bar_meter_consistency_reward": reward_config.bar_meter_consistency_weight,
+        "bar_count_reward": reward_config.bar_count_weight,
+        "voice_declaration_reward": reward_config.voice_declaration_weight,
+        "score_voice_reward": reward_config.score_voice_weight,
+    }
+    component_rewards: dict[str, list[float]] = {}
+    for component_name, weight in component_weights.items():
+        value = float(weight) * float(breakdown.get(component_name, 0.0))
+        if value != 0.0:
+            component_rewards[component_name] = _terminal_patch_rewards(patch_count, value)
+
+    gate_adjustment = float(breakdown.get("structural_validity_gate_adjustment", 0.0))
+    if gate_adjustment != 0.0:
+        component_rewards["structural_validity_gate_adjustment"] = _terminal_patch_rewards(
+            patch_count,
+            gate_adjustment,
+        )
+    return component_rewards
+
+
 def _current_structure_patch_rewards(
     *,
     full_text: str,
@@ -195,6 +228,7 @@ def _current_structure_patch_rewards(
     target,
     reward_config: GoldbergRewardConfig,
     candidate_name: str,
+    patch_reward_attribution: str,
 ) -> tuple[list[float], dict, dict[str, float]]:
     patch_texts = _patch_texts(generated_patches)
     structural_score = score_candidate_text_with_local_metrics(
@@ -205,30 +239,41 @@ def _current_structure_patch_rewards(
     )
     breakdown = structural_score.breakdown.to_json()
     final_total = float(structural_score.breakdown.total_reward)
-    component_rewards: dict[str, list[float]] = {}
-    line_components = _line_reward_components_from_metrics(
-        stream_lines=structural_score.stream_lines,
-        local_metrics=structural_score.local_metrics,
-        target=target,
-        reward_config=reward_config,
-    )
-    for component_name, line_rewards in line_components.items():
-        component_rewards[component_name] = _project_line_rewards_to_patches(
-            completion_text,
-            line_rewards,
-            patch_texts,
+    if patch_reward_attribution == "terminal":
+        component_rewards = _terminal_structure_component_rewards(
+            breakdown=breakdown,
+            reward_config=reward_config,
+            patch_count=len(patch_texts),
         )
-
-    if reward_config.parse_weight != 0.0:
-        parse_component = reward_config.parse_weight * float(breakdown.get("parse_reward", 0.0))
-        component_rewards["parse_reward"] = _terminal_patch_rewards(len(patch_texts), parse_component)
-
-    gate_adjustment = float(breakdown.get("structural_validity_gate_adjustment", 0.0))
-    if gate_adjustment != 0.0:
-        component_rewards["structural_validity_gate_adjustment"] = _terminal_patch_rewards(
-            len(patch_texts),
-            gate_adjustment,
+        patch_reward_mode = "structure_only_terminal_total_reward"
+    elif patch_reward_attribution == "single_pass":
+        component_rewards: dict[str, list[float]] = {}
+        line_components = _line_reward_components_from_metrics(
+            stream_lines=structural_score.stream_lines,
+            local_metrics=structural_score.local_metrics,
+            target=target,
+            reward_config=reward_config,
         )
+        for component_name, line_rewards in line_components.items():
+            component_rewards[component_name] = _project_line_rewards_to_patches(
+                completion_text,
+                line_rewards,
+                patch_texts,
+            )
+
+        if reward_config.parse_weight != 0.0:
+            parse_component = reward_config.parse_weight * float(breakdown.get("parse_reward", 0.0))
+            component_rewards["parse_reward"] = _terminal_patch_rewards(len(patch_texts), parse_component)
+
+        gate_adjustment = float(breakdown.get("structural_validity_gate_adjustment", 0.0))
+        if gate_adjustment != 0.0:
+            component_rewards["structural_validity_gate_adjustment"] = _terminal_patch_rewards(
+                len(patch_texts),
+                gate_adjustment,
+            )
+        patch_reward_mode = "structure_only_single_pass_current_reward"
+    else:
+        raise RuntimeError(f"unsupported patch reward attribution: {patch_reward_attribution!r}")
 
     rewards = [
         float(sum(component_rewards[name][idx] for name in component_rewards))
@@ -250,7 +295,8 @@ def _current_structure_patch_rewards(
             "similarity_validity_gate": 1.0 if breakdown.get("parse_valid") else 0.0,
             "effective_similarity_reward": 0.0,
             "total_reward": final_total,
-            "patch_reward_mode": "structure_only_single_pass_current_reward",
+            "patch_reward_mode": patch_reward_mode,
+            "patch_reward_attribution": patch_reward_attribution,
             "patch_reward_count": len(rewards),
             "patch_reward_sum": float(sum(rewards)),
             "patch_reward_component_sums": component_sums,
@@ -345,6 +391,16 @@ def main() -> int:
         default=None,
         help="Override the parse validity reward weight. Defaults to the input JSON config or GoldbergRewardConfig.",
     )
+    parser.add_argument(
+        "--patch-reward-attribution",
+        choices=("single_pass", "terminal"),
+        default="single_pass",
+        help=(
+            "How to assign the final structural reward to generated patches. single_pass uses "
+            "line-level events plus terminal residual; terminal puts all structural components "
+            "on the final patch for return/GAE propagation."
+        ),
+    )
     args = parser.parse_args()
 
     payload = json.loads(args.input_json.read_text(encoding="utf-8"))
@@ -389,6 +445,7 @@ def main() -> int:
                 target=target,
                 reward_config=reward_config,
                 candidate_name=candidate_name,
+                patch_reward_attribution=args.patch_reward_attribution,
             )
             prefix_totals = _prefix_totals(patch_rewards)
             old_reward = trajectory.get("reward")
@@ -443,6 +500,7 @@ def main() -> int:
         "delta": _summary(deltas),
         "parse_valid_count": int(sum(1 for row in rows if row["parse_valid"])),
         "parse_invalid_count": int(sum(1 for row in rows if not row["parse_valid"])),
+        "patch_reward_attribution": args.patch_reward_attribution,
         "largest_abs_deltas": sorted(
             rows,
             key=lambda item: abs(float(item["delta"] or 0.0)),
@@ -454,6 +512,7 @@ def main() -> int:
         **payload.get("run_config", {}),
         "reward_config": asdict(reward_config),
         "reward_setup": "structure_only_current_reward",
+        "patch_reward_attribution": args.patch_reward_attribution,
     }
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
     args.output_json.write_text(json.dumps(_json_safe(payload), indent=2), encoding="utf-8")

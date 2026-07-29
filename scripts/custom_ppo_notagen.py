@@ -542,6 +542,45 @@ def build_prompt_batch_for_slots(
     return items
 
 
+def build_prompt_batch_for_repeated_slot(
+    *,
+    prompts: list[dict],
+    prompt_targets: list[PromptStructuralTarget],
+    selection: str,
+    seed: int,
+    slot_index: int,
+    count: int,
+) -> list[PromptBatchItem]:
+    if count < 0:
+        raise ValueError(f"prompt batch count must be non-negative, got {count}")
+    if len(prompt_targets) != len(prompts):
+        raise ValueError(f"prompt target count mismatch: prompts={len(prompts)} targets={len(prompt_targets)}")
+    if count == 0:
+        return []
+    schedule = select_prompt_for_slot(
+        slot_index=slot_index,
+        prompt_count=len(prompts),
+        selection=selection,
+        seed=seed,
+    )
+    row = prompts[schedule.prompt_idx]
+    prompt_target = prompt_targets[schedule.prompt_idx]
+    target = prompt_target.target
+    return [
+        PromptBatchItem(
+            trajectory_index=trajectory_index,
+            prompt_idx=schedule.prompt_idx,
+            prompt_name=prompt_row_name(row, schedule.prompt_idx),
+            prompt=row["prompt"],
+            prompt_target=prompt_target,
+            target=target,
+            target_stream_lines=int(target.expected_reward_bars),
+            schedule=schedule,
+        )
+        for trajectory_index in range(count)
+    ]
+
+
 def build_prompt_batch_for_step(
     *,
     prompts: list[dict],
@@ -551,6 +590,18 @@ def build_prompt_batch_for_step(
     trajectories_per_step: int | None = None,
 ) -> list[PromptBatchItem]:
     trajectory_count = args.trajectories_per_step if trajectories_per_step is None else int(trajectories_per_step)
+    prompt_batch_mode = str(getattr(args, "prompt_batch_mode", "trajectory"))
+    if prompt_batch_mode == "step":
+        return build_prompt_batch_for_repeated_slot(
+            prompts=prompts,
+            prompt_targets=prompt_targets,
+            selection=args.prompt_selection,
+            seed=args.seed,
+            slot_index=int(step_idx) - 1,
+            count=trajectory_count,
+        )
+    if prompt_batch_mode != "trajectory":
+        raise ValueError(f"unsupported prompt_batch_mode: {prompt_batch_mode!r}")
     start_slot = (int(step_idx) - 1) * int(args.trajectories_per_step)
     return build_prompt_batch_for_slots(
         prompts=prompts,
@@ -612,6 +663,20 @@ def resolve_fixed_eval_prompt_selection(args) -> str:
     raise ValueError(f"unsupported fixed_eval_prompt_selection: {selection!r}")
 
 
+def resolve_fixed_eval_prompt_batch_mode(args) -> str:
+    mode = str(getattr(args, "fixed_eval_prompt_batch_mode", "same"))
+    if mode == "same":
+        training_mode = str(getattr(args, "prompt_batch_mode", "trajectory"))
+        if training_mode == "step":
+            return "event"
+        if training_mode == "trajectory":
+            return "trajectory"
+        raise ValueError(f"unsupported prompt_batch_mode: {training_mode!r}")
+    if mode in {"trajectory", "event"}:
+        return mode
+    raise ValueError(f"unsupported fixed_eval_prompt_batch_mode: {mode!r}")
+
+
 def fixed_eval_should_run_after_step(args, step_idx: int) -> bool:
     if int(args.fixed_eval_trajectories) <= 0:
         return False
@@ -648,6 +713,18 @@ def build_fixed_eval_prompt_batch(
         return []
     if event_index < 0:
         raise ValueError(f"fixed eval event index must be non-negative, got {event_index}")
+    prompt_batch_mode = resolve_fixed_eval_prompt_batch_mode(args)
+    if prompt_batch_mode == "event":
+        return build_prompt_batch_for_repeated_slot(
+            prompts=prompts,
+            prompt_targets=prompt_targets,
+            selection=resolve_fixed_eval_prompt_selection(args),
+            seed=int(args.seed) + int(getattr(args, "fixed_eval_prompt_seed_offset", 2_000_000)),
+            slot_index=int(event_index),
+            count=int(args.fixed_eval_trajectories),
+        )
+    if prompt_batch_mode != "trajectory":
+        raise ValueError(f"unsupported fixed eval prompt batch mode: {prompt_batch_mode!r}")
     start_slot = int(event_index) * int(args.fixed_eval_trajectories)
     return build_prompt_batch_for_slots(
         prompts=prompts,
@@ -3494,6 +3571,13 @@ def sample_ppo_rollouts(
     if spares_percent < 0:
         raise ValueError(f"rollout_spares_percent must be non-negative, got {spares_percent}")
     max_attempts = 1 if failure_policy in {"zero", "spares"} else args.rollout_retries
+    rollout_seed_scope = str(getattr(args, "rollout_seed_scope", "step"))
+    if rollout_seed_scope == "step":
+        rollout_seed_step_idx = step_idx
+    elif rollout_seed_scope == "run":
+        rollout_seed_step_idx = 1
+    else:
+        raise ValueError(f"unsupported rollout_seed_scope: {rollout_seed_scope!r}")
 
     def payload_prompt_meta(spec: PromptBatchItem) -> dict:
         return {
@@ -3522,6 +3606,8 @@ def sample_ppo_rollouts(
                 "batched_rollout": bool(batched_rollout),
                 "rollout_batch_size": args.rollout_batch_size if batched_rollout else 1,
                 "rollout_failure_policy": failure_policy,
+                "rollout_seed_scope": rollout_seed_scope,
+                "rollout_seed_step_idx": int(rollout_seed_step_idx),
                 **payload_prompt_meta(spec),
                 **(extra_meta or {}),
             },
@@ -3586,7 +3672,7 @@ def sample_ppo_rollouts(
             batch_indices = list(range(batch_start, min(candidate_count, batch_start + effective_batch_size)))
             batch_specs = [candidate_specs[candidate_idx] for candidate_idx in batch_indices]
             seeds = [
-                _rollout_seed(args.seed, step_idx, spec.trajectory_index, attempt_idx)
+                _rollout_seed(args.seed, rollout_seed_step_idx, spec.trajectory_index, attempt_idx)
                 for spec, attempt_idx in batch_specs
             ]
             try:
@@ -3676,7 +3762,7 @@ def sample_ppo_rollouts(
             for batch_start in range(0, len(pending), args.rollout_batch_size):
                 batch_specs = pending[batch_start : batch_start + args.rollout_batch_size]
                 seeds = [
-                    _rollout_seed(args.seed, step_idx, spec.trajectory_index, retry_idx)
+                    _rollout_seed(args.seed, rollout_seed_step_idx, spec.trajectory_index, retry_idx)
                     for spec in batch_specs
                 ]
                 try:
@@ -3748,9 +3834,9 @@ def sample_ppo_rollouts(
         for spec in prompt_batch:
             sample_built = False
             last_error: Exception | None = None
-            last_rollout_seed = _rollout_seed(args.seed, step_idx, spec.trajectory_index, 0)
+            last_rollout_seed = _rollout_seed(args.seed, rollout_seed_step_idx, spec.trajectory_index, 0)
             for retry_idx in range(max_attempts):
-                rollout_seed = _rollout_seed(args.seed, step_idx, spec.trajectory_index, retry_idx)
+                rollout_seed = _rollout_seed(args.seed, rollout_seed_step_idx, spec.trajectory_index, retry_idx)
                 last_rollout_seed = rollout_seed
                 set_seed(rollout_seed)
                 try:
@@ -4673,6 +4759,10 @@ def run_ppo_smoke(
         raise ValueError(f"prompt target count mismatch: prompts={len(prompts)} targets={len(prompt_targets)}")
     if args.prompt_selection not in {"ordered", "random"}:
         raise ValueError(f"unsupported prompt_selection: {args.prompt_selection!r}")
+    if args.prompt_batch_mode not in {"trajectory", "step"}:
+        raise ValueError(f"unsupported prompt_batch_mode: {args.prompt_batch_mode!r}")
+    if args.rollout_seed_scope not in {"step", "run"}:
+        raise ValueError(f"unsupported rollout_seed_scope: {args.rollout_seed_scope!r}")
     if not 0.0 <= args.gae_lambda <= 1.0:
         raise ValueError(f"gae_lambda must be in [0, 1], got {args.gae_lambda}")
     if args.patch_reward_attribution not in {"single_pass", "terminal"}:
@@ -4715,6 +4805,10 @@ def run_ppo_smoke(
         raise ValueError(f"fixed_eval_every_steps must be non-negative, got {args.fixed_eval_every_steps}")
     if args.fixed_eval_prompt_selection not in {"same", "ordered", "random"}:
         raise ValueError(f"unsupported fixed_eval_prompt_selection: {args.fixed_eval_prompt_selection!r}")
+    if args.fixed_eval_prompt_batch_mode not in {"same", "trajectory", "event"}:
+        raise ValueError(
+            f"unsupported fixed_eval_prompt_batch_mode: {args.fixed_eval_prompt_batch_mode!r}"
+        )
     if args.fixed_eval_rollout_batch_size < 0:
         raise ValueError(
             f"fixed_eval_rollout_batch_size must be non-negative, got {args.fixed_eval_rollout_batch_size}"
@@ -5608,6 +5702,17 @@ def main() -> int:
             "once per cycle, then the next cycle is reshuffled."
         ),
     )
+    parser.add_argument(
+        "--prompt-batch-mode",
+        choices=("trajectory", "step"),
+        default="trajectory",
+        help=(
+            "How prompts are assigned within a PPO step. trajectory consumes one prompt-schedule "
+            "slot per sampled trajectory, so a step may contain multiple prompts. step consumes "
+            "one prompt-schedule slot per PPO step and repeats that prompt for every trajectory "
+            "in the step; use this for controlled prompt-effect sweeps."
+        ),
+    )
     parser.add_argument("--max-steps", type=int, default=1)
     parser.add_argument(
         "--trajectories-per-step",
@@ -5745,6 +5850,16 @@ def main() -> int:
     parser.add_argument("--checkpoint-every-steps", type=int, default=0)
     parser.add_argument("--precision", choices=("fp32", "bf16"), default="fp32")
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--rollout-seed-scope",
+        choices=("step", "run"),
+        default="step",
+        help=(
+            "How rollout RNG seeds vary across PPO steps. step is normal PPO behavior. "
+            "run reuses the same trajectory-index seed set every step, useful for frozen-policy "
+            "prompt sweeps where the prompt should be the only changing factor."
+        ),
+    )
     parser.add_argument("--step-offset", type=int, default=0)
     parser.add_argument("--cached-rollout", action="store_true")
     parser.add_argument(
@@ -5820,6 +5935,16 @@ def main() -> int:
         help=(
             "Prompt schedule used only for fixed eval. 'same' reuses --prompt-selection mode "
             "with an independent seed/slot counter; ordered/random force a separate eval mode."
+        ),
+    )
+    parser.add_argument(
+        "--fixed-eval-prompt-batch-mode",
+        choices=("same", "trajectory", "event"),
+        default="same",
+        help=(
+            "Prompt assignment within each fixed-eval event. same mirrors --prompt-batch-mode "
+            "(step becomes event). trajectory consumes one prompt slot per eval trajectory. "
+            "event repeats one selected prompt for the whole eval event."
         ),
     )
     parser.add_argument(
@@ -5999,9 +6124,12 @@ def main() -> int:
             "prompt_limit": args.prompt_limit,
             "loaded_prompt_count": len(prompts),
             "prompt_selection": args.prompt_selection,
-            "consumption_granularity": "trajectory",
-            "one_prompt_per_trajectory": True,
+            "prompt_batch_mode": args.prompt_batch_mode,
+            "consumption_granularity": args.prompt_batch_mode,
+            "one_prompt_per_trajectory": args.prompt_batch_mode == "trajectory",
+            "one_prompt_per_step": args.prompt_batch_mode == "step",
             "seed": args.seed,
+            "rollout_seed_scope": args.rollout_seed_scope,
             "step_offset": args.step_offset,
         },
         "fixed_eval": {
@@ -6012,7 +6140,9 @@ def main() -> int:
             "resolved_prompt_selection": resolve_fixed_eval_prompt_selection(args),
             "prompt_seed": args.seed + args.fixed_eval_prompt_seed_offset,
             "prompt_seed_offset": args.fixed_eval_prompt_seed_offset,
-            "consumption_granularity": "trajectory",
+            "prompt_batch_mode": args.fixed_eval_prompt_batch_mode,
+            "resolved_prompt_batch_mode": resolve_fixed_eval_prompt_batch_mode(args),
+            "consumption_granularity": resolve_fixed_eval_prompt_batch_mode(args),
             "rollout_batch_size": args.fixed_eval_rollout_batch_size,
             "rollout_retries": args.fixed_eval_rollout_retries,
             "seed_offset": args.fixed_eval_seed_offset,

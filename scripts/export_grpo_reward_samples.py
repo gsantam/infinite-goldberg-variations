@@ -19,10 +19,6 @@ COMPONENT_KEYS = (
     "meter_duration_closeness_reward",
     "bar_meter_consistency_reward",
     "bar_count_reward",
-    "root_similarity_reward",
-    "bass_pitch_class_reward",
-    "cadence_root_reward",
-    "cadence_bass_reward",
 )
 
 

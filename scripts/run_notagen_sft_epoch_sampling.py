@@ -163,6 +163,18 @@ def load_cached_sampler(project_dir: Path):
     return build_model, count_stream_lines, sample_completion_cached, sample_completions_cached_batch, set_seed
 
 
+def shuffled_prefix_specs_for_epoch(
+    prefix_specs: list[dict] | None,
+    *,
+    epoch: int,
+    prefix_shuffle_seed: int | None,
+) -> list[dict]:
+    shuffled_prefix_specs = prefix_specs[:] if prefix_specs else []
+    rng = random.Random(epoch if prefix_shuffle_seed is None else prefix_shuffle_seed)
+    rng.shuffle(shuffled_prefix_specs)
+    return shuffled_prefix_specs
+
+
 def sample_cached_trajectories(
     *,
     project_dir: Path,
@@ -182,6 +194,7 @@ def sample_cached_trajectories(
     precision: str,
     epoch: int,
     sampling_batch_size: int,
+    prefix_shuffle_seed: int | None,
 ) -> tuple[list[Path], list[dict], list[dict]]:
     (
         build_model,
@@ -194,9 +207,11 @@ def sample_cached_trajectories(
     candidates: list[Path] = []
     generation_failures: list[dict] = []
     sample_metadata: list[dict] = []
-    rng = random.Random(epoch)
-    shuffled_prefix_specs = prefix_specs[:] if prefix_specs else []
-    rng.shuffle(shuffled_prefix_specs)
+    shuffled_prefix_specs = shuffled_prefix_specs_for_epoch(
+        prefix_specs,
+        epoch=epoch,
+        prefix_shuffle_seed=prefix_shuffle_seed,
+    )
 
     def resolve_prefix_spec(attempt_seed: int) -> tuple[Path, str, str]:
         if shuffled_prefix_specs:
@@ -361,6 +376,7 @@ def sample_cached_trajectories_isolated(
     max_generated_patches: int,
     precision: str,
     epoch: int,
+    prefix_shuffle_seed: int | None,
 ) -> tuple[list[Path], list[dict], list[dict]]:
     if str(project_dir) not in sys.path:
         sys.path.insert(0, str(project_dir))
@@ -369,9 +385,11 @@ def sample_cached_trajectories_isolated(
     candidates: list[Path] = []
     generation_failures: list[dict] = []
     sample_metadata: list[dict] = []
-    rng = random.Random(epoch)
-    shuffled_prefix_specs = prefix_specs[:] if prefix_specs else []
-    rng.shuffle(shuffled_prefix_specs)
+    shuffled_prefix_specs = shuffled_prefix_specs_for_epoch(
+        prefix_specs,
+        epoch=epoch,
+        prefix_shuffle_seed=prefix_shuffle_seed,
+    )
     tmp_root = out_dir / ".isolated_tmp"
     tmp_root.mkdir(parents=True, exist_ok=True)
 
@@ -699,6 +717,13 @@ def score_rewards(
     reward_target_structure_abc: Path | None,
     candidates: list[Path],
     out_path: Path,
+    aria_reference: Path,
+    aria_chroma_reward_weight: float,
+    aria_harmony_reward_weight: float,
+    max_similarity_reward: float,
+    similarity_chroma_bins: int,
+    similarity_band_ratio: float,
+    similarity_timeout_s: float,
 ) -> list[dict]:
     if str(project_dir) not in sys.path:
         sys.path.insert(0, str(project_dir))
@@ -708,9 +733,26 @@ def score_rewards(
         load_structural_target,
         score_prompt_completion_pair,
     )
+    from evaluation.similarity_rewards import (  # type: ignore
+        SimilarityRewardWeights,
+        load_similarity_reference,
+        score_similarity_reward,
+    )
 
     target = load_structural_target(reward_target_json, structure_path=reward_target_structure_abc)
     config = GoldbergRewardConfig()
+    similarity_weights = SimilarityRewardWeights(
+        aria_chroma=aria_chroma_reward_weight,
+        aria_harmony=aria_harmony_reward_weight,
+    )
+    aria_similarity_ref = None
+    if similarity_weights.enabled:
+        aria_similarity_ref = load_similarity_reference(
+            aria_reference,
+            load_chroma=similarity_weights.aria_chroma != 0.0,
+            load_harmony=similarity_weights.aria_harmony != 0.0,
+            bins=similarity_chroma_bins,
+        )
     rows = []
     for candidate in candidates:
         prefix_path = candidate_prefixes.get(str(candidate), prefix)
@@ -726,6 +768,37 @@ def score_rewards(
             config=config,
             candidate_name=candidate.stem,
         ).to_json()
+        structural_total_reward = float(breakdown["total_reward"])
+        breakdown["structural_total_reward"] = structural_total_reward
+        if similarity_weights.enabled:
+            similarity_payload = score_similarity_reward(
+                prompt_text=prompt,
+                completion_text=completion,
+                weights=similarity_weights,
+                aria=aria_similarity_ref,
+                variation=None,
+                bins=similarity_chroma_bins,
+                band_ratio=similarity_band_ratio,
+                timeout_s=similarity_timeout_s,
+            )
+            breakdown.update(similarity_payload)
+            raw_similarity_reward = float(similarity_payload.get("similarity_reward", 0.0))
+            clipped_similarity_reward = raw_similarity_reward
+            if max_similarity_reward > 0:
+                clipped_similarity_reward = max(
+                    -max_similarity_reward,
+                    min(max_similarity_reward, raw_similarity_reward),
+                )
+            similarity_validity_gate = 1.0 if breakdown.get("parse_valid") else 0.0
+            effective_similarity_reward = clipped_similarity_reward * similarity_validity_gate
+            breakdown["raw_similarity_reward"] = raw_similarity_reward
+            breakdown["clipped_similarity_reward"] = clipped_similarity_reward
+            breakdown["similarity_validity_gate"] = similarity_validity_gate
+            breakdown["effective_similarity_reward"] = effective_similarity_reward
+            breakdown["total_reward"] = structural_total_reward + effective_similarity_reward
+        else:
+            breakdown["similarity_reward"] = 0.0
+            breakdown["effective_similarity_reward"] = 0.0
         prompt_header = _extract_header_context(prompt)
         duration_ratio_counts = meter_duration_ratio_counts_for_text(text)
         breakdown["path"] = str(candidate)
@@ -761,6 +834,12 @@ def main() -> None:
     parser.add_argument("--prefix", type=Path, default=Path("/home/jl_fs/music-generation/infinite-goldberg-variations/data/processed/notagen/aria_plus_variation01_setup_G.abc"))
     parser.add_argument("--prefix-manifest", type=Path, default=None)
     parser.add_argument("--aria-reference", type=Path, default=Path("/home/jl_fs/music-generation/infinite-goldberg-variations/data/processed/notagen/aria_prefix_G_streamed.abc"))
+    parser.add_argument("--aria-chroma-reward-weight", type=float, default=0.0)
+    parser.add_argument("--aria-harmony-reward-weight", type=float, default=0.0)
+    parser.add_argument("--max-similarity-reward", type=float, default=2.0)
+    parser.add_argument("--similarity-chroma-bins", type=int, default=128)
+    parser.add_argument("--similarity-band-ratio", type=float, default=0.25)
+    parser.add_argument("--similarity-timeout-s", type=float, default=20.0)
     parser.add_argument("--clamp2-dir", type=Path, default=Path("/home/jl_fs/music-generation/NotaGen/clamp2"))
     parser.add_argument("--output-dir", type=Path, default=Path("/home/jl_fs/music-generation/outputs/large_sft10_epoch_sampling_clamp2"))
     parser.add_argument("--epochs", type=int, default=10)
@@ -768,6 +847,20 @@ def main() -> None:
     parser.add_argument("--samples-per-epoch", type=int, default=4)
     parser.add_argument("--max-generation-attempts", type=int, default=16)
     parser.add_argument("--rolling-checkpoint", type=Path, default=None)
+    parser.add_argument(
+        "--save-epoch-checkpoints",
+        action="store_true",
+        help="Copy the rolling checkpoint to checkpoints/epochXX.pth after each epoch.",
+    )
+    parser.add_argument(
+        "--prefix-shuffle-seed",
+        type=int,
+        default=None,
+        help=(
+            "Use a fixed shuffle seed for --prefix-manifest sampling across epochs. "
+            "By default the epoch number is used, which changes the prompt order each epoch."
+        ),
+    )
     parser.add_argument("--delete-rolling-checkpoint-at-end", action="store_true")
     parser.add_argument("--lr", type=str, default="1e-6")
     parser.add_argument("--batch-size", type=int, default=1)
@@ -942,20 +1035,34 @@ def main() -> None:
                 flush=True,
             )
         losses = parse_loss_log(loss_log)
+        epoch_checkpoint: Path | None = None
+        if args.save_epoch_checkpoints:
+            if not rolling_checkpoint.exists():
+                raise FileNotFoundError(f"missing rolling checkpoint after epoch {epoch}: {rolling_checkpoint}")
+            epoch_checkpoint = checkpoints_dir / f"epoch{epoch:02d}.pth"
+            shutil.copy2(rolling_checkpoint, epoch_checkpoint)
+        checkpoint_for_epoch = epoch_checkpoint or rolling_checkpoint
 
         if args.samples_per_epoch == 0:
             row = {
                 "epoch": epoch,
-                "checkpoint": str(rolling_checkpoint),
-                "checkpoint_is_rolling": True,
+                "checkpoint": str(checkpoint_for_epoch),
+                "checkpoint_is_rolling": epoch_checkpoint is None,
+                "rolling_checkpoint": str(rolling_checkpoint),
+                "epoch_checkpoint": None if epoch_checkpoint is None else str(epoch_checkpoint),
                 "losses": losses,
                 "generation_failures": [],
                 "samples": [],
                 "mean_clamp2_aria_similarity": None,
                 "mean_clamp2_variation_centroid_similarity": None,
                 "mean_reward": None,
+                "mean_structural_total_reward": None,
+                "mean_effective_similarity_reward": None,
+                "mean_aria_chroma_harmonic_hist": None,
+                "mean_aria_harmony_combined": None,
                 "exact_pretrained_kl": None,
                 "mean_exact_kl_to_pretrained": None,
+                "prefix_shuffle_seed": args.prefix_shuffle_seed,
             }
             with summary_path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(row) + "\n")
@@ -986,6 +1093,7 @@ def main() -> None:
             "max_generated_patches": max_generated_patches,
             "precision": args.precision,
             "epoch": epoch,
+            "prefix_shuffle_seed": args.prefix_shuffle_seed,
         }
         if args.isolated_sampling:
             candidates, generation_failures, sample_metadata = sample_cached_trajectories_isolated(
@@ -1014,6 +1122,13 @@ def main() -> None:
             reward_target_structure_abc=args.reward_target_structure_abc,
             candidates=candidates,
             out_path=rewards_jsonl,
+            aria_reference=args.aria_reference,
+            aria_chroma_reward_weight=args.aria_chroma_reward_weight,
+            aria_harmony_reward_weight=args.aria_harmony_reward_weight,
+            max_similarity_reward=args.max_similarity_reward,
+            similarity_chroma_bins=args.similarity_chroma_bins,
+            similarity_band_ratio=args.similarity_band_ratio,
+            similarity_timeout_s=args.similarity_timeout_s,
         )
 
         metadata_by_path = {row["path"]: row for row in sample_metadata}
@@ -1076,7 +1191,7 @@ def main() -> None:
             print(f"===== epoch {epoch}/{args.epochs} exact KL to pretrained =====", flush=True)
             exact_pretrained_kl = compute_exact_reference_kl(
                 project_dir=args.project_dir,
-                policy_weights=rolling_checkpoint,
+                policy_weights=checkpoint_for_epoch,
                 reference_weights=exact_kl_reference_checkpoint,
                 samples=sample_rows,
                 target_stream_lines=args.target_stream_lines,
@@ -1089,8 +1204,10 @@ def main() -> None:
         meter_duration_ratio_monitor = aggregate_meter_duration_ratio_monitor(reward_rows)
         row = {
             "epoch": epoch,
-            "checkpoint": str(rolling_checkpoint),
-            "checkpoint_is_rolling": True,
+            "checkpoint": str(checkpoint_for_epoch),
+            "checkpoint_is_rolling": epoch_checkpoint is None,
+            "rolling_checkpoint": str(rolling_checkpoint),
+            "epoch_checkpoint": None if epoch_checkpoint is None else str(epoch_checkpoint),
             "losses": losses,
             "generation_failures": generation_failures,
             "samples": sample_rows,
@@ -1098,10 +1215,15 @@ def main() -> None:
             "mean_clamp2_aria_similarity": mean_metric(scores["rows"], "cosine_similarity_to_reference") if scores is not None else None,
             "mean_clamp2_variation_centroid_similarity": mean_metric(variation_scores["rows"], "cosine_similarity_to_reference") if variation_scores is not None else None,
             "mean_reward": mean_metric(reward_rows, "total_reward"),
+            "mean_structural_total_reward": mean_metric(reward_rows, "structural_total_reward"),
+            "mean_effective_similarity_reward": mean_metric(reward_rows, "effective_similarity_reward"),
+            "mean_aria_chroma_harmonic_hist": mean_metric(reward_rows, "aria_chroma_harmonic_hist"),
+            "mean_aria_harmony_combined": mean_metric(reward_rows, "aria_harmony_combined"),
             "exact_pretrained_kl": exact_pretrained_kl,
             "mean_exact_kl_to_pretrained": (
                 None if exact_pretrained_kl is None else exact_pretrained_kl.get("mean_exact_kl_to_reference")
             ),
+            "prefix_shuffle_seed": args.prefix_shuffle_seed,
         }
         with summary_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(row) + "\n")
@@ -1119,6 +1241,14 @@ def main() -> None:
         if row["mean_exact_kl_to_pretrained"] is not None:
             parts.append(f"mean_exact_kl_to_pretrained={row['mean_exact_kl_to_pretrained']:.6f}")
         parts.append(f"mean_reward={row['mean_reward']:.6f}")
+        if row["mean_structural_total_reward"] is not None:
+            parts.append(f"mean_structural={row['mean_structural_total_reward']:.6f}")
+        if row["mean_effective_similarity_reward"] is not None:
+            parts.append(f"mean_similarity={row['mean_effective_similarity_reward']:.6f}")
+        if row["mean_aria_harmony_combined"] is not None:
+            parts.append(f"aria_harmony={row['mean_aria_harmony_combined']:.6f}")
+        if row["mean_aria_chroma_harmonic_hist"] is not None:
+            parts.append(f"aria_chroma={row['mean_aria_chroma_harmonic_hist']:.6f}")
         ratio_overall = meter_duration_ratio_monitor["overall"]
         if ratio_overall["voice_bar_count"]:
             parts.append(f"meter_exact={ratio_overall['exact_bar_fraction']:.6f}")

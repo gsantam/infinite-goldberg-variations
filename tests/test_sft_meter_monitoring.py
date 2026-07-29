@@ -7,6 +7,7 @@ from scripts.run_notagen_sft_epoch_sampling import (
     _chunk_generated_flat_ids,
     aggregate_meter_duration_ratio_monitor,
     meter_duration_ratio_counts_for_text,
+    shuffled_prefix_specs_for_epoch,
     summarize_meter_duration_ratio_counts,
 )
 
@@ -74,3 +75,22 @@ def test_chunk_generated_flat_ids_completes_partial_prompt_patch_first() -> None
 
     assert [len(chunk) for chunk in chunks] == [6, 16, 8]
     assert [token for chunk in chunks for token in chunk] == list(range(30))
+
+
+def test_prefix_shuffle_seed_keeps_eval_prompt_order_fixed_across_epochs() -> None:
+    specs = [{"prefix": f"variation-{index:02d}.abc"} for index in range(10)]
+
+    epoch_1 = shuffled_prefix_specs_for_epoch(specs, epoch=1, prefix_shuffle_seed=17)
+    epoch_8 = shuffled_prefix_specs_for_epoch(specs, epoch=8, prefix_shuffle_seed=17)
+
+    assert epoch_1 == epoch_8
+    assert epoch_1 != specs
+
+
+def test_prefix_shuffle_defaults_to_epoch_dependent_order() -> None:
+    specs = [{"prefix": f"variation-{index:02d}.abc"} for index in range(10)]
+
+    epoch_1 = shuffled_prefix_specs_for_epoch(specs, epoch=1, prefix_shuffle_seed=None)
+    epoch_8 = shuffled_prefix_specs_for_epoch(specs, epoch=8, prefix_shuffle_seed=None)
+
+    assert epoch_1 != epoch_8

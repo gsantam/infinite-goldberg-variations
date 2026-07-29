@@ -80,7 +80,7 @@ class RolloutSample:
 
 
 def _rollout_seed(base_seed: int, step_idx: int, group_idx: int, retry_idx: int) -> int:
-    return base_seed + step_idx * 1000 + group_idx * 100 + retry_idx
+    return base_seed + step_idx * 1_000_000 + group_idx * 1_000 + retry_idx
 
 
 def infer_model_shape(weights_path: Path) -> ModelShape:

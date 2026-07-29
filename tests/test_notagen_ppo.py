@@ -23,6 +23,8 @@ try:
         _stream_line_end_patch_indices,
         _stream_line_spans,
         build_fixed_eval_prompt_batch,
+        build_prompt_batch_for_repeated_slot,
+        build_prompt_batch_for_step,
         build_prompt_batch_for_slots,
         batched_trajectory_patch_logprobs_values,
         batched_trajectory_token_log_dists,
@@ -182,6 +184,59 @@ class NotaGenPPOTests(unittest.TestCase):
         self.assertEqual([item.schedule.cycle_position for item in batch], [28, 29, 0, 1, 2])
         self.assertEqual([item.target_stream_lines for item in batch], [29, 30, 1, 2, 3])
 
+    def test_repeated_prompt_batch_keeps_one_prompt_for_all_trajectories(self):
+        prompts = [{"name": f"p{idx}", "prompt": f"prompt {idx}\n"} for idx in range(5)]
+        prompt_targets = [
+            PromptStructuralTarget(
+                target=StructuralTarget(expected_bars=idx + 1, expected_structure_bars=idx + 1),
+                structure_path=f"target_{idx}.abc",
+                source_key="test",
+            )
+            for idx in range(5)
+        ]
+
+        batch = build_prompt_batch_for_repeated_slot(
+            prompts=prompts,
+            prompt_targets=prompt_targets,
+            selection="ordered",
+            seed=0,
+            slot_index=3,
+            count=4,
+        )
+
+        self.assertEqual([item.trajectory_index for item in batch], [0, 1, 2, 3])
+        self.assertEqual([item.prompt_idx for item in batch], [3, 3, 3, 3])
+        self.assertEqual([item.prompt_name for item in batch], ["p3", "p3", "p3", "p3"])
+        self.assertEqual([item.target_stream_lines for item in batch], [4, 4, 4, 4])
+        self.assertEqual([item.schedule.slot_index for item in batch], [3, 3, 3, 3])
+
+    def test_step_prompt_batch_mode_repeats_prompt_per_step(self):
+        prompts = [{"name": f"p{idx}", "prompt": f"prompt {idx}\n"} for idx in range(3)]
+        prompt_targets = [
+            PromptStructuralTarget(
+                target=StructuralTarget(expected_bars=idx + 1, expected_structure_bars=idx + 1),
+                structure_path=f"target_{idx}.abc",
+                source_key="test",
+            )
+            for idx in range(3)
+        ]
+        args = SimpleNamespace(
+            trajectories_per_step=4,
+            prompt_batch_mode="step",
+            prompt_selection="ordered",
+            seed=0,
+        )
+
+        step_two = build_prompt_batch_for_step(
+            prompts=prompts,
+            prompt_targets=prompt_targets,
+            args=args,
+            step_idx=2,
+        )
+
+        self.assertEqual([item.prompt_idx for item in step_two], [1, 1, 1, 1])
+        self.assertEqual([item.target_stream_lines for item in step_two], [2, 2, 2, 2])
+
     def test_fixed_eval_cadence_uses_every_steps(self):
         args = SimpleNamespace(fixed_eval_trajectories=4, fixed_eval_every_steps=3)
 
@@ -220,7 +275,9 @@ class NotaGenPPOTests(unittest.TestCase):
         args = SimpleNamespace(
             fixed_eval_trajectories=4,
             fixed_eval_prompt_selection="ordered",
+            fixed_eval_prompt_batch_mode="trajectory",
             prompt_selection="random",
+            prompt_batch_mode="trajectory",
             seed=3,
             fixed_eval_prompt_seed_offset=100,
         )
@@ -256,7 +313,9 @@ class NotaGenPPOTests(unittest.TestCase):
         args = SimpleNamespace(
             fixed_eval_trajectories=5,
             fixed_eval_prompt_selection="same",
+            fixed_eval_prompt_batch_mode="same",
             prompt_selection="random",
+            prompt_batch_mode="trajectory",
             seed=17,
             fixed_eval_prompt_seed_offset=99,
         )
@@ -272,6 +331,36 @@ class NotaGenPPOTests(unittest.TestCase):
 
         self.assertEqual([item.prompt_idx for item in fixed_eval], eval_order[:5])
         self.assertNotEqual([item.prompt_idx for item in fixed_eval], training_order[:5])
+
+    def test_fixed_eval_event_prompt_batch_mode_repeats_prompt_per_event(self):
+        prompts = [{"name": f"p{idx}", "prompt": f"prompt {idx}\n"} for idx in range(4)]
+        prompt_targets = [
+            PromptStructuralTarget(
+                target=StructuralTarget(expected_bars=idx + 1, expected_structure_bars=idx + 1),
+                structure_path=f"target_{idx}.abc",
+                source_key="test",
+            )
+            for idx in range(4)
+        ]
+        args = SimpleNamespace(
+            fixed_eval_trajectories=3,
+            fixed_eval_prompt_selection="ordered",
+            fixed_eval_prompt_batch_mode="event",
+            prompt_selection="random",
+            prompt_batch_mode="trajectory",
+            seed=0,
+            fixed_eval_prompt_seed_offset=100,
+        )
+
+        second_eval = build_fixed_eval_prompt_batch(
+            prompts=prompts,
+            prompt_targets=prompt_targets,
+            args=args,
+            event_index=1,
+        )
+
+        self.assertEqual([item.prompt_idx for item in second_eval], [1, 1, 1])
+        self.assertEqual([item.target_stream_lines for item in second_eval], [2, 2, 2])
 
     def test_mixed_prompt_rollout_passes_per_row_target_lengths_to_batch_sampler(self):
         prompts = [{"name": "p0", "prompt": "prompt 0\n"}, {"name": "p1", "prompt": "prompt 1\n"}]
@@ -344,6 +433,78 @@ class NotaGenPPOTests(unittest.TestCase):
         self.assertEqual([payload.prompt_idx for payload in payloads], [0, 1])
         self.assertEqual([payload.target_stream_lines for payload in payloads], [3, 5])
         self.assertEqual([payload.meta["rollout_target_stream_lines"] for payload in payloads], [3, 5])
+
+    def test_rollout_seed_scope_run_reuses_seed_set_across_steps(self):
+        prompts = [{"name": "p0", "prompt": "prompt 0\n"}, {"name": "p1", "prompt": "prompt 1\n"}]
+        prompt_targets = [
+            PromptStructuralTarget(
+                target=StructuralTarget(expected_bars=3, expected_structure_bars=3),
+                structure_path="target_0.abc",
+                source_key="test",
+            ),
+            PromptStructuralTarget(
+                target=StructuralTarget(expected_bars=5, expected_structure_bars=5),
+                structure_path="target_1.abc",
+                source_key="test",
+            ),
+        ]
+        prompt_batch = build_prompt_batch_for_slots(
+            prompts=prompts,
+            prompt_targets=prompt_targets,
+            selection="ordered",
+            seed=0,
+            start_slot=0,
+            count=2,
+        )
+        captured_seeds: list[list[int]] = []
+
+        def fake_batch(**kwargs):
+            captured_seeds.append(list(kwargs["seeds"]))
+            return [
+                SimpleNamespace(
+                    ok=True,
+                    full_text=f"{prompt_batch[idx].prompt}[r:0/{prompt_batch[idx].target_stream_lines - 1}][V:1]C|\n",
+                    generated_patches=[[ord("C")]],
+                    meta={"stop_reason": "target_stream_lines"},
+                    error=None,
+                )
+                for idx in range(2)
+            ]
+
+        args = SimpleNamespace(
+            trajectories_per_step=2,
+            rollout_batch_size=2,
+            cached_rollout=True,
+            rollout_retries=1,
+            rollout_failure_policy="error",
+            rollout_spares_percent=10.0,
+            rollout_seed_scope="run",
+            seed=7,
+            temperature=1.0,
+            top_k=8,
+            top_p=0.95,
+            max_chars=100,
+            max_generated_patches=10,
+            timeout_s=5,
+            precision="fp32",
+        )
+        with patch("scripts.custom_ppo_notagen.sample_completions_cached_batch", side_effect=fake_batch):
+            sample_ppo_rollouts(
+                policy_model=object(),
+                policy_shape=object(),
+                step_idx=1,
+                args=args,
+                prompt_batch=prompt_batch,
+            )
+            sample_ppo_rollouts(
+                policy_model=object(),
+                policy_shape=object(),
+                step_idx=2,
+                args=args,
+                prompt_batch=prompt_batch,
+            )
+
+        self.assertEqual(captured_seeds[0], captured_seeds[1])
 
     def test_mixed_prompt_scorer_uses_each_payload_target_context(self):
         prompts = [{"name": "p0", "prompt": "prompt 0\n"}, {"name": "p1", "prompt": "prompt 1\n"}]

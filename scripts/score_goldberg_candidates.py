@@ -31,10 +31,15 @@ def main() -> int:
             / "aria_bar_skeleton.json"
         ),
     )
+    parser.add_argument(
+        "--target-structure-abc",
+        required=True,
+        help="Reference NotaGen ABC whose body/stream-line count is used for the bar-count reward.",
+    )
     parser.add_argument("--output-json", default=None)
     args = parser.parse_args()
 
-    target = load_structural_target(args.target_json)
+    target = load_structural_target(args.target_json, structure_path=args.target_structure_abc)
     config = GoldbergRewardConfig()
     rewards = [score_candidate_file(path, target, config) for path in args.candidates]
     advantages = compute_group_advantages(rewards)
