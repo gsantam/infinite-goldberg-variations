@@ -152,7 +152,9 @@ Keep the `source` or `continuation` fields in each prompt row. PPO uses them to 
 
 For PPO, use E3 SFT: metadata + header, all voices, no aria. The data and PPO prompts must come from `goldberg_metadata_only_split2_l18`, where all ABC `L:` default lengths are normalized to `1/8` and durations are rescaled.
 
-Train longer than we expect to use, retain every epoch checkpoint, and select the epoch from a fixed PPO-like eval set rather than from train/eval loss alone. The eval set should use the same prompt type as PPO, fixed seeds, and all 30 Goldberg prompts. A good first run is 10 epochs with 60 samples per epoch, which gives two fixed seeds per prompt.
+Train longer than we expect to use, retain every epoch checkpoint, and select the epoch from a fixed PPO-like eval set rather than from train/eval loss alone. The eval set should use the same prompt type as PPO, fixed seeds, and all 30 Goldberg prompts. A good first run is 8-10 epochs with 60 samples per epoch, which gives two fixed seeds per prompt.
+
+Always include `--score-pretrained-baseline` for this selection run. It writes an `epoch=0`, `row_type=pretrained_baseline` row in `summary.jsonl` using the same prompts, decoding settings, structural rewards, chroma/harmony similarity rewards, CLAMP2 scoring, and exact-KL machinery as the SFT checkpoints. This gives us the non-SFT base-model reward/similarity baseline in the same plot/table.
 
 ```bash
 RUN_DIR=data/processed/notagen/remote_runs/SFT_E3_L18_fixedeval_$(date -u +%Y%m%dT%H%M%SZ)
@@ -171,18 +173,19 @@ $REMOTE_PY scripts/run_notagen_sft_epoch_sampling.py \
   --prefix-manifest data/processed/notagen/goldberg_metadata_only_split2_l18/header_prefix_manifest_G.jsonl \
   --reward-target-json data/processed/goldberg/structure/aria_bar_skeleton.json \
   --reward-target-structure-abc data/processed/notagen/goldberg_metadata_only_split2_l18/augmented/G/variation-01_G.abc \
-  --aria-reference data/processed/goldberg/abc/aria-bwv-988.abc \
+  --aria-reference data/processed/notagen/aria_prefix_G_streamed.abc \
   --output-dir "$RUN_DIR" \
   --epochs 10 \
+  --score-pretrained-baseline \
   --samples-per-epoch 60 \
   --max-generation-attempts 90 \
-  --sampling-batch-size 16 \
+  --sampling-batch-size 32 \
   --prefix-shuffle-seed 0 \
   --save-epoch-checkpoints \
   --exact-pretrained-kl \
   --exact-kl-score-chunk-patches 64 \
-  --exact-kl-replay-context-patches 128 \
-  --exact-kl-replay-batch-size 4 \
+  --exact-kl-replay-context-patches 0 \
+  --exact-kl-replay-batch-size 0 \
   --lr 1e-6 \
   --batch-size 1 \
   --grad-accumulation-steps 1 \
@@ -190,12 +193,16 @@ $REMOTE_PY scripts/run_notagen_sft_epoch_sampling.py \
   --temperature 1.0 \
   --top-k 8 \
   --top-p 0.95 \
-  --max-generated-patches 256 \
-  --timeout-s 900 \
+  --max-generated-patches 1024 \
+  --timeout-s 1800 \
   --precision bf16 \
-  --skip-clamp2 \
-  --aria-chroma-reward-weight 0 \
-  --aria-harmony-reward-weight 1
+  --clamp2-dir "$REMOTE_NOTAGEN/clamp2" \
+  --aria-chroma-reward-weight 1 \
+  --aria-harmony-reward-weight 1 \
+  --max-similarity-reward 2 \
+  --similarity-chroma-bins 128 \
+  --similarity-band-ratio 0.25 \
+  --similarity-timeout-s 20
 ```
 
 Selection rule:
@@ -203,6 +210,7 @@ Selection rule:
 - Hard reject epochs with nonzero `meter_half`/`meter_double` spikes or prompt-specific exact-meter failures.
 - Among the remaining epochs, prefer high `mean_reward`, high `mean_structural_total_reward`, high `mean_effective_similarity_reward`, and low eval loss.
 - Track `mean_exact_kl_to_pretrained`; use it as a drift guard, not as the primary objective. If two epochs have similar reward/structure, choose the lower-KL epoch.
+- Compare every SFT epoch to the `row_type=pretrained_baseline` row. The base row should have exact KL near zero by construction, and provides the structural/similarity floor that SFT must beat.
 - Do not choose by train loss alone. In previous SFT sweeps, train/eval loss could keep improving while meter behavior degraded.
 
 ## PPO Objective

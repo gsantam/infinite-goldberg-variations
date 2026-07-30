@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from collections import Counter
 from fractions import Fraction
+from pathlib import Path
+from types import SimpleNamespace
 
 from scripts.run_notagen_sft_epoch_sampling import (
     _chunk_generated_flat_ids,
     aggregate_meter_duration_ratio_monitor,
+    evaluate_checkpoint_samples,
     meter_duration_ratio_counts_for_text,
     shuffled_prefix_specs_for_epoch,
     summarize_meter_duration_ratio_counts,
@@ -94,3 +97,34 @@ def test_prefix_shuffle_defaults_to_epoch_dependent_order() -> None:
     epoch_8 = shuffled_prefix_specs_for_epoch(specs, epoch=8, prefix_shuffle_seed=None)
 
     assert epoch_1 != epoch_8
+
+
+def test_pretrained_baseline_zero_sample_row_has_same_summary_shape() -> None:
+    args = SimpleNamespace(samples_per_epoch=0, prefix_shuffle_seed=0)
+
+    row = evaluate_checkpoint_samples(
+        args=args,
+        row_type="pretrained_baseline",
+        epoch=0,
+        checkpoint=Path("base.pth"),
+        checkpoint_is_rolling=False,
+        rolling_checkpoint=None,
+        epoch_checkpoint=None,
+        losses=None,
+        prefix_specs=None,
+        variation_refs=[],
+        exact_kl_reference_checkpoint=Path("base.pth"),
+        max_generated_patches=1024,
+        samples_dir=Path("samples"),
+        logs_dir=Path("logs"),
+        scores_dir=Path("scores"),
+    )
+
+    assert row["epoch"] == 0
+    assert row["row_type"] == "pretrained_baseline"
+    assert row["checkpoint"] == "base.pth"
+    assert row["losses"] is None
+    assert row["samples"] == []
+    assert row["mean_reward"] is None
+    assert row["mean_effective_similarity_reward"] is None
+    assert row["prefix_shuffle_seed"] == 0

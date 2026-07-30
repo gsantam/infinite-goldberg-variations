@@ -820,6 +820,258 @@ def score_rewards(
     return rows
 
 
+def _eval_tag(row_type: str, epoch: int) -> str:
+    if row_type == "pretrained_baseline":
+        return "pretrained_baseline"
+    return f"epoch{epoch:02d}"
+
+
+def evaluate_checkpoint_samples(
+    *,
+    args: argparse.Namespace,
+    row_type: str,
+    epoch: int,
+    checkpoint: Path,
+    checkpoint_is_rolling: bool,
+    rolling_checkpoint: Path | None,
+    epoch_checkpoint: Path | None,
+    losses: dict | None,
+    prefix_specs: list[dict] | None,
+    variation_refs: list[Path],
+    exact_kl_reference_checkpoint: Path,
+    max_generated_patches: int,
+    samples_dir: Path,
+    logs_dir: Path,
+    scores_dir: Path,
+) -> dict:
+    tag = _eval_tag(row_type, epoch)
+    if args.samples_per_epoch == 0:
+        return {
+            "epoch": epoch,
+            "row_type": row_type,
+            "checkpoint": str(checkpoint),
+            "checkpoint_is_rolling": checkpoint_is_rolling,
+            "rolling_checkpoint": None if rolling_checkpoint is None else str(rolling_checkpoint),
+            "epoch_checkpoint": None if epoch_checkpoint is None else str(epoch_checkpoint),
+            "losses": losses,
+            "generation_failures": [],
+            "samples": [],
+            "meter_duration_ratio_monitor": None,
+            "mean_clamp2_aria_similarity": None,
+            "mean_clamp2_variation_centroid_similarity": None,
+            "mean_reward": None,
+            "mean_structural_total_reward": None,
+            "mean_effective_similarity_reward": None,
+            "mean_aria_chroma_harmonic_hist": None,
+            "mean_aria_harmony_combined": None,
+            "exact_pretrained_kl": None,
+            "mean_exact_kl_to_pretrained": None,
+            "prefix_shuffle_seed": args.prefix_shuffle_seed,
+        }
+
+    print(f"===== {tag} sample =====", flush=True)
+    epoch_samples_dir = samples_dir / tag
+    epoch_samples_dir.mkdir(parents=True, exist_ok=True)
+    sample_kwargs = {
+        "project_dir": args.project_dir,
+        "weights": checkpoint,
+        "prefix": args.prefix if args.prefix_manifest is None else None,
+        "prefix_specs": prefix_specs,
+        "out_dir": epoch_samples_dir,
+        "samples_per_epoch": args.samples_per_epoch,
+        "max_generation_attempts": args.max_generation_attempts,
+        "target_stream_lines": args.target_stream_lines,
+        "temperature": args.temperature,
+        "top_k": args.top_k,
+        "top_p": args.top_p,
+        "timeout_s": args.timeout_s,
+        "max_chars": args.max_chars,
+        "max_generated_patches": max_generated_patches,
+        "precision": args.precision,
+        "epoch": epoch,
+        "prefix_shuffle_seed": args.prefix_shuffle_seed,
+    }
+    if args.isolated_sampling:
+        candidates, generation_failures, sample_metadata = sample_cached_trajectories_isolated(
+            venv_python=args.venv_python,
+            **sample_kwargs,
+        )
+    else:
+        candidates, generation_failures, sample_metadata = sample_cached_trajectories(
+            sampling_batch_size=args.sampling_batch_size,
+            **sample_kwargs,
+        )
+    if len(candidates) < args.samples_per_epoch:
+        raise RuntimeError(
+            f"{tag} produced {len(candidates)} successful samples "
+            f"after {args.max_generation_attempts} attempts"
+        )
+
+    print(f"===== {tag} score =====", flush=True)
+    rewards_jsonl = scores_dir / f"{tag}_rewards.jsonl"
+    candidate_prefixes = {row["path"]: Path(row["prefix_path"]) for row in sample_metadata if "prefix_path" in row}
+    reward_rows = score_rewards(
+        project_dir=args.project_dir,
+        prefix=args.prefix if args.prefix_manifest is None else None,
+        candidate_prefixes=candidate_prefixes,
+        reward_target_json=args.reward_target_json,
+        reward_target_structure_abc=args.reward_target_structure_abc,
+        candidates=candidates,
+        out_path=rewards_jsonl,
+        aria_reference=args.aria_reference,
+        aria_chroma_reward_weight=args.aria_chroma_reward_weight,
+        aria_harmony_reward_weight=args.aria_harmony_reward_weight,
+        max_similarity_reward=args.max_similarity_reward,
+        similarity_chroma_bins=args.similarity_chroma_bins,
+        similarity_band_ratio=args.similarity_band_ratio,
+        similarity_timeout_s=args.similarity_timeout_s,
+    )
+
+    metadata_by_path = {row["path"]: row for row in sample_metadata}
+    reward_by_path = {row["path"]: row for row in reward_rows}
+    scores = None
+    variation_scores = None
+    aria_by_path = {}
+    variation_by_path = {}
+    if not args.skip_clamp2:
+        score_json = scores_dir / f"{tag}_clamp2_aria_similarity.json"
+        run(
+            [
+                str(args.venv_python),
+                str(args.project_dir / "scripts" / "score_clamp2_similarity.py"),
+                "--clamp2-dir",
+                str(args.clamp2_dir),
+                "--reference",
+                str(args.aria_reference),
+                "--output-json",
+                str(score_json),
+                *[str(path) for path in candidates],
+            ],
+            cwd=args.project_dir,
+            log=logs_dir / f"{tag}_clamp2.log",
+        )
+
+        variation_score_json = scores_dir / f"{tag}_clamp2_variation_centroid_similarity.json"
+        run(
+            [
+                str(args.venv_python),
+                str(args.project_dir / "scripts" / "score_clamp2_similarity.py"),
+                "--clamp2-dir",
+                str(args.clamp2_dir),
+                "--reference",
+                *[str(path) for path in variation_refs],
+                "--output-json",
+                str(variation_score_json),
+                *[str(path) for path in candidates],
+            ],
+            cwd=args.project_dir,
+            log=logs_dir / f"{tag}_clamp2_variation_centroid.log",
+        )
+        scores = json.loads(score_json.read_text(encoding="utf-8"))
+        variation_scores = json.loads(variation_score_json.read_text(encoding="utf-8"))
+        aria_by_path = {row["path"]: row for row in scores["rows"]}
+        variation_by_path = {row["path"]: row for row in variation_scores["rows"]}
+
+    sample_rows = []
+    for candidate in candidates:
+        path_key = str(candidate)
+        row = {
+            **metadata_by_path[path_key],
+            "reward_breakdown": reward_by_path[path_key],
+        }
+        if not args.skip_clamp2:
+            row["clamp2_aria"] = aria_by_path[path_key]
+            row["clamp2_variation_centroid"] = variation_by_path[path_key]
+        sample_rows.append(row)
+
+    exact_pretrained_kl = None
+    if args.exact_pretrained_kl:
+        print(f"===== {tag} exact KL to pretrained =====", flush=True)
+        exact_pretrained_kl = compute_exact_reference_kl(
+            project_dir=args.project_dir,
+            policy_weights=checkpoint,
+            reference_weights=exact_kl_reference_checkpoint,
+            samples=sample_rows,
+            target_stream_lines=args.target_stream_lines,
+            precision=args.precision,
+            score_chunk_patches=args.exact_kl_score_chunk_patches,
+            replay_context_patches=args.exact_kl_replay_context_patches,
+            replay_batch_size=args.exact_kl_replay_batch_size,
+            out_path=scores_dir / f"{tag}_exact_kl_to_pretrained.json",
+        )
+
+    meter_duration_ratio_monitor = aggregate_meter_duration_ratio_monitor(reward_rows)
+    return {
+        "epoch": epoch,
+        "row_type": row_type,
+        "checkpoint": str(checkpoint),
+        "checkpoint_is_rolling": checkpoint_is_rolling,
+        "rolling_checkpoint": None if rolling_checkpoint is None else str(rolling_checkpoint),
+        "epoch_checkpoint": None if epoch_checkpoint is None else str(epoch_checkpoint),
+        "losses": losses,
+        "generation_failures": generation_failures,
+        "samples": sample_rows,
+        "meter_duration_ratio_monitor": meter_duration_ratio_monitor,
+        "mean_clamp2_aria_similarity": mean_metric(scores["rows"], "cosine_similarity_to_reference") if scores is not None else None,
+        "mean_clamp2_variation_centroid_similarity": mean_metric(variation_scores["rows"], "cosine_similarity_to_reference") if variation_scores is not None else None,
+        "mean_reward": mean_metric(reward_rows, "total_reward"),
+        "mean_structural_total_reward": mean_metric(reward_rows, "structural_total_reward"),
+        "mean_effective_similarity_reward": mean_metric(reward_rows, "effective_similarity_reward"),
+        "mean_aria_chroma_harmonic_hist": mean_metric(reward_rows, "aria_chroma_harmonic_hist"),
+        "mean_aria_harmony_combined": mean_metric(reward_rows, "aria_harmony_combined"),
+        "exact_pretrained_kl": exact_pretrained_kl,
+        "mean_exact_kl_to_pretrained": (
+            None if exact_pretrained_kl is None else exact_pretrained_kl.get("mean_exact_kl_to_reference")
+        ),
+        "prefix_shuffle_seed": args.prefix_shuffle_seed,
+    }
+
+
+def write_summary_row(summary_path: Path, row: dict) -> None:
+    with summary_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(row) + "\n")
+
+
+def print_summary_row(row: dict) -> None:
+    parts = [
+        f"epoch={row['epoch']}",
+        f"row_type={row.get('row_type', 'sft_epoch')}",
+    ]
+    losses = row.get("losses") or {}
+    if losses:
+        parts.append(f"train_loss={losses.get('train_loss')}")
+        parts.append(f"eval_loss={losses.get('eval_loss')}")
+    else:
+        parts.append("train_loss=None")
+        parts.append("eval_loss=None")
+    if row["mean_clamp2_aria_similarity"] is not None:
+        parts.append(f"mean_clamp2_aria_similarity={row['mean_clamp2_aria_similarity']:.6f}")
+    if row["mean_clamp2_variation_centroid_similarity"] is not None:
+        parts.append(
+            f"mean_clamp2_variation_centroid_similarity={row['mean_clamp2_variation_centroid_similarity']:.6f}"
+        )
+    if row["mean_exact_kl_to_pretrained"] is not None:
+        parts.append(f"mean_exact_kl_to_pretrained={row['mean_exact_kl_to_pretrained']:.6f}")
+    if row["mean_reward"] is not None:
+        parts.append(f"mean_reward={row['mean_reward']:.6f}")
+    if row["mean_structural_total_reward"] is not None:
+        parts.append(f"mean_structural={row['mean_structural_total_reward']:.6f}")
+    if row["mean_effective_similarity_reward"] is not None:
+        parts.append(f"mean_similarity={row['mean_effective_similarity_reward']:.6f}")
+    if row["mean_aria_harmony_combined"] is not None:
+        parts.append(f"aria_harmony={row['mean_aria_harmony_combined']:.6f}")
+    if row["mean_aria_chroma_harmonic_hist"] is not None:
+        parts.append(f"aria_chroma={row['mean_aria_chroma_harmonic_hist']:.6f}")
+    meter_duration_ratio_monitor = row.get("meter_duration_ratio_monitor")
+    if meter_duration_ratio_monitor is not None:
+        ratio_overall = meter_duration_ratio_monitor["overall"]
+        if ratio_overall["voice_bar_count"]:
+            parts.append(f"meter_exact={ratio_overall['exact_bar_fraction']:.6f}")
+            parts.append(f"meter_half={ratio_overall['half_bar_fraction']:.6f}")
+            parts.append(f"meter_double={ratio_overall['double_bar_fraction']:.6f}")
+    print(" ".join(parts), flush=True)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--notagen-dir", type=Path, default=Path("/home/jl_fs/music-generation/NotaGen"))
@@ -847,6 +1099,14 @@ def main() -> None:
     parser.add_argument("--samples-per-epoch", type=int, default=4)
     parser.add_argument("--max-generation-attempts", type=int, default=16)
     parser.add_argument("--rolling-checkpoint", type=Path, default=None)
+    parser.add_argument(
+        "--score-pretrained-baseline",
+        action="store_true",
+        help=(
+            "Before epoch 1 training, sample --pretrained with the same fixed eval prompts/seeds "
+            "and write an epoch=0 row_type=pretrained_baseline row with rewards/similarity/KL."
+        ),
+    )
     parser.add_argument(
         "--save-epoch-checkpoints",
         action="store_true",
@@ -938,10 +1198,13 @@ def main() -> None:
     if max_generated_patches <= 0:
         raise ValueError("--max-generated-patches must be positive")
 
+    similarity_rewards_enabled = args.aria_chroma_reward_weight != 0.0 or args.aria_harmony_reward_weight != 0.0
     required_paths = [args.notagen_dir, args.project_dir, args.pretrained, args.train_jsonl, args.eval_jsonl, args.reward_target_json]
     required_paths.append(args.reward_target_structure_abc)
+    if not args.skip_clamp2 or similarity_rewards_enabled:
+        required_paths.append(args.aria_reference)
     if not args.skip_clamp2:
-        required_paths.extend([args.aria_reference, args.clamp2_dir])
+        required_paths.append(args.clamp2_dir)
     if args.train_prefix_mask_root is not None:
         required_paths.append(args.train_prefix_mask_root)
     if args.train_prefix_mask_source_root is not None:
@@ -985,6 +1248,28 @@ def main() -> None:
         raise FileNotFoundError(f"rolling checkpoint is required when resuming: {rolling_checkpoint}")
     if args.start_epoch <= 1 and rolling_checkpoint.exists():
         rolling_checkpoint.unlink()
+
+    if args.score_pretrained_baseline and args.start_epoch <= 1:
+        print("===== pretrained baseline eval =====", flush=True)
+        baseline_row = evaluate_checkpoint_samples(
+            args=args,
+            row_type="pretrained_baseline",
+            epoch=0,
+            checkpoint=args.pretrained,
+            checkpoint_is_rolling=False,
+            rolling_checkpoint=None,
+            epoch_checkpoint=None,
+            losses=None,
+            prefix_specs=prefix_specs,
+            variation_refs=variation_refs,
+            exact_kl_reference_checkpoint=exact_kl_reference_checkpoint,
+            max_generated_patches=max_generated_patches,
+            samples_dir=samples_dir,
+            logs_dir=logs_dir,
+            scores_dir=scores_dir,
+        )
+        write_summary_row(summary_path, baseline_row)
+        print_summary_row(baseline_row)
 
     for epoch in range(args.start_epoch, args.epochs + 1):
         print(f"===== epoch {epoch}/{args.epochs} train =====", flush=True)
@@ -1046,6 +1331,7 @@ def main() -> None:
         if args.samples_per_epoch == 0:
             row = {
                 "epoch": epoch,
+                "row_type": "sft_epoch",
                 "checkpoint": str(checkpoint_for_epoch),
                 "checkpoint_is_rolling": epoch_checkpoint is None,
                 "rolling_checkpoint": str(rolling_checkpoint),
@@ -1064,8 +1350,7 @@ def main() -> None:
                 "mean_exact_kl_to_pretrained": None,
                 "prefix_shuffle_seed": args.prefix_shuffle_seed,
             }
-            with summary_path.open("a", encoding="utf-8") as handle:
-                handle.write(json.dumps(row) + "\n")
+            write_summary_row(summary_path, row)
             print(
                 f"epoch={epoch} train_loss={losses.get('train_loss')} "
                 f"eval_loss={losses.get('eval_loss')} samples=0",
@@ -1073,188 +1358,25 @@ def main() -> None:
             )
             continue
 
-        print(f"===== epoch {epoch}/{args.epochs} sample =====", flush=True)
-        epoch_samples_dir = samples_dir / f"epoch{epoch:02d}"
-        epoch_samples_dir.mkdir(parents=True, exist_ok=True)
-        sample_kwargs = {
-            "project_dir": args.project_dir,
-            "weights": rolling_checkpoint,
-            "prefix": args.prefix if args.prefix_manifest is None else None,
-            "prefix_specs": prefix_specs,
-            "out_dir": epoch_samples_dir,
-            "samples_per_epoch": args.samples_per_epoch,
-            "max_generation_attempts": args.max_generation_attempts,
-            "target_stream_lines": args.target_stream_lines,
-            "temperature": args.temperature,
-            "top_k": args.top_k,
-            "top_p": args.top_p,
-            "timeout_s": args.timeout_s,
-            "max_chars": args.max_chars,
-            "max_generated_patches": max_generated_patches,
-            "precision": args.precision,
-            "epoch": epoch,
-            "prefix_shuffle_seed": args.prefix_shuffle_seed,
-        }
-        if args.isolated_sampling:
-            candidates, generation_failures, sample_metadata = sample_cached_trajectories_isolated(
-                venv_python=args.venv_python,
-                **sample_kwargs,
-            )
-        else:
-            candidates, generation_failures, sample_metadata = sample_cached_trajectories(
-                sampling_batch_size=args.sampling_batch_size,
-                **sample_kwargs,
-            )
-        if len(candidates) < args.samples_per_epoch:
-            raise RuntimeError(
-                f"epoch {epoch} produced {len(candidates)} successful samples "
-                f"after {args.max_generation_attempts} attempts"
-            )
-
-        print(f"===== epoch {epoch}/{args.epochs} score =====", flush=True)
-        rewards_jsonl = scores_dir / f"epoch{epoch:02d}_rewards.jsonl"
-        candidate_prefixes = {row["path"]: Path(row["prefix_path"]) for row in sample_metadata if "prefix_path" in row}
-        reward_rows = score_rewards(
-            project_dir=args.project_dir,
-            prefix=args.prefix if args.prefix_manifest is None else None,
-            candidate_prefixes=candidate_prefixes,
-            reward_target_json=args.reward_target_json,
-            reward_target_structure_abc=args.reward_target_structure_abc,
-            candidates=candidates,
-            out_path=rewards_jsonl,
-            aria_reference=args.aria_reference,
-            aria_chroma_reward_weight=args.aria_chroma_reward_weight,
-            aria_harmony_reward_weight=args.aria_harmony_reward_weight,
-            max_similarity_reward=args.max_similarity_reward,
-            similarity_chroma_bins=args.similarity_chroma_bins,
-            similarity_band_ratio=args.similarity_band_ratio,
-            similarity_timeout_s=args.similarity_timeout_s,
+        row = evaluate_checkpoint_samples(
+            args=args,
+            row_type="sft_epoch",
+            epoch=epoch,
+            checkpoint=checkpoint_for_epoch,
+            checkpoint_is_rolling=epoch_checkpoint is None,
+            rolling_checkpoint=rolling_checkpoint,
+            epoch_checkpoint=epoch_checkpoint,
+            losses=losses,
+            prefix_specs=prefix_specs,
+            variation_refs=variation_refs,
+            exact_kl_reference_checkpoint=exact_kl_reference_checkpoint,
+            max_generated_patches=max_generated_patches,
+            samples_dir=samples_dir,
+            logs_dir=logs_dir,
+            scores_dir=scores_dir,
         )
-
-        metadata_by_path = {row["path"]: row for row in sample_metadata}
-        reward_by_path = {row["path"]: row for row in reward_rows}
-        scores = None
-        variation_scores = None
-        aria_by_path = {}
-        variation_by_path = {}
-        if not args.skip_clamp2:
-            score_json = scores_dir / f"epoch{epoch:02d}_clamp2_aria_similarity.json"
-            run(
-                [
-                    str(args.venv_python),
-                    str(args.project_dir / "scripts" / "score_clamp2_similarity.py"),
-                    "--clamp2-dir",
-                    str(args.clamp2_dir),
-                    "--reference",
-                    str(args.aria_reference),
-                    "--output-json",
-                    str(score_json),
-                    *[str(path) for path in candidates],
-                ],
-                cwd=args.project_dir,
-                log=logs_dir / f"epoch{epoch:02d}_clamp2.log",
-            )
-
-            variation_score_json = scores_dir / f"epoch{epoch:02d}_clamp2_variation_centroid_similarity.json"
-            run(
-                [
-                    str(args.venv_python),
-                    str(args.project_dir / "scripts" / "score_clamp2_similarity.py"),
-                    "--clamp2-dir",
-                    str(args.clamp2_dir),
-                    "--reference",
-                    *[str(path) for path in variation_refs],
-                    "--output-json",
-                    str(variation_score_json),
-                    *[str(path) for path in candidates],
-                ],
-                cwd=args.project_dir,
-                log=logs_dir / f"epoch{epoch:02d}_clamp2_variation_centroid.log",
-            )
-            scores = json.loads(score_json.read_text(encoding="utf-8"))
-            variation_scores = json.loads(variation_score_json.read_text(encoding="utf-8"))
-            aria_by_path = {row["path"]: row for row in scores["rows"]}
-            variation_by_path = {row["path"]: row for row in variation_scores["rows"]}
-        sample_rows = []
-        for candidate in candidates:
-            path_key = str(candidate)
-            row = {
-                **metadata_by_path[path_key],
-                "reward_breakdown": reward_by_path[path_key],
-            }
-            if not args.skip_clamp2:
-                row["clamp2_aria"] = aria_by_path[path_key]
-                row["clamp2_variation_centroid"] = variation_by_path[path_key]
-            sample_rows.append(row)
-        exact_pretrained_kl = None
-        if args.exact_pretrained_kl:
-            print(f"===== epoch {epoch}/{args.epochs} exact KL to pretrained =====", flush=True)
-            exact_pretrained_kl = compute_exact_reference_kl(
-                project_dir=args.project_dir,
-                policy_weights=checkpoint_for_epoch,
-                reference_weights=exact_kl_reference_checkpoint,
-                samples=sample_rows,
-                target_stream_lines=args.target_stream_lines,
-                precision=args.precision,
-                score_chunk_patches=args.exact_kl_score_chunk_patches,
-                replay_context_patches=args.exact_kl_replay_context_patches,
-                replay_batch_size=args.exact_kl_replay_batch_size,
-                out_path=scores_dir / f"epoch{epoch:02d}_exact_kl_to_pretrained.json",
-            )
-        meter_duration_ratio_monitor = aggregate_meter_duration_ratio_monitor(reward_rows)
-        row = {
-            "epoch": epoch,
-            "checkpoint": str(checkpoint_for_epoch),
-            "checkpoint_is_rolling": epoch_checkpoint is None,
-            "rolling_checkpoint": str(rolling_checkpoint),
-            "epoch_checkpoint": None if epoch_checkpoint is None else str(epoch_checkpoint),
-            "losses": losses,
-            "generation_failures": generation_failures,
-            "samples": sample_rows,
-            "meter_duration_ratio_monitor": meter_duration_ratio_monitor,
-            "mean_clamp2_aria_similarity": mean_metric(scores["rows"], "cosine_similarity_to_reference") if scores is not None else None,
-            "mean_clamp2_variation_centroid_similarity": mean_metric(variation_scores["rows"], "cosine_similarity_to_reference") if variation_scores is not None else None,
-            "mean_reward": mean_metric(reward_rows, "total_reward"),
-            "mean_structural_total_reward": mean_metric(reward_rows, "structural_total_reward"),
-            "mean_effective_similarity_reward": mean_metric(reward_rows, "effective_similarity_reward"),
-            "mean_aria_chroma_harmonic_hist": mean_metric(reward_rows, "aria_chroma_harmonic_hist"),
-            "mean_aria_harmony_combined": mean_metric(reward_rows, "aria_harmony_combined"),
-            "exact_pretrained_kl": exact_pretrained_kl,
-            "mean_exact_kl_to_pretrained": (
-                None if exact_pretrained_kl is None else exact_pretrained_kl.get("mean_exact_kl_to_reference")
-            ),
-            "prefix_shuffle_seed": args.prefix_shuffle_seed,
-        }
-        with summary_path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(row) + "\n")
-        parts = [
-            f"epoch={epoch}",
-            f"train_loss={losses.get('train_loss')}",
-            f"eval_loss={losses.get('eval_loss')}",
-        ]
-        if row["mean_clamp2_aria_similarity"] is not None:
-            parts.append(f"mean_clamp2_aria_similarity={row['mean_clamp2_aria_similarity']:.6f}")
-        if row["mean_clamp2_variation_centroid_similarity"] is not None:
-            parts.append(
-                f"mean_clamp2_variation_centroid_similarity={row['mean_clamp2_variation_centroid_similarity']:.6f}"
-            )
-        if row["mean_exact_kl_to_pretrained"] is not None:
-            parts.append(f"mean_exact_kl_to_pretrained={row['mean_exact_kl_to_pretrained']:.6f}")
-        parts.append(f"mean_reward={row['mean_reward']:.6f}")
-        if row["mean_structural_total_reward"] is not None:
-            parts.append(f"mean_structural={row['mean_structural_total_reward']:.6f}")
-        if row["mean_effective_similarity_reward"] is not None:
-            parts.append(f"mean_similarity={row['mean_effective_similarity_reward']:.6f}")
-        if row["mean_aria_harmony_combined"] is not None:
-            parts.append(f"aria_harmony={row['mean_aria_harmony_combined']:.6f}")
-        if row["mean_aria_chroma_harmonic_hist"] is not None:
-            parts.append(f"aria_chroma={row['mean_aria_chroma_harmonic_hist']:.6f}")
-        ratio_overall = meter_duration_ratio_monitor["overall"]
-        if ratio_overall["voice_bar_count"]:
-            parts.append(f"meter_exact={ratio_overall['exact_bar_fraction']:.6f}")
-            parts.append(f"meter_half={ratio_overall['half_bar_fraction']:.6f}")
-            parts.append(f"meter_double={ratio_overall['double_bar_fraction']:.6f}")
-        print(" ".join(parts), flush=True)
+        write_summary_row(summary_path, row)
+        print_summary_row(row)
 
     if args.delete_rolling_checkpoint_at_end:
         rolling_checkpoint.unlink(missing_ok=True)
