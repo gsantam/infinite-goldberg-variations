@@ -7,6 +7,7 @@ from fractions import Fraction
 import json
 import os
 import random
+import re
 import shutil
 import subprocess
 import sys
@@ -47,6 +48,127 @@ def mean_metric(rows: list[dict], key: str) -> float | None:
     if not values:
         return None
     return sum(values) / len(values)
+
+
+def load_jsonl_rows(path: Path) -> list[dict]:
+    rows = []
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if line.strip():
+                rows.append(json.loads(line))
+    return rows
+
+
+def write_jsonl_rows(path: Path, rows: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row) + "\n")
+
+
+def variation_name_from_index_row(row: dict) -> str:
+    path = Path(str(row.get("path") or ""))
+    match = re.search(r"variation-\d+", path.name)
+    if match is None:
+        match = re.search(r"variation-\d+", str(path))
+    if match is None:
+        raise ValueError(f"could not infer variation name from index row: {row}")
+    return match.group(0)
+
+
+def dedupe_index_rows(rows: list[dict]) -> list[dict]:
+    seen: set[tuple[str, str]] = set()
+    deduped = []
+    for row in rows:
+        key = (str(row.get("path")), str(row.get("key")))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(row)
+    return deduped
+
+
+def build_sft_variation_split_manifests(
+    *,
+    train_jsonl: Path,
+    eval_jsonl: Path,
+    output_dir: Path,
+    eval_variation_count: int,
+    eval_variation_seed: int,
+) -> tuple[Path, Path, dict]:
+    """Build run-local train/eval manifests split by variation name.
+
+    eval_variation_count=0 means train on all rows. To keep NotaGen's eval-loss
+    code alive, eval rows are also set to all rows; this eval loss is therefore
+    in-sample and should not be treated as held-out validation.
+    """
+
+    source_rows = dedupe_index_rows(load_jsonl_rows(train_jsonl) + load_jsonl_rows(eval_jsonl))
+    if not source_rows:
+        raise ValueError("cannot build SFT split from empty train/eval manifests")
+
+    variation_names = sorted({variation_name_from_index_row(row) for row in source_rows})
+    if eval_variation_count < 0:
+        raise ValueError("--sft-eval-variation-count must be non-negative")
+    if eval_variation_count >= len(variation_names) and eval_variation_count != 0:
+        raise ValueError(
+            "--sft-eval-variation-count must be 0 or smaller than the number of variations "
+            f"({len(variation_names)})"
+        )
+
+    if eval_variation_count == 0:
+        eval_variations: set[str] = set()
+        train_rows = source_rows
+        eval_rows = source_rows
+        split_mode = "train_all_eval_all_for_loss"
+    else:
+        rng = random.Random(eval_variation_seed)
+        eval_variations = set(rng.sample(variation_names, eval_variation_count))
+        train_rows = [row for row in source_rows if variation_name_from_index_row(row) not in eval_variations]
+        eval_rows = [row for row in source_rows if variation_name_from_index_row(row) in eval_variations]
+        split_mode = "heldout_variations"
+
+    manifest_dir = output_dir / "manifests"
+    train_out = manifest_dir / "augmented_train.jsonl"
+    eval_out = manifest_dir / "augmented_eval.jsonl"
+    write_jsonl_rows(train_out, train_rows)
+    write_jsonl_rows(eval_out, eval_rows)
+
+    split_manifest = {
+        "mode": split_mode,
+        "source_train_jsonl": str(train_jsonl),
+        "source_eval_jsonl": str(eval_jsonl),
+        "train_jsonl": str(train_out),
+        "eval_jsonl": str(eval_out),
+        "eval_variation_count": eval_variation_count,
+        "eval_variation_seed": eval_variation_seed,
+        "variation_count": len(variation_names),
+        "train_row_count": len(train_rows),
+        "eval_row_count": len(eval_rows),
+        "train_variations": [
+            name for name in variation_names if eval_variation_count == 0 or name not in eval_variations
+        ],
+        "eval_variations": sorted(eval_variations),
+        "notes": [
+            "Rows are split by variation name, preserving all key augmentations for each selected variation.",
+            *(
+                [
+                    "eval_variation_count=0 trains on all variations; eval loss uses the same all-row manifest and is not held out.",
+                ]
+                if eval_variation_count == 0
+                else []
+            ),
+        ],
+    }
+    (manifest_dir / "sft_variation_split_manifest.json").write_text(
+        json.dumps(split_manifest, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    (manifest_dir / "eval_variations.txt").write_text(
+        "\n".join(sorted(eval_variations)) + ("\n" if eval_variations else ""),
+        encoding="utf-8",
+    )
+    return train_out, eval_out, split_manifest
 
 
 def _ratio_fraction(label: str) -> Fraction:
@@ -1080,6 +1202,22 @@ def main() -> None:
     parser.add_argument("--pretrained", type=Path, default=Path("/home/jl_fs/music-generation/models/weights_notagen_pretrain-finetune_p_size_16_p_length_1024_p_layers_c_layers_6_20_h_size_1280_lr_1e-05_batch_1.pth"))
     parser.add_argument("--train-jsonl", type=Path, default=Path("/home/jl_fs/music-generation/infinite-goldberg-variations/data/processed/notagen/goldberg_aria_conditioned/augmented_train.jsonl"))
     parser.add_argument("--eval-jsonl", type=Path, default=Path("/home/jl_fs/music-generation/infinite-goldberg-variations/data/processed/notagen/goldberg_aria_conditioned/augmented_eval.jsonl"))
+    parser.add_argument(
+        "--sft-eval-variation-count",
+        type=int,
+        default=None,
+        help=(
+            "Build run-local train/eval manifests by variation before SFT. "
+            "Use 0 to train on all variations; eval loss then uses all rows too and is in-sample. "
+            "When unset, use --train-jsonl and --eval-jsonl unchanged."
+        ),
+    )
+    parser.add_argument(
+        "--sft-eval-variation-seed",
+        type=int,
+        default=0,
+        help="Deterministic seed used when --sft-eval-variation-count is positive.",
+    )
     parser.add_argument("--train-prefix-mask-root", type=Path, default=None)
     parser.add_argument("--train-prefix-mask-source-root", type=Path, default=None)
     parser.add_argument("--train-prefix-mask-manifest", type=Path, default=None)
@@ -1197,6 +1335,25 @@ def main() -> None:
         max_generated_patches = max(1, (int(args.max_chars) + 15) // 16)
     if max_generated_patches <= 0:
         raise ValueError("--max-generated-patches must be positive")
+
+    if args.sft_eval_variation_count is not None:
+        train_jsonl, eval_jsonl, split_manifest = build_sft_variation_split_manifests(
+            train_jsonl=args.train_jsonl,
+            eval_jsonl=args.eval_jsonl,
+            output_dir=args.output_dir,
+            eval_variation_count=args.sft_eval_variation_count,
+            eval_variation_seed=args.sft_eval_variation_seed,
+        )
+        args.train_jsonl = train_jsonl
+        args.eval_jsonl = eval_jsonl
+        print(
+            "prepared SFT variation split "
+            f"mode={split_manifest['mode']} "
+            f"train_rows={split_manifest['train_row_count']} "
+            f"eval_rows={split_manifest['eval_row_count']} "
+            f"eval_variations={split_manifest['eval_variations']}",
+            flush=True,
+        )
 
     similarity_rewards_enabled = args.aria_chroma_reward_weight != 0.0 or args.aria_harmony_reward_weight != 0.0
     required_paths = [args.notagen_dir, args.project_dir, args.pretrained, args.train_jsonl, args.eval_jsonl, args.reward_target_json]
