@@ -86,48 +86,22 @@ related to harmony and structure:
 | CLaMP2 Aria similarity | Embedding similarity to the Aria. | Global semantic diagnostic | Logged only |
 | Aria chroma harmonic histogram | Full-texture and bass pitch-class distributions after key normalization. | Global pitch/harmony profile | Active |
 | Aria top chroma histogram | Top-voice pitch-class distribution after key normalization. | Global melodic profile | Active |
-| Aria harmony DTW | Bar-level harmony, root, and bass sequences aligned to the Aria. | Local sequence alignment | Active |
+| Aria composite harmony DTW | Bar-level harmony tokens combining inferred root, bass, and chord quality. | Local DTW over bars | Active, averaged into `aria_harmony_dtw_combined` |
+| Aria root DTW | Inferred harmonic-root pitch-class sequence aligned to the Aria. | Local DTW over bars | Active, averaged into `aria_harmony_dtw_combined` |
+| Aria bass DTW | Inferred bass pitch-class sequence aligned to the Aria. | Local DTW over bars | Active, averaged into `aria_harmony_dtw_combined` |
 | Same-bar root match | Harmonic root pitch-class agreement with the corresponding Aria bar. | Local bar comparison | Active, low weight |
 | Same-bar bass match | Bass pitch-class agreement with the corresponding Aria bar. | Local bar comparison | Active, low weight |
 
 Even with this simple SFT setup, the generated samples move closer to the Aria
-on some of these signals, but the improvement is not monotonic across all
-metrics or later epochs. Here epoch 0 is the base NotaGen-large model prompted
-only with the metadata keywords, without the Aria in the prompt.
+on several of these signals, but the picture is mixed across the full
+similarity bundle. The active reward tracks chroma histograms for the full
+texture, bass, and top voice; bar-level DTW for composite harmony, root, and
+bass; and low-weight same-bar root and bass agreement. I also keep logged
+diagnostics for CLaMP2 semantic similarity, chroma DTW, top-voice contour DTW,
+and density DTW. Here epoch 0 is the base NotaGen-large model prompted only
+with the metadata keywords, without the Aria in the prompt.
 
-![CLaMP2 similarity across SFT epochs](docs/assets/sft_similarity_vs_epoch.svg)
-
-The current reward is a weighted sum of structural checks and Aria-similarity
-checks. The table below only lists active reward terms. Values are mean raw
-subreward scores before applying the listed weight, except for subtotal rows,
-which are already weighted sums. Epoch 0 is the pretrained NotaGen-large model
-with the same prompt/evaluation setup; GT is the mean over the real Goldberg
-variations under the same scorer.
-
-| Reward | Type | Description | Terminal / Patch | Weight | Epoch 0 | Epoch 1 | Epoch 8 | GT |
-|---|---|---|---|---:|---:|---:|---:|---:|
-| `completion_reward` | Structural | Target written/effective bar count reached. | terminal | 0.250 | 1 | 0.967 | 1 | 0.900 |
-| `expanded_completion_reward` | Structural | Target repeat-expanded/rendered bar count reached. | terminal | 0.250 | 0.500 | 0.417 | 0.583 | 0.900 |
-| `parse_reward` | Structural | Graded ABC syntax/tokenizer/music21 parse quality. | terminal | 0.250 | 0.993 | 0.923 | 0.950 | 1 |
-| `syntax_penalty_reward` | Structural | Fast malformed-syntax penalty; negative when triggered. | terminal | 0.250 | 0 | -0.100 | -0.083 | 0 |
-| `countdown_reward` | Structural | NotaGen stream countdown `[r:i/j]` progression. | patch | 0.250 | 1 | 0.999 | 1 | 1 |
-| `line_closure_reward` | Structural | Generated stream lines close syntactically. | patch | 0.250 | 1 | 0.999 | 1 | 1 |
-| `bar_token_reward` | Structural | Stream lines contain bar/repeat tokens. | patch | 0.100 | 1 | 1 | 1 | 1 |
-| `meter_alignment_reward` | Structural | Populated voices align with expected meter. | patch | 0.750 | 0.969 | 0.927 | 0.974 | 0.987 |
-| `meter_duration_closeness_reward` | Structural | Bar durations are close to expected meter. | patch | 0.750 | 0.996 | 0.964 | 0.997 | 0.994 |
-| `bar_meter_consistency_reward` | Structural | Voices inside a bar are mutually meter-consistent. | patch | 0.750 | 0.970 | 0.939 | 0.997 | 0.997 |
-| `bar_count_reward` | Structural | Written/effective musical bars close to target 32. | patch marginal | 1 | 1 | 0.999 | 1 | 0.902 |
-| `expanded_bar_count_reward` | Structural | Repeat-expanded/rendered bars close to target 64. | patch marginal | 1 | 0.764 | 0.757 | 0.834 | 0.899 |
-| `voice_declaration_reward` | Structural | Generated voices are declared in the header. | patch | 1 | 1 | 1 | 1 | 1 |
-| `score_voice_reward` | Structural | Generated voices match the `%%score` voice set. | patch | 0.500 | 1 | 1 | 1 | 1 |
-| `structural_total_reward` | Subtotal | Weighted structural subtotal. | mixed | 1 | 6.689 | 6.530 | 6.773 | 6.834 |
-| `aria_chroma_harmonic_hist` | Similarity | Active chroma histogram mean: full texture plus bass. | terminal | 1 | 0.786 | 0.794 | 0.827 | 0.853 |
-| `aria_chroma_top_hist` | Similarity | Active top-voice global chroma histogram cosine. | terminal | 1 | 0.753 | 0.754 | 0.754 | 0.794 |
-| `aria_harmony_dtw_combined` | Similarity | Active harmony DTW mean: composite/root/bass DTW. | patch DTW | 1 | 0.773 | 0.775 | 0.786 | 0.791 |
-| `aria_harmony_aligned_root` | Similarity | Same-bar harmonic root pitch-class match to the Aria. | patch same-bar | 0.250 | 0.175 | 0.165 | 0.196 | 0.218 |
-| `aria_harmony_aligned_bass` | Similarity | Same-bar bass pitch-class match to the Aria. | patch same-bar | 0.250 | 0.164 | 0.166 | 0.165 | 0.232 |
-| `active_similarity_reward` | Subtotal | Clipped active similarity subtotal, decoupled from structural validity. | mixed | 1 | 2.345 | 2.303 | 2.378 | 2.550 |
-| `total_reward` | Total | Structural subtotal plus active similarity subtotal. | mixed | 1 | 9.034 | 8.833 | 9.152 | 9.384 |
+![SFT similarity metrics across epochs](docs/assets/sft_similarity_breakdown_all_metrics_with_gt.png)
 
 At this point, around epochs 8-9, the model can already generate some
 relatively decent melodies that sound Baroque and Bach-like, and that are also
@@ -148,59 +122,56 @@ https://github.com/user-attachments/assets/eb4a3cf9-9998-4410-9401-e3708356828f
 Both of them are still very unrefined, with harmonic problems where the initial
 counterpoint becomes messy and loses a clear structure, but it is a beginning.
 
-### RL through GRPO
+### RL through PPO
 
 Something I have been curious about is whether reinforcement learning can push
-the model toward these structural rules more directly. I am trying Group
-Relative Policy Optimization (GRPO), introduced in
-[DeepSeekMath](https://arxiv.org/abs/2402.03300), because it works well when
-the reward is easy to check automatically, as in math or logic tasks. This
-feels closer to this project than preference modelling, which has not worked
-especially well for music generation so far
-([arXiv:2504.16839](https://arxiv.org/pdf/2504.16839)).
+the model toward these structural rules more directly. I am now experimenting
+with [Proximal Policy Optimization](https://arxiv.org/abs/1707.06347). The
+setup is close to the standard RLHF loop: generate continuations from the
+current policy, score them with automatic rewards, estimate advantages with a
+value function, and update the policy with the clipped PPO objective.
 
-The reward is a weighted sum of checks: ABC parse quality, countdown and line
-structure, bar emission, meter consistency, written and repeat-expanded musical
-bar counts, chroma-histogram similarity to the Aria, and lightweight
-bar-aligned/DTW harmony similarity to the Aria.
+The reward is a weighted sum of structural checks and Aria-similarity checks.
+The similarity side uses the chroma and harmony signals defined above. On top
+of those similarity metrics, I also track structural rewards for ABC validity,
+NotaGen line structure, meter consistency, written musical bars, and
+repeat-expanded rendered bars. The table below lists only active structural
+reward terms. Values are mean raw subreward scores before applying the listed
+weight, except for the subtotal row, which is already a weighted sum. Epoch 0
+is the pretrained NotaGen-large model with the same prompt/evaluation setup;
+GT is the mean over the real Goldberg variations under the same scorer.
 
-The current run uses NotaGen-large with a frozen reference model for KL, LoRA
-(`r=8`, `alpha=16`, dropout `0.05`), 4 trajectories per prompt, 32 target
-stream lines, learning rate `2e-6`, KL coefficient `0.02`, bf16 precision, and
-cached rollout/replay chunking to keep long continuations in memory. Checkpoints
-are saved every step, with periodic optimizer checkpoints for resuming.
+| Reward | Type | Description | Terminal / Patch | Weight | Epoch 0 | Epoch 1 | Epoch 8 | GT |
+|---|---|---|---|---:|---:|---:|---:|---:|
+| `completion_reward` | Structural | Target written/effective bar count reached. | terminal | 0.250 | 1 | 0.967 | 1 | 0.900 |
+| `expanded_completion_reward` | Structural | Target repeat-expanded/rendered bar count reached. | terminal | 0.250 | 0.500 | 0.417 | 0.583 | 0.900 |
+| `parse_reward` | Structural | Graded ABC syntax/tokenizer/music21 parse quality. | terminal | 0.250 | 0.993 | 0.923 | 0.950 | 1 |
+| `syntax_penalty_reward` | Structural | Fast malformed-syntax penalty; negative when triggered. | terminal | 0.250 | 0 | -0.100 | -0.083 | 0 |
+| `countdown_reward` | Structural | NotaGen stream countdown `[r:i/j]` progression. | patch | 0.250 | 1 | 0.999 | 1 | 1 |
+| `line_closure_reward` | Structural | Generated stream lines close syntactically. | patch | 0.250 | 1 | 0.999 | 1 | 1 |
+| `bar_token_reward` | Structural | Stream lines contain bar/repeat tokens. | patch | 0.100 | 1 | 1 | 1 | 1 |
+| `meter_alignment_reward` | Structural | Populated voices align with expected meter. | patch | 0.750 | 0.969 | 0.927 | 0.974 | 0.987 |
+| `meter_duration_closeness_reward` | Structural | Bar durations are close to expected meter. | patch | 0.750 | 0.996 | 0.964 | 0.997 | 0.994 |
+| `bar_meter_consistency_reward` | Structural | Voices inside a bar are mutually meter-consistent. | patch | 0.750 | 0.970 | 0.939 | 0.997 | 0.997 |
+| `bar_count_reward` | Structural | Written/effective musical bars close to target 32. | patch marginal | 1 | 1 | 0.999 | 1 | 0.902 |
+| `expanded_bar_count_reward` | Structural | Repeat-expanded/rendered bars close to target 64. | patch marginal | 1 | 0.764 | 0.757 | 0.834 | 0.899 |
+| `voice_declaration_reward` | Structural | Generated voices are declared in the header. | patch | 1 | 1 | 1 | 1 | 1 |
+| `score_voice_reward` | Structural | Generated voices match the `%%score` voice set. | patch | 0.500 | 1 | 1 | 1 | 1 |
+| `structural_total_reward` | Subtotal | Weighted structural subtotal. | mixed | 1 | 6.689 | 6.530 | 6.773 | 6.834 |
 
-Here is the current reward evolution snapshot. It is still shaky because of the
-large variance, but after grouping the steps the ascending trend is quite clear:
+In the current PPO implementation, rewards and value targets are computed per
+NotaGen patch for tractability, while the policy loss is reduced over generated
+character tokens. Patch-level advantages are repeated over the generated tokens
+inside each patch, prompt tokens are excluded from the loss, and Generalized
+Advantage Estimation controls how rewards are propagated through the trajectory.
+An exact full-vocabulary KL against the frozen SFT/reference policy can be
+logged or used as a penalty.
 
-![GRPO reward evolution](docs/assets/grpo_reward_evolution.svg)
-
-The harmony view is a bit more subtle: the raw harmony components are fairly
-flat, while the actual weighted harmony contribution mostly moves with how much
-valid 32-bar structure the model produces:
-
-![GRPO harmony reward evolution](docs/assets/grpo_harmony_evolution.svg)
-
-Qualitatively, the melodies produced after RL also seem to have a much more
-coherent large-scale structure. For example, this fixed render from step 171 has
-a clear two-part form, and each part splits again into two subparts, which is
-close to the phrase layout of the Aria:
-
-https://github.com/user-attachments/assets/56f300b6-9181-48f5-94d3-d57fa0cb6746
-
-Another good example is this high-reward render from step 54:
-
-https://github.com/user-attachments/assets/87f1db78-1f7f-4797-9659-eb4514aa9d66
-
-A more imperfect one, with some mistakes but where the Aria theme is very easy
-to identify and stands out, is this mid-range render from step 253:
-
-https://github.com/user-attachments/assets/def7095a-93e8-4cf1-8791-d05a1c3d880d
-
-Making NotaGen work with GRPO is already a challenge because its decoding is
-hierarchical: patch-level generation, token-level generation, and replayed
-log-probability scoring all have to stay aligned. Long 32-bar continuations can
-also contain many token events, so this is still a WIP.
+Making NotaGen work with PPO is already a challenge because its decoding is
+hierarchical: patch-level generation, token-level generation, replayed
+log-probability scoring, and value prediction all have to stay aligned. Long
+32-bar continuations can also contain many token events, so this is still a
+WIP.
 
 ### Next steps
 
