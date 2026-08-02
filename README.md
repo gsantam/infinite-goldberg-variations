@@ -12,9 +12,10 @@ to try to see how other, maybe infinite, variations would sound.
 ## Why the Goldberg Variations are interesting
 
 The *Goldberg Variations* are composed of an Aria and 30 different variations.
-Each variation lasts between a minute and a few minutes  (for a total duration of around an hour), no more than six, and
-each one is independent from the others: it starts from scratch, rather than as
-a continuation of the previous variation. At the same time, all of them remain
+Each variation lasts between a minute and a few minutes, no more than six, for
+a total duration of around an hour. Each one is independent from the others: it
+starts from scratch, rather than as a continuation of the previous variation.
+At the same time, all of them remain
 tied to the main Aria. In particular, they share a very strong structure: the
 same number of bars, the same broad harmonic plan, and the same large-scale
 shape. But inside those constraints, each variation has its own texture, rhythm,
@@ -39,14 +40,15 @@ Goldberg Variations, this distinction matters because the interesting question
 is not only whether a generated piece sounds like Bach in general, but whether
 it behaves like another variation of this particular Aria.
 
-I still have not been able to come up with a clean definition of this more
-intrinsic similarity. For now, I track it with a chroma-based comparison to the
-Aria and to the real variations. Each piece is converted into pitch-class
-features, normalized to a common key, and compared through global chroma
-histograms and chroma sequences aligned with dynamic time warping. I compute
-this for the full texture, the bass line, and the top voice, which gives a
-compact signal for whether the generated piece shares harmonic and melodic
-shape with the Goldberg material.
+I am still iterating on clean definitions of this more intrinsic similarity.
+For now, it is based on different local and global comparisons of the Aria's
+harmony and structure with those of the generated piece. Some of these signals
+are global, such as pitch-class histogram similarity after normalizing pieces
+to a common key. Others are more local, comparing bass motion, top-voice
+behavior, harmonic roots, and bar-level harmony against the Aria with simple
+alignment rules. None of this is a complete musical definition, but it gives a
+more concrete signal for whether the generated piece behaves like another
+variation of the Goldberg Aria, rather than only sounding generically Baroque.
 
 ## Modelling
 
@@ -75,15 +77,23 @@ then mostly plateaus, while clear overfitting only starts to appear around epoch
 
 ![SFT train and eval loss](docs/assets/sft_train_eval_loss.svg)
 
-In order to understand similarity, I monitor the semantic similarity given by
-the CLaMP2 embedding, both to the Aria and to the average embedding of the real
-variations, using 10 randomly sampled trajectories for each epoch.
+In order to understand similarity, I monitor both the semantic similarity given
+by the CLaMP2 embedding and different measures of local and global similarity
+related to harmony and structure:
 
-Even with this simple SFT setup and only 1 epoch, the generated samples move
-much closer to both the Aria and the average embedding of the real variations.
-However, they do not seem to improve much over later epochs. Here epoch 0 is
-the base NotaGen-large model prompted only with the metadata keywords, without
-the Aria in the prompt.
+| Measure | What it compares | Scope | Reward use |
+|---|---|---|---|
+| CLaMP2 Aria similarity | Embedding similarity to the Aria. | Global semantic diagnostic | Logged only |
+| Aria chroma harmonic histogram | Full-texture and bass pitch-class distributions after key normalization. | Global pitch/harmony profile | Active |
+| Aria top chroma histogram | Top-voice pitch-class distribution after key normalization. | Global melodic profile | Active |
+| Aria harmony DTW | Bar-level harmony, root, and bass sequences aligned to the Aria. | Local sequence alignment | Active |
+| Same-bar root match | Harmonic root pitch-class agreement with the corresponding Aria bar. | Local bar comparison | Active, low weight |
+| Same-bar bass match | Bass pitch-class agreement with the corresponding Aria bar. | Local bar comparison | Active, low weight |
+
+Even with this simple SFT setup, the generated samples move closer to the Aria
+on some of these signals, but the improvement is not monotonic across all
+metrics or later epochs. Here epoch 0 is the base NotaGen-large model prompted
+only with the metadata keywords, without the Aria in the prompt.
 
 ![CLaMP2 similarity across SFT epochs](docs/assets/sft_similarity_vs_epoch.svg)
 
@@ -119,9 +129,10 @@ variations under the same scorer.
 | `active_similarity_reward` | Subtotal | Clipped active similarity subtotal, decoupled from structural validity. | mixed | 1 | 2.345 | 2.303 | 2.378 | 2.550 |
 | `total_reward` | Total | Structural subtotal plus active similarity subtotal. | mixed | 1 | 9.034 | 8.833 | 9.152 | 9.384 |
 
-At this point, and for epochs 8 - 9 we can already generate some relatively
-decent melodies, that for sure sound baroque and Bach but also are similar to
-some of the variations, or at least one can have reminiscences of the theme.
+At this point, around epochs 8-9, the model can already generate some
+relatively decent melodies that sound Baroque and Bach-like, and that are also
+similar to some of the variations, or at least contain clear echoes of the
+theme.
 This one is similar to the fifth variation:
 
 https://github.com/user-attachments/assets/1c8b07e3-0f19-4afa-a38d-0aac39d53ce6
@@ -134,9 +145,8 @@ And this one is a bit more dreamy and free:
 
 https://github.com/user-attachments/assets/eb4a3cf9-9998-4410-9401-e3708356828f
 
-Both of them are still very unrefined versions, with harmonic problems, where
-the initial counterpoint ends up becoming very messy and without a very clear
-structure, but it is a beginning.
+Both of them are still very unrefined, with harmonic problems where the initial
+counterpoint becomes messy and loses a clear structure, but it is a beginning.
 
 ### RL through GRPO
 
