@@ -79,18 +79,32 @@ then mostly plateaus, while clear overfitting only starts to appear around epoch
 
 In order to understand similarity, I monitor both the semantic similarity given
 by the CLaMP2 embedding and different measures of local and global similarity
-related to harmony and structure:
+related to harmony and structure. I compare those numbers against the average
+for the real Goldberg variations to sanity-check whether each metric is
+meaningful, and to estimate how far the generations are from the kind of
+similarity Bach used when composing the variations.
 
-| Measure | What it compares | Scope | Reward use |
-|---|---|---|---|
-| CLaMP2 Aria similarity | Embedding similarity to the Aria. | Global semantic diagnostic | Logged only |
-| Aria chroma harmonic histogram | Full-texture and bass pitch-class distributions after key normalization. | Global pitch/harmony profile | Active |
-| Aria top chroma histogram | Top-voice pitch-class distribution after key normalization. | Global melodic profile | Active |
-| Aria composite harmony DTW | Bar-level harmony tokens combining inferred root, bass, and chord quality. | Local DTW over bars | Active, averaged into `aria_harmony_dtw_combined` |
-| Aria root DTW | Inferred harmonic-root pitch-class sequence aligned to the Aria. | Local DTW over bars | Active, averaged into `aria_harmony_dtw_combined` |
-| Aria bass DTW | Inferred bass pitch-class sequence aligned to the Aria. | Local DTW over bars | Active, averaged into `aria_harmony_dtw_combined` |
-| Same-bar root match | Harmonic root pitch-class agreement with the corresponding Aria bar. | Local bar comparison | Active, low weight |
-| Same-bar bass match | Bass pitch-class agreement with the corresponding Aria bar. | Local bar comparison | Active, low weight |
+| Measure | What it compares | Terminal / Patch | Reward use | Epoch 0 | Epoch 1 | Epoch 8 | GT |
+|---|---|---|---|---:|---:|---:|---:|
+| `clamp2_aria` | CLaMP2 embedding similarity to the Aria. | sequence diagnostic | Logged only | 0.432 | 0.438 | 0.464 | 0.500 |
+| `aria_chroma_full_hist` | Full-texture pitch-class distribution after key normalization. | terminal | Active through harmonic histogram | 0.835 | 0.845 | 0.874 | 0.888 |
+| `aria_chroma_bass_hist` | Bass pitch-class distribution after key normalization. | terminal | Active through harmonic histogram | 0.737 | 0.744 | 0.779 | 0.818 |
+| `aria_chroma_harmonic_hist` | Mean of full-texture and bass chroma histograms. | terminal | Active | 0.786 | 0.794 | 0.827 | 0.853 |
+| `aria_chroma_top_hist` | Top-voice pitch-class distribution after key normalization. | terminal | Active | 0.753 | 0.754 | 0.754 | 0.794 |
+| `aria_harmony_dtw_combined` | Mean of composite harmony, root, and bass DTW. | patch DTW | Active | 0.773 | 0.775 | 0.786 | 0.791 |
+| `aria_harmony_harmony_dtw` | Bar-level harmony tokens combining root, bass, and chord quality. | patch DTW | Active through DTW mean | 0.756 | 0.758 | 0.768 | 0.774 |
+| `aria_harmony_root_dtw` | Inferred harmonic-root pitch-class sequence aligned to the Aria. | patch DTW | Active through DTW mean | 0.789 | 0.791 | 0.805 | 0.803 |
+| `aria_harmony_bass_dtw` | Inferred bass pitch-class sequence aligned to the Aria. | patch DTW | Active through DTW mean | 0.774 | 0.778 | 0.786 | 0.795 |
+| `aria_harmony_aligned_root` | Same-bar harmonic root pitch-class match to the Aria. | patch same-bar | Active, low weight | 0.175 | 0.165 | 0.196 | 0.218 |
+| `aria_harmony_aligned_bass` | Same-bar bass pitch-class match to the Aria. | patch same-bar | Active, low weight | 0.164 | 0.166 | 0.165 | 0.232 |
+| `aria_chroma_full_dtw` | Full-texture chroma sequence aligned to the Aria. | sequence DTW | Logged only | 0.777 | 0.778 | 0.784 | 0.785 |
+| `aria_chroma_bass_dtw` | Bass chroma sequence aligned to the Aria. | sequence DTW | Logged only | 0.742 | 0.735 | 0.731 | 0.729 |
+| `aria_chroma_top_dtw` | Top-voice chroma sequence aligned to the Aria. | sequence DTW | Logged only | 0.737 | 0.737 | 0.735 | 0.736 |
+| `aria_harmony_aligned_top` | Same-bar top-voice pitch-class match to the Aria. | patch same-bar | Logged only | 0.152 | 0.135 | 0.137 | 0.131 |
+| `aria_harmony_aligned_quality` | Same-bar inferred chord-quality match to the Aria. | patch same-bar | Logged only | 0.202 | 0.193 | 0.223 | 0.249 |
+| `aria_harmony_aligned_combined` | Strict same-bar combined root, bass, and quality score. | patch same-bar | Logged only | 0.279 | 0.270 | 0.294 | 0.322 |
+| `aria_harmony_top_contour_dtw` | Coarse top-voice up/same/down contour aligned to the Aria. | patch DTW | Logged only | 0.868 | 0.864 | 0.869 | 0.860 |
+| `aria_harmony_density_dtw` | Note-density sequence aligned to the Aria. | patch DTW | Logged only | 0.825 | 0.798 | 0.811 | 0.777 |
 
 Even with this simple SFT setup, the generated samples move closer to the Aria
 on several of these signals, but the picture is mixed across the full
