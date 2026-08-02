@@ -47,7 +47,13 @@ from notagen_runtime.notagen_replay import (  # noqa: E402
     trajectory_logprobs,
 )
 from evaluation.rewards import score_prompt_completion_pair  # noqa: E402
-from evaluation.similarity_rewards import SimilarityReference, SimilarityRewardWeights, load_similarity_reference, score_similarity_reward  # noqa: E402
+from evaluation.similarity_rewards import (  # noqa: E402
+    SimilarityReference,
+    SimilarityRewardWeights,
+    finalize_similarity_reward_fields,
+    load_similarity_reference,
+    score_similarity_reward,
+)
 from evaluation.stream_tags import (
     count_stream_lines as _count_stream_lines,
     latest_stream_line as _latest_stream_line,
@@ -593,14 +599,18 @@ def run_smoke(
     trajectory_dumps: list[dict] = []
     similarity_weights = SimilarityRewardWeights(
         aria_chroma=args.aria_chroma_reward_weight,
+        aria_chroma_top=args.aria_chroma_top_reward_weight,
         aria_harmony=args.aria_harmony_reward_weight,
+        aria_harmony_aligned_root=args.aria_harmony_aligned_root_reward_weight,
+        aria_harmony_aligned_bass=args.aria_harmony_aligned_bass_reward_weight,
+        aria_harmony_aligned_top=args.aria_harmony_aligned_top_reward_weight,
     )
     aria_similarity_ref: SimilarityReference | None = None
     if similarity_weights.enabled:
         aria_similarity_ref = load_similarity_reference(
             args.aria_reference_abc,
-            load_chroma=similarity_weights.aria_chroma != 0.0,
-            load_harmony=similarity_weights.aria_harmony != 0.0,
+            load_chroma=similarity_weights.needs_chroma,
+            load_harmony=similarity_weights.needs_harmony,
             bins=args.similarity_chroma_bins,
         )
 
@@ -747,24 +757,17 @@ def run_smoke(
                 timeout_s=args.similarity_timeout_s,
             )
             similarity_reward_s += time.perf_counter() - similarity_reward_start
-            raw_similarity_reward = float(similarity_payload.get("similarity_reward", 0.0))
-            clipped_similarity_reward = (
-                min(raw_similarity_reward, args.max_similarity_reward)
-                if args.max_similarity_reward > 0
-                else raw_similarity_reward
-            )
-            similarity_validity_gate = float(breakdown.parse_reward * breakdown.bar_count_reward)
-            effective_similarity_reward = clipped_similarity_reward * similarity_validity_gate
-            total_reward = structural_total_reward + effective_similarity_reward
             reward_breakdown["structural_total_reward"] = structural_total_reward
             reward_breakdown.update(similarity_payload)
-            reward_breakdown["raw_similarity_reward"] = raw_similarity_reward
-            reward_breakdown["clipped_similarity_reward"] = clipped_similarity_reward
-            reward_breakdown["max_similarity_reward"] = args.max_similarity_reward
-            reward_breakdown["similarity_validity_gate"] = similarity_validity_gate
-            reward_breakdown["effective_similarity_reward"] = effective_similarity_reward
-            reward_breakdown["similarity_reward"] = effective_similarity_reward
-            reward_breakdown["total_reward"] = total_reward
+            reward_breakdown.update(
+                finalize_similarity_reward_fields(
+                    similarity_payload=similarity_payload,
+                    structural_total_reward=structural_total_reward,
+                    completion_reward=breakdown.completion_reward,
+                    bar_count_reward=breakdown.bar_count_reward,
+                    max_similarity_reward=args.max_similarity_reward,
+                )
+            )
             reward_breakdown["generated_patches"] = len(generated_patches)
             reward_breakdown["generated_token_slots"] = generated_token_slots(generated_patches)
             reward_breakdown["prompt_index"] = prompt_idx
@@ -779,7 +782,7 @@ def run_smoke(
                     completion=completion,
                     full_text=full_text,
                     generated_patches=generated_patches,
-                    reward=total_reward,
+                    reward=float(reward_breakdown["total_reward"]),
                     reward_breakdown=reward_breakdown,
                 )
             )
@@ -1063,6 +1066,7 @@ def run_smoke(
                     "kl_mean": [sample.reward_breakdown.get("kl_mean") for sample in group_samples],
                     "raw_similarity_rewards": [sample.reward_breakdown.get("raw_similarity_reward") for sample in group_samples],
                     "clipped_similarity_rewards": [sample.reward_breakdown.get("clipped_similarity_reward") for sample in group_samples],
+                    "active_similarity_rewards": [sample.reward_breakdown.get("active_similarity_reward") for sample in group_samples],
                     "effective_similarity_rewards": [sample.reward_breakdown.get("effective_similarity_reward") for sample in group_samples],
                     "timings": timings,
                     "checkpoint": checkpoint_payload,
@@ -1094,8 +1098,17 @@ def main() -> int:
     )
     parser.add_argument("--aria-reference-abc", default=str(PROJECT_ROOT / "data" / "processed" / "goldberg" / "abc" / "aria-bwv-988.abc"))
     parser.add_argument("--aria-chroma-reward-weight", type=float, default=1.0)
+    parser.add_argument(
+        "--aria-chroma-top-reward-weight",
+        type=float,
+        default=None,
+        help="Separate top-voice chroma histogram reward weight. Defaults to --aria-chroma-reward-weight.",
+    )
     parser.add_argument("--aria-harmony-reward-weight", type=float, default=1.0)
-    parser.add_argument("--max-similarity-reward", type=float, default=2.0, help="Cap raw added similarity reward before structural validity gating. Use <=0 to disable.")
+    parser.add_argument("--aria-harmony-aligned-root-reward-weight", type=float, default=None)
+    parser.add_argument("--aria-harmony-aligned-bass-reward-weight", type=float, default=None)
+    parser.add_argument("--aria-harmony-aligned-top-reward-weight", type=float, default=None)
+    parser.add_argument("--max-similarity-reward", type=float, default=3.5, help="Cap raw added similarity reward. Use <=0 to disable.")
     parser.add_argument("--similarity-chroma-bins", type=int, default=128)
     parser.add_argument("--similarity-band-ratio", type=float, default=0.25)
     parser.add_argument("--similarity-timeout-s", type=float, default=20.0)
@@ -1160,6 +1173,15 @@ def main() -> int:
     parser.add_argument("--optimizer-checkpoint-every-steps", type=int, default=10)
     parser.add_argument("--trajectories-dir", default=None)
     args = parser.parse_args()
+    if args.aria_chroma_top_reward_weight is None:
+        args.aria_chroma_top_reward_weight = args.aria_chroma_reward_weight
+    default_aligned_harmony_weight = 0.25 if args.aria_harmony_reward_weight != 0.0 else 0.0
+    if args.aria_harmony_aligned_root_reward_weight is None:
+        args.aria_harmony_aligned_root_reward_weight = default_aligned_harmony_weight
+    if args.aria_harmony_aligned_bass_reward_weight is None:
+        args.aria_harmony_aligned_bass_reward_weight = default_aligned_harmony_weight
+    if args.aria_harmony_aligned_top_reward_weight is None:
+        args.aria_harmony_aligned_top_reward_weight = 0.0
 
     set_seed(args.seed)
     device = select_device()
@@ -1211,7 +1233,11 @@ def main() -> int:
         "reward_config": asdict(reward_config),
         "similarity_reward": {
             "aria_chroma_weight": args.aria_chroma_reward_weight,
+            "aria_chroma_top_weight": args.aria_chroma_top_reward_weight,
             "aria_harmony_weight": args.aria_harmony_reward_weight,
+            "aria_harmony_aligned_root_weight": args.aria_harmony_aligned_root_reward_weight,
+            "aria_harmony_aligned_bass_weight": args.aria_harmony_aligned_bass_reward_weight,
+            "aria_harmony_aligned_top_weight": args.aria_harmony_aligned_top_reward_weight,
             "max_similarity_reward": args.max_similarity_reward,
             "aria_reference_abc": args.aria_reference_abc,
             "chroma_bins": args.similarity_chroma_bins,

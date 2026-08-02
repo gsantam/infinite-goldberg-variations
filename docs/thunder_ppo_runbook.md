@@ -199,7 +199,7 @@ $REMOTE_PY scripts/run_notagen_sft_epoch_sampling.py \
   --clamp2-dir "$REMOTE_NOTAGEN/clamp2" \
   --aria-chroma-reward-weight 1 \
   --aria-harmony-reward-weight 1 \
-  --max-similarity-reward 2 \
+  --max-similarity-reward 3.5 \
   --similarity-chroma-bins 128 \
   --similarity-band-ratio 0.25 \
   --similarity-timeout-s 20
@@ -208,7 +208,7 @@ $REMOTE_PY scripts/run_notagen_sft_epoch_sampling.py \
 Selection rule:
 
 - Hard reject epochs with nonzero `meter_half`/`meter_double` spikes or prompt-specific exact-meter failures.
-- Among the remaining epochs, prefer high `mean_reward`, high `mean_structural_total_reward`, high `mean_effective_similarity_reward`, and low eval loss.
+- Among the remaining epochs, prefer high `mean_reward`, high `mean_structural_total_reward`, high `mean_active_similarity_reward`, and low eval loss.
 - Track `mean_exact_kl_to_pretrained`; use it as a drift guard, not as the primary objective. If two epochs have similar reward/structure, choose the lower-KL epoch.
 - Compare every SFT epoch to the `row_type=pretrained_baseline` row. The base row should have exact KL near zero by construction, and provides the structural/similarity floor that SFT must beat.
 - Do not choose by train loss alone. In previous SFT sweeps, train/eval loss could keep improving while meter behavior degraded.
@@ -336,7 +336,7 @@ Default PPO similarity rewards are currently active:
 
 - `--aria-chroma-reward-weight 1.0`
 - `--aria-harmony-reward-weight 1.0`
-- `--max-similarity-reward 2.0`
+- `--max-similarity-reward 3.5`
 
 The dry run logs timings for rollout, reward scoring, replay/logprob, and PPO loss. Use these timings before launching longer training.
 
@@ -345,7 +345,7 @@ The dry run logs timings for rollout, reward scoring, replay/logprob, and PPO lo
 The current PPO scalar reward is:
 
 ```text
-total_reward = structural_total_reward + effective_similarity_reward
+total_reward = structural_total_reward + active_similarity_reward
 ```
 
 Structural terms are `parse_reward`, `countdown_reward`, `line_closure_reward`, `bar_token_reward`, `meter_alignment_reward`, `meter_duration_closeness_reward`, `bar_meter_consistency_reward`, `bar_count_reward`, `voice_declaration_reward`, and `score_voice_reward`.
@@ -354,19 +354,26 @@ The active aria similarity terms are:
 
 ```text
 aria_chroma_harmonic_hist = mean(aria_chroma_full_hist, aria_chroma_bass_hist)
-aria_harmony_combined = mean(aria_harmony_harmony_dtw, aria_harmony_root_dtw, aria_harmony_bass_dtw)
-effective_similarity_reward = gate * min(
-  aria_chroma_harmonic_hist + aria_harmony_combined,
+aria_harmony_dtw_combined = mean(aria_harmony_harmony_dtw, aria_harmony_root_dtw, aria_harmony_bass_dtw)
+active_similarity_reward = min(
+  aria_chroma_harmonic_hist
+    + aria_chroma_top_hist
+    + aria_harmony_dtw_combined
+    + 0.25 * aria_harmony_aligned_root
+    + 0.25 * aria_harmony_aligned_bass,
   max_similarity_reward,
 )
 ```
+
+`aria_harmony_combined` is the legacy name used by older score files.
+`similarity_validity_gate` is logged for diagnostics only; it is not multiplied into the scalar reward.
 
 Defaults are:
 
 ```text
 --aria-chroma-reward-weight 1.0
 --aria-harmony-reward-weight 1.0
---max-similarity-reward 2.0
+--max-similarity-reward 3.5
 ```
 
 `top_hist` and `top_contour_dtw` are logged/candidate metrics, not active in the scalar reward. `density_dtw` is diagnostic only.

@@ -20,12 +20,12 @@ from scripts.custom_grpo_notagen import (  # noqa: E402
     char_patch_logprobs,
     disable_dropout_modules,
     grpo_kl_term,
-    normalize_patch_for_context,
     patch_logprobs,
     select_device,
     trajectory_logprob_chunks,
 )
 from scripts.custom_grpo_notagen import _replay_start_patch  # noqa: E402
+from notagen_runtime.notagen_replay import normalize_patch_for_replay_context  # noqa: E402
 from utils import Patchilizer  # noqa: E402
 
 
@@ -113,7 +113,7 @@ def tail_logprobs_chunk_no_patch_mask(
     replay_context_patches: int | None = None,
 ) -> torch.Tensor:
     normalized_prefix = [
-        normalize_patch_for_context(
+        normalize_patch_for_replay_context(
             patch,
             eos_token_id=model.eos_token_id,
             special_token_id=model.special_token_id,
@@ -170,10 +170,11 @@ def trajectory_logprob_chunks_no_patch_mask(
         if logprob_list:
             yield torch.stack(logprob_list)
         current_ids.extend(
-            normalize_patch_for_context(
+            normalize_patch_for_replay_context(
                 patch,
                 eos_token_id=model.eos_token_id,
                 special_token_id=model.special_token_id,
+                current_context_len=len(current_ids),
             )
         )
         start_idx += 1

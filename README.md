@@ -87,17 +87,37 @@ the Aria in the prompt.
 
 ![CLaMP2 similarity across SFT epochs](docs/assets/sft_similarity_vs_epoch.svg)
 
-After fixing the stream-tag and bar-validation reward logic, the countdown /
-stream-line component is now basically healthy. The remaining structural
-problem is real: generated samples still validate far fewer bars than the real
-variations, and meter alignment remains weak. In the 10-sample-per-epoch run,
-epoch 6 has the best mean structural reward, with `15.4` validated bars on
-average.
+The current reward is a weighted sum of structural checks and Aria-similarity
+checks. The table below only lists active reward terms. Values are mean raw
+subreward scores before applying the listed weight, except for subtotal rows,
+which are already weighted sums. Epoch 0 is the pretrained NotaGen-large model
+with the same prompt/evaluation setup; GT is the mean over the real Goldberg
+variations under the same scorer.
 
-The full recalculated reward breakdown is in
-`data/processed/notagen/reward_exports/large_sft10_cached10_rewards_refactored_20260626/all_rewards.jsonl`.
-
-![Reward component means across SFT epochs](docs/assets/sft_reward_breakdown_vs_epoch.svg)
+| Reward | Type | Description | Terminal / Patch | Weight | Epoch 0 | Epoch 1 | Epoch 8 | GT |
+|---|---|---|---|---:|---:|---:|---:|---:|
+| `completion_reward` | Structural | Target written/effective bar count reached. | terminal | 0.250 | 1 | 0.967 | 1 | 0.900 |
+| `expanded_completion_reward` | Structural | Target repeat-expanded/rendered bar count reached. | terminal | 0.250 | 0.500 | 0.417 | 0.583 | 0.900 |
+| `parse_reward` | Structural | Graded ABC syntax/tokenizer/music21 parse quality. | terminal | 0.250 | 0.993 | 0.923 | 0.950 | 1 |
+| `syntax_penalty_reward` | Structural | Fast malformed-syntax penalty; negative when triggered. | terminal | 0.250 | 0 | -0.100 | -0.083 | 0 |
+| `countdown_reward` | Structural | NotaGen stream countdown `[r:i/j]` progression. | patch | 0.250 | 1 | 0.999 | 1 | 1 |
+| `line_closure_reward` | Structural | Generated stream lines close syntactically. | patch | 0.250 | 1 | 0.999 | 1 | 1 |
+| `bar_token_reward` | Structural | Stream lines contain bar/repeat tokens. | patch | 0.100 | 1 | 1 | 1 | 1 |
+| `meter_alignment_reward` | Structural | Populated voices align with expected meter. | patch | 0.750 | 0.969 | 0.927 | 0.974 | 0.987 |
+| `meter_duration_closeness_reward` | Structural | Bar durations are close to expected meter. | patch | 0.750 | 0.996 | 0.964 | 0.997 | 0.994 |
+| `bar_meter_consistency_reward` | Structural | Voices inside a bar are mutually meter-consistent. | patch | 0.750 | 0.970 | 0.939 | 0.997 | 0.997 |
+| `bar_count_reward` | Structural | Written/effective musical bars close to target 32. | patch marginal | 1 | 1 | 0.999 | 1 | 0.902 |
+| `expanded_bar_count_reward` | Structural | Repeat-expanded/rendered bars close to target 64. | patch marginal | 1 | 0.764 | 0.757 | 0.834 | 0.899 |
+| `voice_declaration_reward` | Structural | Generated voices are declared in the header. | patch | 1 | 1 | 1 | 1 | 1 |
+| `score_voice_reward` | Structural | Generated voices match the `%%score` voice set. | patch | 0.500 | 1 | 1 | 1 | 1 |
+| `structural_total_reward` | Subtotal | Weighted structural subtotal. | mixed | 1 | 6.689 | 6.530 | 6.773 | 6.834 |
+| `aria_chroma_harmonic_hist` | Similarity | Active chroma histogram mean: full texture plus bass. | terminal | 1 | 0.786 | 0.794 | 0.827 | 0.853 |
+| `aria_chroma_top_hist` | Similarity | Active top-voice global chroma histogram cosine. | terminal | 1 | 0.753 | 0.754 | 0.754 | 0.794 |
+| `aria_harmony_dtw_combined` | Similarity | Active harmony DTW mean: composite/root/bass DTW. | patch DTW | 1 | 0.773 | 0.775 | 0.786 | 0.791 |
+| `aria_harmony_aligned_root` | Similarity | Same-bar harmonic root pitch-class match to the Aria. | patch same-bar | 0.250 | 0.175 | 0.165 | 0.196 | 0.218 |
+| `aria_harmony_aligned_bass` | Similarity | Same-bar bass pitch-class match to the Aria. | patch same-bar | 0.250 | 0.164 | 0.166 | 0.165 | 0.232 |
+| `active_similarity_reward` | Subtotal | Clipped active similarity subtotal, decoupled from structural validity. | mixed | 1 | 2.345 | 2.303 | 2.378 | 2.550 |
+| `total_reward` | Total | Structural subtotal plus active similarity subtotal. | mixed | 1 | 9.034 | 8.833 | 9.152 | 9.384 |
 
 At this point, and for epochs 8 - 9 we can already generate some relatively
 decent melodies, that for sure sound baroque and Bach but also are similar to
@@ -129,9 +149,10 @@ feels closer to this project than preference modelling, which has not worked
 especially well for music generation so far
 ([arXiv:2504.16839](https://arxiv.org/pdf/2504.16839)).
 
-The reward is a weighted sum of checks: ABC parse validity, countdown and line
-structure, bar emission, meter consistency, closeness to the target NotaGen
-structure length, and chroma similarity to the Aria/Goldberg material.
+The reward is a weighted sum of checks: ABC parse quality, countdown and line
+structure, bar emission, meter consistency, written and repeat-expanded musical
+bar counts, chroma-histogram similarity to the Aria, and lightweight
+bar-aligned/DTW harmony similarity to the Aria.
 
 The current run uses NotaGen-large with a frozen reference model for KL, LoRA
 (`r=8`, `alpha=16`, dropout `0.05`), 4 trajectories per prompt, 32 target

@@ -51,7 +51,7 @@ def latest_stream_line(text: str) -> StreamLine | None:
 
 def stream_line_closed(line: str | StreamLine) -> bool:
     raw = line.raw if isinstance(line, StreamLine) else line.rstrip()
-    return raw.endswith("|") or raw.endswith("|]") or raw.endswith(":|") or raw.endswith("||")
+    return bool(re.search(r"(\||\|\]|\|\:|\:\||\:\:|\|[1-9]\d*|\:\|[1-9]\d*)$", raw))
 
 
 def latest_stream_line_closed(text: str) -> bool:
@@ -131,4 +131,3 @@ def _index_total_reward(lines: list[StreamLine]) -> float:
 
 def stream_target_reached(text: str, target_stream_lines: int) -> bool:
     return count_stream_lines(text) >= target_stream_lines and latest_stream_line_closed(text)
-

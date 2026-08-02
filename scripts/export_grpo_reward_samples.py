@@ -11,7 +11,16 @@ from typing import Any
 
 
 COMPONENT_KEYS = (
+    "completion_reward",
+    "expanded_completion_reward",
     "parse_reward",
+    "parse_balanced_construct_reward",
+    "parse_inline_field_reward",
+    "parse_duration_sanity_reward",
+    "parse_tokenizer_reward",
+    "parse_music21_reward",
+    "syntax_penalty_reward",
+    "termination_penalty_reward",
     "countdown_reward",
     "line_closure_reward",
     "bar_token_reward",
@@ -19,6 +28,7 @@ COMPONENT_KEYS = (
     "meter_duration_closeness_reward",
     "bar_meter_consistency_reward",
     "bar_count_reward",
+    "expanded_bar_count_reward",
 )
 
 
@@ -43,7 +53,9 @@ def compact_sample(record: dict[str, Any]) -> dict[str, Any]:
         "sample": as_int(record.get("sample_index")),
         "reward": as_float(record.get("reward", breakdown.get("total_reward"))),
         "total_reward": as_float(breakdown.get("total_reward", record.get("reward"))),
-        "observed_bars": as_int(breakdown.get("observed_bars")),
+        "observed_bars": as_float(breakdown.get("observed_bars")),
+        "observed_written_bars": as_int(breakdown.get("observed_written_bars")),
+        "observed_repeat_expanded_bars": as_float(breakdown.get("observed_repeat_expanded_bars")),
         "validated_bars": as_int(breakdown.get("validated_bars")),
         "scored_tokens": as_int(breakdown.get("scored_tokens")),
         "kl_mean": as_float(breakdown.get("kl_mean")),

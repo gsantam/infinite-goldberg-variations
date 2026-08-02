@@ -8,9 +8,11 @@ from unittest.mock import patch
 import numpy as np
 
 from evaluation.chroma_similarity import chroma_features, load_chroma_feature_set, parse_piece_tonic
+from evaluation.harmony_similarity import compare_harmony, harmony_from_text
 from evaluation.similarity_rewards import (
     SimilarityReference,
     SimilarityRewardWeights,
+    finalize_similarity_reward_fields,
     score_similarity_reward,
 )
 
@@ -142,6 +144,125 @@ class ChromaSimilarityTests(unittest.TestCase):
             )
 
             self.assertEqual(optimized_payload, legacy_payload)
+
+    def test_top_hist_similarity_weight_is_separate_from_harmonic_hist(self):
+        with patch(
+            "evaluation.similarity_rewards._chroma_scores",
+            return_value={
+                "similarity_chroma_valid": True,
+                "aria_chroma_harmonic_hist": 0.40,
+                "aria_chroma_top_hist": 0.70,
+            },
+        ) as mocked_chroma:
+            payload = score_similarity_reward(
+                prompt_text="",
+                completion_text="X:1\nM:4/4\nL:1/4\nK:G\nG A B c|\n",
+                weights=SimilarityRewardWeights(aria_chroma=2.0, aria_chroma_top=3.0),
+                aria=None,
+                variation=None,
+                bins=8,
+                band_ratio=0.25,
+                timeout_s=5.0,
+            )
+
+        mocked_chroma.assert_called_once()
+        self.assertAlmostEqual(payload["similarity_reward"], 2.0 * 0.40 + 3.0 * 0.70)
+
+    def test_aligned_harmony_weights_are_separate_active_similarity_terms(self):
+        with patch(
+            "evaluation.similarity_rewards._harmony_scores",
+            return_value={
+                "similarity_harmony_valid": True,
+                "aria_harmony_dtw_combined": 0.50,
+                "aria_harmony_aligned_root": 0.25,
+                "aria_harmony_aligned_bass": 0.75,
+                "aria_harmony_aligned_top": 0.40,
+            },
+        ) as mocked_harmony:
+            payload = score_similarity_reward(
+                prompt_text="",
+                completion_text="X:1\nM:4/4\nL:1/4\nK:G\nG A B c|\n",
+                weights=SimilarityRewardWeights(
+                    aria_harmony=2.0,
+                    aria_harmony_aligned_root=3.0,
+                    aria_harmony_aligned_bass=5.0,
+                    aria_harmony_aligned_top=7.0,
+                ),
+                aria=None,
+                variation=None,
+                bins=8,
+                band_ratio=0.25,
+                timeout_s=5.0,
+            )
+
+        mocked_harmony.assert_called_once()
+        self.assertAlmostEqual(payload["similarity_reward"], 2.0 * 0.50 + 3.0 * 0.25 + 5.0 * 0.75 + 7.0 * 0.40)
+
+    def test_legacy_harmony_combined_key_still_scores(self):
+        with patch(
+            "evaluation.similarity_rewards._harmony_scores",
+            return_value={
+                "similarity_harmony_valid": True,
+                "aria_harmony_combined": 0.50,
+            },
+        ):
+            payload = score_similarity_reward(
+                prompt_text="",
+                completion_text="X:1\nM:4/4\nL:1/4\nK:G\nG A B c|\n",
+                weights=SimilarityRewardWeights(aria_harmony=2.0),
+                aria=None,
+                variation=None,
+                bins=8,
+                band_ratio=0.25,
+                timeout_s=5.0,
+            )
+
+        self.assertAlmostEqual(payload["similarity_reward"], 1.0)
+
+    def test_final_similarity_reward_fields_do_not_apply_diagnostic_gate(self):
+        fields = finalize_similarity_reward_fields(
+            similarity_payload={"similarity_reward": 1.25},
+            structural_total_reward=2.0,
+            completion_reward=0.0,
+            bar_count_reward=0.0,
+            max_similarity_reward=2.0,
+        )
+
+        self.assertEqual(fields["similarity_validity_gate"], 0.0)
+        self.assertEqual(fields["active_similarity_reward"], 1.25)
+        self.assertEqual(fields["effective_similarity_reward"], 1.25)
+        self.assertEqual(fields["total_reward"], 3.25)
+
+    def test_harmony_reward_emits_dtw_combined_name(self):
+        aria_text = "X:1\nM:4/4\nL:1/4\nK:C\n[V:1][CEG]4|[DFA]4|\n"
+        completion_text = "X:1\nM:4/4\nL:1/4\nK:C\n[V:1][CEG]4|[DFA]4|\n"
+        aria = SimilarityReference(path=Path("aria.abc"), harmony=harmony_from_text(aria_text))
+
+        payload = score_similarity_reward(
+            prompt_text="",
+            completion_text=completion_text,
+            weights=SimilarityRewardWeights(aria_harmony=1.0),
+            aria=aria,
+            variation=None,
+            bins=8,
+            band_ratio=0.25,
+            timeout_s=5.0,
+        )
+
+        self.assertIn("aria_harmony_dtw_combined", payload)
+        self.assertIn("aria_harmony_combined", payload)
+        self.assertEqual(payload["aria_harmony_dtw_combined"], payload["aria_harmony_combined"])
+        self.assertAlmostEqual(payload["similarity_reward"], payload["aria_harmony_dtw_combined"])
+
+    def test_same_bar_top_alignment_compares_highest_pitch_class_not_root(self):
+        reference = harmony_from_text("X:1\nM:4/4\nL:1/4\nK:C\n[V:1][CEG]4|[DFA]4|\n")
+        candidate = harmony_from_text("X:1\nM:4/4\nL:1/4\nK:C\n[V:1][CEG]4|[DFAc]4|\n")
+
+        scores = compare_harmony(reference, candidate, band_ratio=0.25)
+
+        self.assertEqual(scores["aligned_root"], 1.0)
+        self.assertEqual(scores["aligned_bass"], 1.0)
+        self.assertEqual(scores["aligned_top"], 0.5)
 
     def test_load_chroma_feature_set_reuses_one_note_event_parse_for_all_modes(self):
         with tempfile.TemporaryDirectory() as tmp:

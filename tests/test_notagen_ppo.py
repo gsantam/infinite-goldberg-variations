@@ -19,6 +19,7 @@ try:
         RewardEvent,
         RewardScore,
         _dtw_metric_reward_events,
+        _score_total_reward_from_structural_breakdown,
         _project_reward_events_to_patches,
         _stream_line_end_patch_indices,
         _stream_line_spans,
@@ -105,6 +106,38 @@ def _generated_patches_from_text(text: str) -> list[list[int]]:
 
 @unittest.skipIf(torch is None, f"NotaGen torch dependencies unavailable: {IMPORT_ERROR}")
 class NotaGenPPOTests(unittest.TestCase):
+    def test_similarity_reward_is_decoupled_from_structural_gate(self):
+        class FakeBreakdown:
+            total_reward = 1.5
+
+            def to_json(self):
+                return {
+                    "completion_reward": 0.0,
+                    "bar_count_reward": 0.0,
+                    "total_reward": self.total_reward,
+                }
+
+        with patch(
+            "scripts.custom_ppo_notagen.score_similarity_reward",
+            return_value={"similarity_reward": 1.25, "aria_chroma_harmonic_hist": 1.25},
+        ):
+            score = _score_total_reward_from_structural_breakdown(
+                prompt_text="X:1\n",
+                completion_text="[r:0/0][V:1]C|\n",
+                structural_breakdown=FakeBreakdown(),
+                similarity_weights=SimilarityRewardWeights(aria_chroma=1.0),
+                aria_similarity_ref=None,
+                similarity_chroma_bins=8,
+                similarity_band_ratio=0.25,
+                similarity_timeout_s=1.0,
+                max_similarity_reward=2.0,
+            )
+
+        self.assertEqual(score.breakdown["similarity_validity_gate"], 0.0)
+        self.assertEqual(score.breakdown["active_similarity_reward"], 1.25)
+        self.assertEqual(score.breakdown["effective_similarity_reward"], 1.25)
+        self.assertEqual(score.total, 2.75)
+
     def test_ordered_prompt_schedule_cycles_by_update_index(self):
         selections = [
             select_prompt_for_update(
@@ -1346,6 +1379,54 @@ class NotaGenPPOTests(unittest.TestCase):
             self.assertTrue(torch.allclose(batched_replay.token_log_dists, serial_replay.token_log_dists, atol=1e-5))
             self.assertTrue(torch.equal(batched_replay.token_counts, serial_replay.token_counts))
 
+    def test_batched_patch_replay_handles_short_terminal_patches_without_extra_tokens(self):
+        torch.manual_seed(0)
+        model = _tiny_notagen()
+        value_head = PatchValueHead(32)
+        model.eval()
+        value_head.eval()
+        prompt_ids = [3 + (i % 80) for i in range(PATCH_SIZE * 4)]
+        eos = model.eos_token_id
+        generated_batch = [
+            [[11, eos]],
+            [[19 + ((patch_idx * 13 + i) % 45) for i in range(PATCH_SIZE)] for patch_idx in range(2)]
+            + [[23, eos]],
+        ]
+
+        serial = [
+            trajectory_patch_logprobs_values(
+                model,
+                value_head,
+                prompt_ids,
+                generated_patches,
+                precision="fp32",
+                replay_context_patches=4,
+                target_chunk_patches=1,
+            )
+            for generated_patches in generated_batch
+        ]
+        batched = batched_trajectory_patch_logprobs_values(
+            model,
+            value_head,
+            prompt_ids,
+            generated_batch,
+            precision="fp32",
+            replay_context_patches=4,
+            target_chunk_patches=1,
+            replay_batch_size=2,
+        )
+
+        self.assertEqual([item.token_counts.detach().cpu().tolist() for item in batched], [[2], [PATCH_SIZE, PATCH_SIZE, 2]])
+        for serial_replay, batched_replay in zip(serial, batched, strict=True):
+            self.assertEqual(batched_replay.logprobs.shape, serial_replay.logprobs.shape)
+            self.assertEqual(batched_replay.values.shape, serial_replay.values.shape)
+            self.assertEqual(batched_replay.token_logprobs.shape, serial_replay.token_logprobs.shape)
+            self.assertEqual(batched_replay.token_log_dists.shape, serial_replay.token_log_dists.shape)
+            self.assertTrue(torch.allclose(batched_replay.logprobs, serial_replay.logprobs, atol=1e-5))
+            self.assertTrue(torch.allclose(batched_replay.values, serial_replay.values, atol=1e-6))
+            self.assertTrue(torch.allclose(batched_replay.token_logprobs, serial_replay.token_logprobs, atol=1e-5))
+            self.assertTrue(torch.allclose(batched_replay.token_log_dists, serial_replay.token_log_dists, atol=1e-5))
+
     def test_distribution_only_replay_matches_generic_replay(self):
         torch.manual_seed(0)
         model = _tiny_notagen()
@@ -1754,11 +1835,11 @@ class NotaGenPPOTests(unittest.TestCase):
             trajectory_lengths=[1, 2],
             component_rewards={
                 "structural_total_reward": torch.tensor([0.2, -0.1, 0.3]),
-                "aria_chroma_harmonic_hist_effective": torch.tensor([0.0, 0.0, 0.4]),
+                    "aria_chroma_harmonic_hist_active": torch.tensor([0.0, 0.0, 0.4]),
             },
             component_lambda_returns={
                 "structural_total_reward": torch.tensor([0.2, 0.185, 0.3]),
-                "aria_chroma_harmonic_hist_effective": torch.tensor([0.0, 0.38, 0.4]),
+                    "aria_chroma_harmonic_hist_active": torch.tensor([0.0, 0.38, 0.4]),
             },
         )
 
@@ -1776,8 +1857,8 @@ class NotaGenPPOTests(unittest.TestCase):
         self.assertAlmostEqual(records[2]["raw_advantage"], 2.0)
         self.assertAlmostEqual(records[2]["structural_total_reward__reward"], 0.3)
         self.assertAlmostEqual(records[2]["structural_total_reward__lambda_return"], 0.3)
-        self.assertAlmostEqual(records[1]["aria_chroma_harmonic_hist_effective__reward"], 0.0)
-        self.assertAlmostEqual(records[1]["aria_chroma_harmonic_hist_effective__lambda_return"], 0.38)
+        self.assertAlmostEqual(records[1]["aria_chroma_harmonic_hist_active__reward"], 0.0)
+        self.assertAlmostEqual(records[1]["aria_chroma_harmonic_hist_active__lambda_return"], 0.38)
 
     def test_component_reward_tensors_include_derived_reward_families(self):
         traces = [
@@ -1788,9 +1869,11 @@ class NotaGenPPOTests(unittest.TestCase):
                 component_rewards={
                     "parse_reward": [0.0, 0.25],
                     "bar_count_reward": [0.5, 0.5],
-                    "aria_chroma_harmonic_hist_effective": [0.0, 1.0],
-                    "aria_harmony_root_dtw_effective": [0.2, 0.0],
-                    "other_residual": [0.5, 0.55],
+                    "aria_chroma_harmonic_hist_active": [0.0, 1.0],
+                    "aria_chroma_top_hist_active": [0.3, 0.0],
+                    "aria_harmony_root_dtw_active": [0.2, 0.0],
+                    "aria_harmony_aligned_bass_active": [0.1, 0.0],
+                    "other_residual": [0.1, 0.55],
                 },
                 component_prefix_totals={},
             )
@@ -1800,8 +1883,10 @@ class NotaGenPPOTests(unittest.TestCase):
 
         self.assertTrue(torch.allclose(tensors["parse_reward"], torch.tensor([0.0, 0.25])))
         self.assertTrue(torch.allclose(tensors["structural_total_reward"], torch.tensor([0.5, 0.75])))
-        self.assertTrue(torch.allclose(tensors["aria_harmony_dtw_effective"], torch.tensor([0.2, 0.0])))
-        self.assertTrue(torch.allclose(tensors["effective_similarity_reward"], torch.tensor([0.2, 1.0])))
+        self.assertTrue(torch.allclose(tensors["aria_harmony_dtw_active"], torch.tensor([0.2, 0.0])))
+        self.assertTrue(torch.allclose(tensors["aria_harmony_aligned_active"], torch.tensor([0.1, 0.0])))
+        self.assertTrue(torch.allclose(tensors["aria_chroma_top_hist_active"], torch.tensor([0.3, 0.0])))
+        self.assertTrue(torch.allclose(tensors["active_similarity_reward"], torch.tensor([0.6, 1.0])))
         self.assertTrue(torch.allclose(tensors["total_reward"], torch.tensor([1.2, 2.3])))
 
         lambda_returns = component_lambda_return_tensors(

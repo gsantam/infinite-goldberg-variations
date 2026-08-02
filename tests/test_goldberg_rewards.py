@@ -52,24 +52,95 @@ class GoldbergRewardTests(unittest.TestCase):
         self.assertEqual(count_notagen_structure_lines(plain), 2)
         self.assertEqual(count_notagen_structure_lines(tagged), 2)
 
-    def test_bar_count_uses_target_notagen_structure_length_when_available(self):
+    def test_bar_count_uses_musical_bar_units_not_stream_lines(self):
         target = StructuralTarget(
-            expected_bars=32,
-            expected_structure_bars=2,
+            expected_bars=2,
+            expected_structure_bars=1,
         )
         text = "\n".join(
             [
-                "M:12/8",
+                "M:3/4",
                 "L:1/8",
-                "[r:0/1][V:1]C2D2E2F2G2A2|",
-                "[r:1/0][V:1]A2G2F2E2D2C2|",
+                "[r:0/0][V:1]C2D2E2|F2G2A2|",
             ]
         )
 
         breakdown = score_candidate_text(text, target, GoldbergRewardConfig(music21_parse_timeout_s=1.0))
 
-        self.assertEqual(breakdown.validated_bars, 2)
+        self.assertEqual(breakdown.observed_stream_lines, 1)
+        self.assertEqual(breakdown.observed_written_bars, 2)
+        self.assertEqual(breakdown.observed_bars, 2.0)
         self.assertEqual(breakdown.bar_count_reward, 1.0)
+
+        bundled = score_candidate_text_with_local_metrics(
+            text,
+            target,
+            GoldbergRewardConfig(music21_parse_timeout_s=1.0),
+        )
+        self.assertEqual(bundled.breakdown, breakdown)
+        self.assertEqual(bundled.local_metrics.musical_bar_units, [2.0])
+
+    def test_repeat_expanded_bar_count_is_a_separate_reward(self):
+        target = StructuralTarget(
+            expected_bars=4,
+            expected_structure_bars=4,
+            expected_expanded_bars=8,
+        )
+        text = "\n".join(
+            [
+                "M:3/4",
+                "L:1/8",
+                "[r:0/3][V:1]C2D2E2|",
+                "[r:1/2][V:1]F2G2A2::",
+                "[r:2/1][V:1]B2c2d2|",
+                "[r:3/0][V:1]e2f2g2:|",
+            ]
+        )
+
+        breakdown = score_candidate_text(text, target, GoldbergRewardConfig(music21_parse_timeout_s=1.0))
+
+        self.assertEqual(breakdown.observed_stream_lines, 4)
+        self.assertEqual(breakdown.observed_written_bars, 4)
+        self.assertEqual(breakdown.observed_bars, 4.0)
+        self.assertEqual(breakdown.observed_repeat_expanded_bars, 8.0)
+        self.assertEqual(breakdown.bar_count_reward, 1.0)
+        self.assertEqual(breakdown.expanded_bar_count_reward, 1.0)
+        self.assertEqual(breakdown.completion_reward, 1.0)
+        self.assertEqual(breakdown.expanded_completion_reward, 1.0)
+
+        bundled = score_candidate_text_with_local_metrics(
+            text,
+            target,
+            GoldbergRewardConfig(music21_parse_timeout_s=1.0),
+        )
+        self.assertEqual(bundled.local_metrics.musical_bar_units, [1.0, 3.0, 1.0, 3.0])
+        self.assertEqual(bundled.local_metrics.written_bar_units, [1.0, 1.0, 1.0, 1.0])
+
+    def test_observed_bars_does_not_guard_or_cap_repeat_expansion(self):
+        target = StructuralTarget(
+            expected_bars=4,
+            expected_structure_bars=4,
+        )
+        text = "\n".join(
+            [
+                "M:3/4",
+                "L:1/8",
+                "[r:0/3][V:1]C2D2E2|",
+                "[r:1/2][V:1]F2G2A2|",
+                "[r:2/1][V:1]B2c2d2|",
+                "[r:3/0][V:1]e2f2g2:|",
+            ]
+        )
+
+        breakdown = score_candidate_text(text, target, GoldbergRewardConfig(music21_parse_timeout_s=1.0))
+
+        self.assertEqual(breakdown.observed_written_bars, 4)
+        self.assertEqual(breakdown.observed_repeat_expanded_bars, 8.0)
+        self.assertEqual(breakdown.observed_bars, 4.0)
+        self.assertEqual(breakdown.bar_count_reward, 1.0)
+        self.assertEqual(breakdown.expanded_bar_count_reward, 1.0)
+        self.assertEqual(breakdown.completion_reward, 1.0)
+        self.assertEqual(breakdown.expanded_completion_reward, 1.0)
 
     def test_parse_length_multiplier_accepts_abc_shorthand_fraction(self):
         self.assertEqual(_parse_length_multiplier("/"), Fraction(1, 2))
@@ -138,7 +209,11 @@ class GoldbergRewardTests(unittest.TestCase):
 
         parse_data.assert_not_called()
         self.assertFalse(breakdown.parse_valid)
-        self.assertEqual(breakdown.parse_reward, 0.0)
+        self.assertEqual(breakdown.parse_balanced_construct_reward, 0.0)
+        self.assertLess(breakdown.parse_reward, 1.0)
+        self.assertEqual(breakdown.syntax_penalty_reward, -1.0)
+        self.assertEqual(breakdown.completion_reward, 1.0)
+        self.assertEqual(breakdown.termination_penalty_reward, 0.0)
         self.assertEqual(breakdown.structural_validity_gate_adjustment, 0.0)
         self.assertEqual(breakdown.total_reward, breakdown.ungated_total_reward)
         self.assertLess(time.perf_counter() - start, 1.0)
@@ -161,7 +236,11 @@ class GoldbergRewardTests(unittest.TestCase):
 
         parse_data.assert_not_called()
         self.assertFalse(breakdown.parse_valid)
-        self.assertEqual(breakdown.parse_reward, 0.0)
+        self.assertEqual(breakdown.parse_inline_field_reward, 0.0)
+        self.assertLess(breakdown.parse_reward, 1.0)
+        self.assertEqual(breakdown.syntax_penalty_reward, -1.0)
+        self.assertEqual(breakdown.completion_reward, 1.0)
+        self.assertEqual(breakdown.termination_penalty_reward, 0.0)
         self.assertEqual(breakdown.structural_validity_gate_adjustment, 0.0)
         self.assertEqual(breakdown.total_reward, breakdown.ungated_total_reward)
 
@@ -187,7 +266,11 @@ class GoldbergRewardTests(unittest.TestCase):
 
         parse_data.assert_not_called()
         self.assertFalse(breakdown.parse_valid)
-        self.assertEqual(breakdown.parse_reward, 0.0)
+        self.assertEqual(breakdown.parse_tokenizer_reward, 0.0)
+        self.assertLess(breakdown.parse_reward, 1.0)
+        self.assertEqual(breakdown.syntax_penalty_reward, 0.0)
+        self.assertEqual(breakdown.completion_reward, 1.0)
+        self.assertEqual(breakdown.termination_penalty_reward, 0.0)
         self.assertEqual(breakdown.structural_validity_gate_adjustment, 0.0)
         self.assertEqual(breakdown.total_reward, breakdown.ungated_total_reward)
 
@@ -357,6 +440,63 @@ class GoldbergRewardTests(unittest.TestCase):
         self.assertEqual(bundled.breakdown, direct)
         self.assertEqual(len(bundled.stream_lines), 2)
         self.assertEqual(len(bundled.local_metrics.meter_alignment_reward), 2)
+
+    def test_repeat_endings_count_as_closed_stream_lines(self):
+        target = StructuralTarget(expected_bars=4, expected_structure_bars=4)
+        text = "\n".join(
+            [
+                "M:3/4",
+                "L:1/8",
+                "[r:0/3][V:1]C2D2E2::",
+                "[r:1/2][V:1]E2D2C2|:",
+                "[r:2/1][V:1]C2D2E2|1",
+                "[r:3/0][V:1]E2D2C2:|2",
+            ]
+        )
+
+        breakdown = score_candidate_text(text, target, GoldbergRewardConfig(parse_validation_mode="abc-tokenize"))
+
+        self.assertEqual(breakdown.line_closure_reward, 1.0)
+        self.assertEqual(breakdown.bar_token_reward, 1.0)
+
+    def test_completion_uses_musical_bars_and_termination_is_reserved_for_rollout_failure(self):
+        target = StructuralTarget(expected_bars=2, expected_structure_bars=2)
+        complete_but_invalid = "\n".join(
+            [
+                "M:3/4",
+                "L:1/8",
+                "[r:0/1][V:1]C2D2E2|",
+                "[r:1/0][V:1][CEG2|",
+            ]
+        )
+        incomplete_valid = "\n".join(
+            [
+                "M:3/4",
+                "L:1/8",
+                "[r:0/1][V:1]C2D2E2|",
+            ]
+        )
+
+        complete_breakdown = score_candidate_text(
+            complete_but_invalid,
+            target,
+            GoldbergRewardConfig(music21_parse_timeout_s=1.0),
+        )
+        incomplete_breakdown = score_candidate_text(
+            incomplete_valid,
+            target,
+            GoldbergRewardConfig(music21_parse_timeout_s=1.0),
+        )
+
+        self.assertFalse(complete_breakdown.parse_valid)
+        self.assertEqual(complete_breakdown.completion_reward, 1.0)
+        self.assertEqual(complete_breakdown.termination_penalty_reward, 0.0)
+        self.assertEqual(complete_breakdown.syntax_penalty_reward, -1.0)
+
+        self.assertTrue(incomplete_breakdown.parse_valid)
+        self.assertEqual(incomplete_breakdown.completion_reward, 0.0)
+        self.assertEqual(incomplete_breakdown.termination_penalty_reward, 0.0)
+        self.assertEqual(incomplete_breakdown.syntax_penalty_reward, 0.0)
 
     def test_abc_tokenize_parse_validation_mode_scores_without_full_stream_parse(self):
         target = StructuralTarget(expected_bars=1, expected_structure_bars=1)

@@ -14,6 +14,7 @@ try:
     from notagen_runtime.notagen_replay import (
         batched_trajectory_token_log_dists,
         exact_categorical_kl,
+        normalize_patch_for_replay_context,
     )
     from utils import NotaGenLMHeadModel
 except ModuleNotFoundError as exc:
@@ -76,6 +77,41 @@ def _sequential_logprobs(model, prompt_ids, generated_patches, chunk_patches, re
 
 @unittest.skipIf(torch is None, f"NotaGen torch dependencies unavailable: {IMPORT_ERROR}")
 class NotaGenLogprobScoringTests(unittest.TestCase):
+    def test_replay_context_padding_preserves_patch_alignment_without_extra_actions(self):
+        eos = 2
+        special = 0
+        short_terminal = [65, eos]
+
+        boundary_context = normalize_patch_for_replay_context(
+            short_terminal,
+            eos_token_id=eos,
+            special_token_id=special,
+            current_context_len=PATCH_SIZE * 3,
+        )
+        self.assertEqual(len(boundary_context), PATCH_SIZE)
+        self.assertEqual(boundary_context[:2], short_terminal)
+        self.assertEqual(boundary_context[2:], [special] * (PATCH_SIZE - 2))
+
+        prompt_remainder = 5
+        fills_unaligned_prompt = [70 + i for i in range(PATCH_SIZE - prompt_remainder)]
+        prefix_context = normalize_patch_for_replay_context(
+            fills_unaligned_prompt,
+            eos_token_id=eos,
+            special_token_id=special,
+            current_context_len=PATCH_SIZE * 3 + prompt_remainder,
+        )
+        self.assertEqual(prefix_context, fills_unaligned_prompt)
+
+        early_terminal_prefix = normalize_patch_for_replay_context(
+            short_terminal,
+            eos_token_id=eos,
+            special_token_id=special,
+            current_context_len=PATCH_SIZE * 3 + prompt_remainder,
+        )
+        self.assertEqual(len(early_terminal_prefix), PATCH_SIZE - prompt_remainder)
+        self.assertEqual(early_terminal_prefix[:2], short_terminal)
+        self.assertEqual(early_terminal_prefix[2:], [special] * (PATCH_SIZE - prompt_remainder - 2))
+
     def assert_chunked_matches_tokenwise(self, prompt_ids, generated_patches):
         torch.manual_seed(0)
         model = _tiny_notagen()
@@ -171,6 +207,52 @@ class NotaGenLogprobScoringTests(unittest.TestCase):
                 chunk_patches,
                 replay_context_patches=5,
             )
+
+    def test_batched_logprobs_handle_short_terminal_patches_without_extra_tokens(self):
+        torch.manual_seed(0)
+        model = _tiny_notagen()
+        prompt_ids = [3 + (i % 80) for i in range(PATCH_SIZE * 4)]
+        eos = model.eos_token_id
+        generated_batch = [
+            [[11, eos]],
+            [[19 + (i % 60) for i in range(PATCH_SIZE)], [23, eos]],
+        ]
+
+        with torch.no_grad():
+            expected = [
+                _sequential_logprobs(
+                    model,
+                    prompt_ids,
+                    generated_patches,
+                    chunk_patches=1,
+                    replay_context_patches=3,
+                )
+                for generated_patches in generated_batch
+            ]
+            actual = batched_trajectory_logprobs(
+                model,
+                prompt_ids,
+                generated_batch,
+                precision="fp32",
+                replay_context_patches=3,
+                target_chunk_patches=1,
+                replay_batch_size=2,
+            )
+            token_replays = batched_trajectory_token_log_dists(
+                model,
+                prompt_ids,
+                generated_batch,
+                precision="fp32",
+                replay_context_patches=3,
+                target_chunk_patches=1,
+                replay_batch_size=2,
+            )
+
+        self.assertEqual([item.shape[0] for item in actual], [2, PATCH_SIZE + 2])
+        self.assertEqual([item.token_counts.detach().cpu().tolist() for item in token_replays], [[2], [PATCH_SIZE, 2]])
+        for sample_idx, (exp, got) in enumerate(zip(expected, actual, strict=True)):
+            self.assertEqual(exp.shape, got.shape, msg=f"sample_idx={sample_idx}")
+            self.assertTrue(torch.allclose(exp, got, atol=1e-5, rtol=1e-5), msg=f"sample_idx={sample_idx}")
 
     def assert_token_dists_match_selected_logprobs(self, prompt_ids, generated_batch, chunk_patches):
         torch.manual_seed(0)

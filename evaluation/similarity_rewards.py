@@ -26,17 +26,27 @@ class SimilarityReference:
 @dataclass(frozen=True)
 class SimilarityRewardWeights:
     aria_chroma: float = 0.0
+    aria_chroma_top: float = 0.0
     variation_chroma: float = 0.0
     aria_harmony: float = 0.0
+    aria_harmony_aligned_root: float = 0.0
+    aria_harmony_aligned_bass: float = 0.0
+    aria_harmony_aligned_top: float = 0.0
     variation_harmony: float = 0.0
 
     @property
     def needs_chroma(self) -> bool:
-        return self.aria_chroma != 0.0 or self.variation_chroma != 0.0
+        return self.aria_chroma != 0.0 or self.aria_chroma_top != 0.0 or self.variation_chroma != 0.0
 
     @property
     def needs_harmony(self) -> bool:
-        return self.aria_harmony != 0.0 or self.variation_harmony != 0.0
+        return (
+            self.aria_harmony != 0.0
+            or self.aria_harmony_aligned_root != 0.0
+            or self.aria_harmony_aligned_bass != 0.0
+            or self.aria_harmony_aligned_top != 0.0
+            or self.variation_harmony != 0.0
+        )
 
     @property
     def enabled(self) -> bool:
@@ -184,6 +194,42 @@ def load_similarity_reference(
     )
 
 
+def finalize_similarity_reward_fields(
+    *,
+    similarity_payload: dict[str, Any],
+    structural_total_reward: float,
+    completion_reward: float,
+    bar_count_reward: float,
+    max_similarity_reward: float,
+) -> dict[str, float]:
+    """Build additive similarity reward fields.
+
+    `similarity_validity_gate` is retained only as a diagnostic. It is not
+    multiplied into the active reward.
+    """
+
+    raw_similarity_reward = float(similarity_payload.get("similarity_reward", 0.0))
+    clipped_similarity_reward = raw_similarity_reward
+    if max_similarity_reward > 0:
+        clipped_similarity_reward = max(
+            -float(max_similarity_reward),
+            min(float(max_similarity_reward), raw_similarity_reward),
+        )
+    active_similarity_reward = clipped_similarity_reward
+    similarity_validity_gate = float(completion_reward) * float(bar_count_reward)
+    return {
+        "structural_total_reward": float(structural_total_reward),
+        "raw_similarity_reward": raw_similarity_reward,
+        "clipped_similarity_reward": clipped_similarity_reward,
+        "max_similarity_reward": float(max_similarity_reward),
+        "similarity_validity_gate": similarity_validity_gate,
+        "active_similarity_reward": active_similarity_reward,
+        "effective_similarity_reward": active_similarity_reward,
+        "similarity_reward": active_similarity_reward,
+        "total_reward": float(structural_total_reward) + active_similarity_reward,
+    }
+
+
 def score_similarity_reward(
     *,
     prompt_text: str,
@@ -238,8 +284,16 @@ def score_similarity_reward(
 
     reward = 0.0
     reward += weights.aria_chroma * float(payload.get("aria_chroma_harmonic_hist", 0.0))
+    reward += weights.aria_chroma_top * float(payload.get("aria_chroma_top_hist", 0.0))
     reward += weights.variation_chroma * float(payload.get("variation_chroma_harmonic_hist", 0.0))
-    reward += weights.aria_harmony * float(payload.get("aria_harmony_combined", 0.0))
-    reward += weights.variation_harmony * float(payload.get("variation_harmony_combined", 0.0))
+    reward += weights.aria_harmony * float(
+        payload.get("aria_harmony_dtw_combined", payload.get("aria_harmony_combined", 0.0))
+    )
+    reward += weights.aria_harmony_aligned_root * float(payload.get("aria_harmony_aligned_root", 0.0))
+    reward += weights.aria_harmony_aligned_bass * float(payload.get("aria_harmony_aligned_bass", 0.0))
+    reward += weights.aria_harmony_aligned_top * float(payload.get("aria_harmony_aligned_top", 0.0))
+    reward += weights.variation_harmony * float(
+        payload.get("variation_harmony_dtw_combined", payload.get("variation_harmony_combined", 0.0))
+    )
     payload["similarity_reward"] = reward
     return payload

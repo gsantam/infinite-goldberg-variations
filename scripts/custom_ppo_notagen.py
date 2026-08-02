@@ -36,7 +36,7 @@ from notagen_runtime.notagen_replay import (
     autocast_context,
     batched_tail_encoded_targets,
     char_patch_token_logprobs_dists_and_counts,
-    normalize_patch_for_context,
+    normalize_patch_for_replay_context,
     split_tensor_by_counts,
     tail_encoded_targets,
 )
@@ -59,6 +59,7 @@ from scripts.custom_grpo_notagen import (
     load_prompt_rows,
     load_similarity_reference,
     load_structural_target,
+    finalize_similarity_reward_fields,
     prompt_row_name,
     sample_completion,
     score_prompt_completion_pair,
@@ -1176,10 +1177,11 @@ def trajectory_patch_logprob_value_chunks(
             replay_context_patches=replay_context_patches,
         )
         current_ids.extend(
-            normalize_patch_for_context(
+            normalize_patch_for_replay_context(
                 patch,
                 eos_token_id=model.eos_token_id,
                 special_token_id=model.special_token_id,
+                current_context_len=len(current_ids),
             )
         )
         start_idx += 1
@@ -1274,10 +1276,11 @@ def batched_trajectory_patch_logprobs_values(
                 )
             )
             current_ids.extend(
-                normalize_patch_for_context(
+                normalize_patch_for_replay_context(
                     patch,
                     eos_token_id=model.eos_token_id,
                     special_token_id=model.special_token_id,
+                    current_context_len=len(current_ids),
                 )
             )
             start_idx += 1
@@ -1358,10 +1361,11 @@ def batched_trajectory_token_log_dists(
                 )
             )
             current_ids.extend(
-                normalize_patch_for_context(
+                normalize_patch_for_replay_context(
                     patch,
                     eos_token_id=model.eos_token_id,
                     special_token_id=model.special_token_id,
+                    current_context_len=len(current_ids),
                 )
             )
             start_idx += 1
@@ -1431,10 +1435,11 @@ def trajectory_patch_value_chunks(
             detach_policy=detach_policy,
         ).reshape(1)
         current_ids.extend(
-            normalize_patch_for_context(
+            normalize_patch_for_replay_context(
                 patch,
                 eos_token_id=model.eos_token_id,
                 special_token_id=model.special_token_id,
+                current_context_len=len(current_ids),
             )
         )
         start_idx += 1
@@ -1519,10 +1524,11 @@ def batched_trajectory_patch_values(
                 ).reshape(1)
             )
             current_ids.extend(
-                normalize_patch_for_context(
+                normalize_patch_for_replay_context(
                     patch,
                     eos_token_id=model.eos_token_id,
                     special_token_id=model.special_token_id,
+                    current_context_len=len(current_ids),
                 )
             )
             start_idx += 1
@@ -1696,10 +1702,11 @@ def trajectory_patch_hidden_state_chunks(
             detach_policy=detach_policy,
         ).reshape(1, -1)
         current_ids.extend(
-            normalize_patch_for_context(
+            normalize_patch_for_replay_context(
                 patch,
                 eos_token_id=model.eos_token_id,
                 special_token_id=model.special_token_id,
+                current_context_len=len(current_ids),
             )
         )
         start_idx += 1
@@ -1891,20 +1898,16 @@ def _score_total_reward_from_structural_breakdown(
         timeout_s=similarity_timeout_s,
     )
     reward_breakdown.update(similarity_payload)
-    raw_similarity_reward = float(similarity_payload.get("similarity_reward", 0.0))
-    clipped_similarity_reward = raw_similarity_reward
-    if max_similarity_reward > 0:
-        clipped_similarity_reward = max(-max_similarity_reward, min(max_similarity_reward, raw_similarity_reward))
-    similarity_validity_gate = 1.0 if reward_breakdown.get("parse_valid") else 0.0
-    effective_similarity_reward = clipped_similarity_reward * similarity_validity_gate
-    total_reward = structural_total_reward + effective_similarity_reward
-    reward_breakdown["structural_total_reward"] = structural_total_reward
-    reward_breakdown["raw_similarity_reward"] = raw_similarity_reward
-    reward_breakdown["clipped_similarity_reward"] = clipped_similarity_reward
-    reward_breakdown["similarity_validity_gate"] = similarity_validity_gate
-    reward_breakdown["effective_similarity_reward"] = effective_similarity_reward
-    reward_breakdown["total_reward"] = total_reward
-    return RewardScore(total=total_reward, breakdown=reward_breakdown)
+    reward_breakdown.update(
+        finalize_similarity_reward_fields(
+            similarity_payload=similarity_payload,
+            structural_total_reward=structural_total_reward,
+            completion_reward=reward_breakdown.get("completion_reward", 0.0),
+            bar_count_reward=reward_breakdown.get("bar_count_reward", 0.0),
+            max_similarity_reward=max_similarity_reward,
+        )
+    )
+    return RewardScore(total=reward_breakdown["total_reward"], breakdown=reward_breakdown)
 
 
 def generated_patch_completion_prefixes(generated_patches: list[list[int]]) -> list[str]:
@@ -2140,14 +2143,13 @@ def _completion_harmony_tokens(completion_text: str) -> tuple[list[dict], list[t
     return [infer_harmony(parse_bar_notes(completion_text[start:end])) for start, end in spans], spans
 
 
-def _effective_similarity_component(raw_component: float, final_score: RewardScore) -> float:
+def _active_similarity_component(raw_component: float, final_score: RewardScore) -> float:
     breakdown = final_score.breakdown
     raw_total = float(breakdown.get("raw_similarity_reward", 0.0))
     if raw_total == 0.0 or raw_component == 0.0:
         return 0.0
     clipped_total = float(breakdown.get("clipped_similarity_reward", raw_total))
-    gate = float(breakdown.get("similarity_validity_gate", 1.0))
-    return raw_component * (clipped_total / raw_total) * gate
+    return raw_component * (clipped_total / raw_total)
 
 
 def _dtw_metric_reward_events(
@@ -2191,6 +2193,36 @@ def _dtw_metric_reward_events(
     ]
 
 
+def _same_bar_metric_reward_events(
+    *,
+    name: str,
+    reference: list,
+    candidate: list,
+    candidate_spans: list[tuple[int, int]],
+    similarity_fn,
+    total_value: float,
+) -> list[RewardEvent]:
+    if total_value == 0.0 or not reference or not candidate or not candidate_spans:
+        return []
+    credits = [
+        max(0.0, float(similarity_fn(left, right)))
+        for left, right in zip(reference, candidate, strict=False)
+    ]
+    total_credit = sum(credits)
+    if total_credit <= 0.0:
+        return []
+    return [
+        RewardEvent(
+            start=start,
+            end=end,
+            value=total_value * (credit / total_credit),
+            name=name,
+        )
+        for credit, (start, end) in zip(credits, candidate_spans, strict=False)
+        if credit > 0.0 and end > start
+    ]
+
+
 def _harmony_reward_events(
     *,
     completion_text: str,
@@ -2200,7 +2232,7 @@ def _harmony_reward_events(
     band_ratio: float,
 ) -> list[RewardEvent]:
     if (
-        similarity_weights.aria_harmony == 0.0
+        not similarity_weights.needs_harmony
         or aria_similarity_ref is None
         or aria_similarity_ref.harmony is None
         or not final_score.breakdown.get("similarity_harmony_valid")
@@ -2211,41 +2243,87 @@ def _harmony_reward_events(
     if not candidate_harmony:
         return []
 
-    weight_per_metric = similarity_weights.aria_harmony / 3.0
-    metric_specs = [
+    events: list[RewardEvent] = []
+    if similarity_weights.aria_harmony != 0.0:
+        weight_per_metric = similarity_weights.aria_harmony / 3.0
+        metric_specs = [
+            (
+                "aria_harmony_harmony_dtw",
+                aria_similarity_ref.harmony,
+                candidate_harmony,
+                token_similarity,
+            ),
+            (
+                "aria_harmony_root_dtw",
+                [item["root"] for item in aria_similarity_ref.harmony],
+                [item["root"] for item in candidate_harmony],
+                pitch_class_similarity,
+            ),
+            (
+                "aria_harmony_bass_dtw",
+                [item["bass"] for item in aria_similarity_ref.harmony],
+                [item["bass"] for item in candidate_harmony],
+                pitch_class_similarity,
+            ),
+        ]
+
+        for metric_name, reference, candidate, similarity_fn in metric_specs:
+            metric_score = float(final_score.breakdown.get(metric_name, 0.0))
+            total_value = _active_similarity_component(weight_per_metric * metric_score, final_score)
+            events.extend(
+                _dtw_metric_reward_events(
+                    name=f"{metric_name}_active",
+                    reference=reference,
+                    candidate=candidate,
+                    candidate_spans=candidate_spans,
+                    similarity_fn=similarity_fn,
+                    total_value=total_value,
+                    band_ratio=band_ratio,
+                )
+            )
+
+    aligned_specs = [
         (
-            "aria_harmony_harmony_dtw",
-            aria_similarity_ref.harmony,
-            candidate_harmony,
-            token_similarity,
-        ),
-        (
-            "aria_harmony_root_dtw",
+            "aria_harmony_aligned_root",
+            similarity_weights.aria_harmony_aligned_root,
             [item["root"] for item in aria_similarity_ref.harmony],
             [item["root"] for item in candidate_harmony],
-            pitch_class_similarity,
+            lambda left, right: 1.0 if left is not None and left == right else 0.0,
         ),
         (
-            "aria_harmony_bass_dtw",
+            "aria_harmony_aligned_bass",
+            similarity_weights.aria_harmony_aligned_bass,
             [item["bass"] for item in aria_similarity_ref.harmony],
             [item["bass"] for item in candidate_harmony],
-            pitch_class_similarity,
+            lambda left, right: 1.0 if left is not None and left == right else 0.0,
+        ),
+        (
+            "aria_harmony_aligned_top",
+            similarity_weights.aria_harmony_aligned_top,
+            [
+                None if item.get("top_midi") is None else int(item["top_midi"]) % 12
+                for item in aria_similarity_ref.harmony
+            ],
+            [
+                None if item.get("top_midi") is None else int(item["top_midi"]) % 12
+                for item in candidate_harmony
+            ],
+            lambda left, right: 1.0 if left is not None and left == right else 0.0,
         ),
     ]
-
-    events: list[RewardEvent] = []
-    for metric_name, reference, candidate, similarity_fn in metric_specs:
+    for metric_name, weight, reference, candidate, similarity_fn in aligned_specs:
+        if weight == 0.0:
+            continue
         metric_score = float(final_score.breakdown.get(metric_name, 0.0))
-        total_value = _effective_similarity_component(weight_per_metric * metric_score, final_score)
+        total_value = _active_similarity_component(weight * metric_score, final_score)
         events.extend(
-            _dtw_metric_reward_events(
-                name=f"{metric_name}_effective",
+            _same_bar_metric_reward_events(
+                name=f"{metric_name}_active",
                 reference=reference,
                 candidate=candidate,
                 candidate_spans=candidate_spans,
                 similarity_fn=similarity_fn,
                 total_value=total_value,
-                band_ratio=band_ratio,
             )
         )
     return events
@@ -2306,7 +2384,11 @@ def _terminal_structural_component_rewards(
 ) -> dict[str, list[float]]:
     breakdown = final_score.breakdown
     component_weights = {
+        "completion_reward": reward_config.completion_weight,
+        "expanded_completion_reward": reward_config.expanded_completion_weight,
         "parse_reward": reward_config.parse_weight,
+        "syntax_penalty_reward": reward_config.syntax_penalty_weight,
+        "termination_penalty_reward": reward_config.termination_penalty_weight,
         "countdown_reward": reward_config.countdown_weight,
         "line_closure_reward": reward_config.line_closure_weight,
         "bar_token_reward": reward_config.bar_token_weight,
@@ -2314,6 +2396,7 @@ def _terminal_structural_component_rewards(
         "meter_duration_closeness_reward": reward_config.meter_duration_closeness_weight,
         "bar_meter_consistency_reward": reward_config.bar_meter_consistency_weight,
         "bar_count_reward": reward_config.bar_count_weight,
+        "expanded_bar_count_reward": reward_config.expanded_bar_count_weight,
         "voice_declaration_reward": reward_config.voice_declaration_weight,
         "score_voice_reward": reward_config.score_voice_weight,
     }
@@ -2340,14 +2423,24 @@ def _terminal_similarity_component_rewards(
 ) -> dict[str, list[float]]:
     component_rewards: dict[str, list[float]] = {}
     if similarity_weights.aria_chroma != 0.0:
-        chroma_component = _effective_similarity_component(
+        chroma_component = _active_similarity_component(
             similarity_weights.aria_chroma * float(final_score.breakdown.get("aria_chroma_harmonic_hist", 0.0)),
             final_score,
         )
         if chroma_component != 0.0:
-            component_rewards["aria_chroma_harmonic_hist_effective"] = _terminal_patch_rewards(
+            component_rewards["aria_chroma_harmonic_hist_active"] = _terminal_patch_rewards(
                 patch_count,
                 chroma_component,
+            )
+    if similarity_weights.aria_chroma_top != 0.0:
+        top_component = _active_similarity_component(
+            similarity_weights.aria_chroma_top * float(final_score.breakdown.get("aria_chroma_top_hist", 0.0)),
+            final_score,
+        )
+        if top_component != 0.0:
+            component_rewards["aria_chroma_top_hist_active"] = _terminal_patch_rewards(
+                patch_count,
+                top_component,
             )
 
     if similarity_weights.aria_harmony != 0.0:
@@ -2357,12 +2450,25 @@ def _terminal_similarity_component_rewards(
             "aria_harmony_root_dtw",
             "aria_harmony_bass_dtw",
         ):
-            component = _effective_similarity_component(
+            component = _active_similarity_component(
                 weight_per_metric * float(final_score.breakdown.get(metric_name, 0.0)),
                 final_score,
             )
             if component != 0.0:
-                component_rewards[f"{metric_name}_effective"] = _terminal_patch_rewards(patch_count, component)
+                component_rewards[f"{metric_name}_active"] = _terminal_patch_rewards(patch_count, component)
+    for metric_name, weight in (
+        ("aria_harmony_aligned_root", similarity_weights.aria_harmony_aligned_root),
+        ("aria_harmony_aligned_bass", similarity_weights.aria_harmony_aligned_bass),
+        ("aria_harmony_aligned_top", similarity_weights.aria_harmony_aligned_top),
+    ):
+        if weight == 0.0:
+            continue
+        component = _active_similarity_component(
+            weight * float(final_score.breakdown.get(metric_name, 0.0)),
+            final_score,
+        )
+        if component != 0.0:
+            component_rewards[f"{metric_name}_active"] = _terminal_patch_rewards(patch_count, component)
     return component_rewards
 
 
@@ -2459,6 +2565,7 @@ def patch_rewards_simple_test(
             "raw_similarity_reward": 0.0,
             "clipped_similarity_reward": 0.0,
             "similarity_validity_gate": 1.0,
+            "active_similarity_reward": 0.0,
             "effective_similarity_reward": 0.0,
             "simple_reward_component": component_name,
             "simple_reward_scale": float(scoring_options.simple_reward_scale),
@@ -2511,6 +2618,7 @@ def patch_rewards_simple_test(
         "raw_similarity_reward": 0.0,
         "clipped_similarity_reward": 0.0,
         "similarity_validity_gate": 1.0,
+        "active_similarity_reward": 0.0,
         "effective_similarity_reward": 0.0,
         "simple_reward_component": component_name,
         "simple_reward_scale": float(scoring_options.simple_reward_scale),
@@ -2640,13 +2748,28 @@ def _line_reward_components_from_metrics(
     add_weighted_component("voice_declaration_reward", reward_config.voice_declaration_weight, voice_decl)
     add_weighted_component("score_voice_reward", reward_config.score_voice_weight, score_voice)
 
-    counts = np.arange(1, n + 1, dtype=np.float32)
-    previous_counts = np.arange(0, n, dtype=np.float32)
-    expected = float(target.expected_reward_bars)
+    musical_bar_units = np.array(local_metrics.musical_bar_units, dtype=np.float32)
+    written_bar_units = np.array(local_metrics.written_bar_units, dtype=np.float32)
+    written_counts = np.cumsum(written_bar_units)
+    expected = float(target.expected_bars)
     if expected > 0 and reward_config.bar_count_weight != 0.0:
-        bar_count = np.maximum(0.0, 1.0 - np.abs(counts - expected) / expected)
-        previous_bar_count = np.maximum(0.0, 1.0 - np.abs(previous_counts - expected) / expected)
+        previous_written_counts = np.concatenate(([0.0], written_counts[:-1])).astype(np.float32)
+        bar_count = np.maximum(0.0, 1.0 - np.abs(written_counts - expected) / expected)
+        previous_bar_count = np.maximum(0.0, 1.0 - np.abs(previous_written_counts - expected) / expected)
         components["bar_count_reward"] = reward_config.bar_count_weight * (bar_count - previous_bar_count)
+
+    expanded_expected = float(getattr(target, "expected_repeat_expanded_bars", float(target.expected_bars) * 2.0))
+    if expanded_expected > 0 and reward_config.expanded_bar_count_weight != 0.0:
+        expanded_counts = np.cumsum(musical_bar_units)
+        previous_expanded_counts = np.concatenate(([0.0], expanded_counts[:-1])).astype(np.float32)
+        expanded_bar_count = np.maximum(0.0, 1.0 - np.abs(expanded_counts - expanded_expected) / expanded_expected)
+        previous_expanded_bar_count = np.maximum(
+            0.0,
+            1.0 - np.abs(previous_expanded_counts - expanded_expected) / expanded_expected,
+        )
+        components["expanded_bar_count_reward"] = reward_config.expanded_bar_count_weight * (
+            expanded_bar_count - previous_expanded_bar_count
+        )
 
     return {name: [float(item) for item in values] for name, values in components.items()}
 
@@ -2749,9 +2872,19 @@ def patch_rewards_single_pass(
     )
     component_rewards.update(_project_reward_events_by_name_to_patches(harmony_events, patch_texts))
 
-    if reward_config.parse_weight != 0.0:
-        parse_component = reward_config.parse_weight * float(final_score.breakdown.get("parse_reward", 0.0))
-        component_rewards["parse_reward"] = _terminal_patch_rewards(len(patch_texts), parse_component)
+    terminal_structural_components = {
+        "completion_reward": reward_config.completion_weight,
+        "expanded_completion_reward": reward_config.expanded_completion_weight,
+        "parse_reward": reward_config.parse_weight,
+        "syntax_penalty_reward": reward_config.syntax_penalty_weight,
+        "termination_penalty_reward": reward_config.termination_penalty_weight,
+    }
+    for component_name, weight in terminal_structural_components.items():
+        if weight == 0.0:
+            continue
+        component = weight * float(final_score.breakdown.get(component_name, 0.0))
+        if component != 0.0:
+            component_rewards[component_name] = _terminal_patch_rewards(len(patch_texts), component)
 
     structural_gate_adjustment = float(final_score.breakdown.get("structural_validity_gate_adjustment", 0.0))
     if structural_gate_adjustment != 0.0:
@@ -2761,13 +2894,22 @@ def patch_rewards_single_pass(
         )
 
     if similarity_weights.aria_chroma != 0.0:
-        chroma_component = _effective_similarity_component(
+        chroma_component = _active_similarity_component(
             similarity_weights.aria_chroma * float(final_score.breakdown.get("aria_chroma_harmonic_hist", 0.0)),
             final_score,
         )
-        component_rewards["aria_chroma_harmonic_hist_effective"] = _terminal_patch_rewards(
+        component_rewards["aria_chroma_harmonic_hist_active"] = _terminal_patch_rewards(
             len(patch_texts),
             chroma_component,
+        )
+    if similarity_weights.aria_chroma_top != 0.0:
+        top_component = _active_similarity_component(
+            similarity_weights.aria_chroma_top * float(final_score.breakdown.get("aria_chroma_top_hist", 0.0)),
+            final_score,
+        )
+        component_rewards["aria_chroma_top_hist_active"] = _terminal_patch_rewards(
+            len(patch_texts),
+            top_component,
         )
 
     rewards = [
@@ -4017,11 +4159,21 @@ def _score_ppo_rollout_payload(
             "reward": failure_reward,
             "total_reward": failure_reward,
             "parse_valid": False,
+            "clearly_malformed_syntax": False,
             "parse_reward": 0.0,
+            "parse_balanced_construct_reward": 0.0,
+            "parse_inline_field_reward": 0.0,
+            "parse_duration_sanity_reward": 0.0,
+            "parse_tokenizer_reward": 0.0,
+            "parse_music21_reward": 0.0,
+            "completion_reward": 0.0,
+            "syntax_penalty_reward": 0.0,
+            "termination_penalty_reward": -1.0,
             "structural_total_reward": failure_reward,
             "raw_similarity_reward": 0.0,
             "clipped_similarity_reward": 0.0,
             "similarity_validity_gate": 0.0,
+            "active_similarity_reward": 0.0,
             "effective_similarity_reward": 0.0,
             "rollout_failure_terminal_reward": failure_reward,
             "rollout_failed": True,
@@ -4741,7 +4893,11 @@ def run_ppo_smoke(
     if args.reward_mode == "goldberg":
         similarity_weights = SimilarityRewardWeights(
             aria_chroma=args.aria_chroma_reward_weight,
+            aria_chroma_top=args.aria_chroma_top_reward_weight,
             aria_harmony=args.aria_harmony_reward_weight,
+            aria_harmony_aligned_root=args.aria_harmony_aligned_root_reward_weight,
+            aria_harmony_aligned_bass=args.aria_harmony_aligned_bass_reward_weight,
+            aria_harmony_aligned_top=args.aria_harmony_aligned_top_reward_weight,
         )
     else:
         similarity_weights = SimilarityRewardWeights()
@@ -4749,8 +4905,8 @@ def run_ppo_smoke(
     if similarity_weights.enabled:
         aria_similarity_ref = load_similarity_reference(
             args.aria_reference_abc,
-            load_chroma=similarity_weights.aria_chroma != 0.0,
-            load_harmony=similarity_weights.aria_harmony != 0.0,
+            load_chroma=similarity_weights.needs_chroma,
+            load_harmony=similarity_weights.needs_harmony,
             bins=args.similarity_chroma_bins,
         )
     if not prompts:
@@ -5611,8 +5767,17 @@ def main() -> int:
     parser.add_argument("--target-structure-abc", required=True)
     parser.add_argument("--aria-reference-abc", default=str(Path("data/processed/goldberg/abc/aria-bwv-988.abc")))
     parser.add_argument("--aria-chroma-reward-weight", type=float, default=1.0)
+    parser.add_argument(
+        "--aria-chroma-top-reward-weight",
+        type=float,
+        default=None,
+        help="Separate top-voice chroma histogram reward weight. Defaults to --aria-chroma-reward-weight.",
+    )
     parser.add_argument("--aria-harmony-reward-weight", type=float, default=1.0)
-    parser.add_argument("--max-similarity-reward", type=float, default=2.0)
+    parser.add_argument("--aria-harmony-aligned-root-reward-weight", type=float, default=None)
+    parser.add_argument("--aria-harmony-aligned-bass-reward-weight", type=float, default=None)
+    parser.add_argument("--aria-harmony-aligned-top-reward-weight", type=float, default=None)
+    parser.add_argument("--max-similarity-reward", type=float, default=3.5)
     parser.add_argument("--similarity-chroma-bins", type=int, default=128)
     parser.add_argument("--similarity-band-ratio", type=float, default=0.25)
     parser.add_argument("--similarity-timeout-s", type=float, default=20.0)
@@ -5627,20 +5792,25 @@ def main() -> int:
         ),
     )
     parser.add_argument("--music21-parse-timeout-s", type=float, default=5.0)
-    parser.add_argument("--parse-reward-weight", type=float, default=1.0)
+    parser.add_argument("--completion-reward-weight", type=float, default=0.25)
+    parser.add_argument("--expanded-completion-reward-weight", type=float, default=0.25)
+    parser.add_argument("--parse-reward-weight", type=float, default=0.25)
+    parser.add_argument("--syntax-penalty-reward-weight", type=float, default=0.25)
+    parser.add_argument("--termination-penalty-reward-weight", type=float, default=0.0)
     parser.add_argument("--countdown-reward-weight", type=float, default=0.25)
     parser.add_argument("--line-closure-reward-weight", type=float, default=0.25)
     parser.add_argument("--bar-token-reward-weight", type=float, default=0.10)
     parser.add_argument("--meter-alignment-reward-weight", type=float, default=0.75)
     parser.add_argument("--meter-duration-closeness-reward-weight", type=float, default=0.75)
     parser.add_argument("--bar-meter-consistency-reward-weight", type=float, default=0.75)
-    parser.add_argument("--bar-count-reward-weight", type=float, default=3.0)
+    parser.add_argument("--bar-count-reward-weight", type=float, default=1.0)
+    parser.add_argument("--expanded-bar-count-reward-weight", type=float, default=1.0)
     parser.add_argument("--voice-declaration-reward-weight", type=float, default=1.0)
     parser.add_argument("--score-voice-reward-weight", type=float, default=0.5)
     parser.add_argument(
         "--rollout-failure-terminal-reward",
         type=float,
-        default=-1.0,
+        default=-0.25,
         help=(
             "Terminal reward assigned to inference-failed PPO trajectories. If the failed trajectory "
             "has generated patches, this is placed on the final generated patch; empty failures are "
@@ -6012,6 +6182,15 @@ def main() -> int:
         help="Persist fixed-eval generated text and patches in the fixed-eval JSONL sidecar.",
     )
     args = parser.parse_args()
+    if args.aria_chroma_top_reward_weight is None:
+        args.aria_chroma_top_reward_weight = args.aria_chroma_reward_weight
+    default_aligned_harmony_weight = 0.25 if args.aria_harmony_reward_weight != 0.0 else 0.0
+    if args.aria_harmony_aligned_root_reward_weight is None:
+        args.aria_harmony_aligned_root_reward_weight = default_aligned_harmony_weight
+    if args.aria_harmony_aligned_bass_reward_weight is None:
+        args.aria_harmony_aligned_bass_reward_weight = default_aligned_harmony_weight
+    if args.aria_harmony_aligned_top_reward_weight is None:
+        args.aria_harmony_aligned_top_reward_weight = 0.0
 
     set_seed(args.seed)
     device = select_device()
@@ -6071,7 +6250,11 @@ def main() -> int:
     prompts = load_prompt_rows(args.prompts_jsonl, limit=args.prompt_limit)
     prompt_targets = load_prompt_structural_targets(prompts, args)
     reward_config = GoldbergRewardConfig(
+        completion_weight=args.completion_reward_weight,
+        expanded_completion_weight=args.expanded_completion_reward_weight,
         parse_weight=args.parse_reward_weight,
+        syntax_penalty_weight=args.syntax_penalty_reward_weight,
+        termination_penalty_weight=args.termination_penalty_reward_weight,
         countdown_weight=args.countdown_reward_weight,
         line_closure_weight=args.line_closure_reward_weight,
         bar_token_weight=args.bar_token_reward_weight,
@@ -6079,6 +6262,7 @@ def main() -> int:
         meter_duration_closeness_weight=args.meter_duration_closeness_reward_weight,
         bar_meter_consistency_weight=args.bar_meter_consistency_reward_weight,
         bar_count_weight=args.bar_count_reward_weight,
+        expanded_bar_count_weight=args.expanded_bar_count_reward_weight,
         voice_declaration_weight=args.voice_declaration_reward_weight,
         score_voice_weight=args.score_voice_reward_weight,
         parse_validation_mode=args.parse_validation_mode,

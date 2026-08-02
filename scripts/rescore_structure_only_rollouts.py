@@ -169,13 +169,28 @@ def _line_reward_components_from_metrics(
     add_weighted_component("voice_declaration_reward", reward_config.voice_declaration_weight, voice_decl)
     add_weighted_component("score_voice_reward", reward_config.score_voice_weight, score_voice)
 
-    counts = np.arange(1, n + 1, dtype=np.float32)
-    previous_counts = np.arange(0, n, dtype=np.float32)
-    expected = float(target.expected_reward_bars)
+    musical_bar_units = np.array(local_metrics.musical_bar_units, dtype=np.float32)
+    written_bar_units = np.array(local_metrics.written_bar_units, dtype=np.float32)
+    written_counts = np.cumsum(written_bar_units)
+    expected = float(target.expected_bars)
     if expected > 0 and reward_config.bar_count_weight != 0.0:
-        bar_count = np.maximum(0.0, 1.0 - np.abs(counts - expected) / expected)
-        previous_bar_count = np.maximum(0.0, 1.0 - np.abs(previous_counts - expected) / expected)
+        previous_written_counts = np.concatenate(([0.0], written_counts[:-1])).astype(np.float32)
+        bar_count = np.maximum(0.0, 1.0 - np.abs(written_counts - expected) / expected)
+        previous_bar_count = np.maximum(0.0, 1.0 - np.abs(previous_written_counts - expected) / expected)
         components["bar_count_reward"] = reward_config.bar_count_weight * (bar_count - previous_bar_count)
+
+    expanded_expected = float(getattr(target, "expected_repeat_expanded_bars", float(target.expected_bars) * 2.0))
+    if expanded_expected > 0 and reward_config.expanded_bar_count_weight != 0.0:
+        expanded_counts = np.cumsum(musical_bar_units)
+        previous_expanded_counts = np.concatenate(([0.0], expanded_counts[:-1])).astype(np.float32)
+        expanded_bar_count = np.maximum(0.0, 1.0 - np.abs(expanded_counts - expanded_expected) / expanded_expected)
+        previous_expanded_bar_count = np.maximum(
+            0.0,
+            1.0 - np.abs(previous_expanded_counts - expanded_expected) / expanded_expected,
+        )
+        components["expanded_bar_count_reward"] = reward_config.expanded_bar_count_weight * (
+            expanded_bar_count - previous_expanded_bar_count
+        )
 
     return {name: [float(item) for item in values] for name, values in components.items()}
 
@@ -194,7 +209,11 @@ def _terminal_structure_component_rewards(
     patch_count: int,
 ) -> dict[str, list[float]]:
     component_weights = {
+        "completion_reward": reward_config.completion_weight,
+        "expanded_completion_reward": reward_config.expanded_completion_weight,
         "parse_reward": reward_config.parse_weight,
+        "syntax_penalty_reward": reward_config.syntax_penalty_weight,
+        "termination_penalty_reward": reward_config.termination_penalty_weight,
         "countdown_reward": reward_config.countdown_weight,
         "line_closure_reward": reward_config.line_closure_weight,
         "bar_token_reward": reward_config.bar_token_weight,
@@ -202,6 +221,7 @@ def _terminal_structure_component_rewards(
         "meter_duration_closeness_reward": reward_config.meter_duration_closeness_weight,
         "bar_meter_consistency_reward": reward_config.bar_meter_consistency_weight,
         "bar_count_reward": reward_config.bar_count_weight,
+        "expanded_bar_count_reward": reward_config.expanded_bar_count_weight,
         "voice_declaration_reward": reward_config.voice_declaration_weight,
         "score_voice_reward": reward_config.score_voice_weight,
     }
@@ -261,9 +281,19 @@ def _current_structure_patch_rewards(
                 patch_texts,
             )
 
-        if reward_config.parse_weight != 0.0:
-            parse_component = reward_config.parse_weight * float(breakdown.get("parse_reward", 0.0))
-            component_rewards["parse_reward"] = _terminal_patch_rewards(len(patch_texts), parse_component)
+        terminal_components = {
+            "completion_reward": reward_config.completion_weight,
+            "expanded_completion_reward": reward_config.expanded_completion_weight,
+            "parse_reward": reward_config.parse_weight,
+            "syntax_penalty_reward": reward_config.syntax_penalty_weight,
+            "termination_penalty_reward": reward_config.termination_penalty_weight,
+        }
+        for component_name, weight in terminal_components.items():
+            if weight == 0.0:
+                continue
+            component = weight * float(breakdown.get(component_name, 0.0))
+            if component != 0.0:
+                component_rewards[component_name] = _terminal_patch_rewards(len(patch_texts), component)
 
         gate_adjustment = float(breakdown.get("structural_validity_gate_adjustment", 0.0))
         if gate_adjustment != 0.0:
@@ -292,7 +322,9 @@ def _current_structure_patch_rewards(
             "structural_total_reward": final_total,
             "raw_similarity_reward": 0.0,
             "clipped_similarity_reward": 0.0,
-            "similarity_validity_gate": 1.0 if breakdown.get("parse_valid") else 0.0,
+            "similarity_validity_gate": float(breakdown.get("completion_reward", 0.0))
+            * float(breakdown.get("bar_count_reward", 0.0)),
+            "active_similarity_reward": 0.0,
             "effective_similarity_reward": 0.0,
             "total_reward": final_total,
             "patch_reward_mode": patch_reward_mode,

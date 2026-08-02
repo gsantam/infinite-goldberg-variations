@@ -286,6 +286,7 @@ def generic_dtw_similarity(reference: list[Any], candidate: list[Any], similarit
 def aligned_similarity(reference: list[dict[str, Any]], candidate: list[dict[str, Any]]) -> dict[str, float | int]:
     root_scores: list[float] = []
     bass_scores: list[float] = []
+    top_scores: list[float] = []
     quality_scores: list[float] = []
     combined_scores: list[float] = []
     for left, right in zip(reference, candidate):
@@ -293,12 +294,17 @@ def aligned_similarity(reference: list[dict[str, Any]], candidate: list[dict[str
             continue
         root_scores.append(1.0 if left["root"] == right["root"] else 0.0)
         bass_scores.append(1.0 if left["bass"] == right["bass"] else 0.0)
+        left_top = left.get("top_midi")
+        right_top = right.get("top_midi")
+        if left_top is not None and right_top is not None:
+            top_scores.append(1.0 if int(left_top) % 12 == int(right_top) % 12 else 0.0)
         quality_scores.append(1.0 if left["quality"] == right["quality"] else 0.0)
         combined_scores.append(token_similarity(left, right))
     return {
         "aligned_combined": statistics.mean(combined_scores) if combined_scores else 0.0,
         "aligned_root": statistics.mean(root_scores) if root_scores else 0.0,
         "aligned_bass": statistics.mean(bass_scores) if bass_scores else 0.0,
+        "aligned_top": statistics.mean(top_scores) if top_scores else 0.0,
         "aligned_quality": statistics.mean(quality_scores) if quality_scores else 0.0,
         "aligned_compared_bars": len(combined_scores),
     }
@@ -335,9 +341,10 @@ def compare_harmony(reference: list[dict[str, Any]], candidate: list[dict[str, A
         lambda left, right: scalar_similarity(left, right, scale=12.0),
         band_ratio=band_ratio,
     )
-    scores["combined"] = (
+    scores["dtw_combined"] = (
         float(scores["harmony_dtw"])
         + float(scores["root_dtw"])
         + float(scores["bass_dtw"])
     ) / 3.0
+    scores["combined"] = scores["dtw_combined"]
     return scores

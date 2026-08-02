@@ -27,7 +27,11 @@ def _trajectory_patch_offsets(lengths: list[int]) -> list[tuple[int, int]]:
 
 
 STRUCTURAL_REWARD_COMPONENTS = (
+    "completion_reward",
+    "expanded_completion_reward",
     "parse_reward",
+    "syntax_penalty_reward",
+    "termination_penalty_reward",
     "countdown_reward",
     "line_closure_reward",
     "bar_token_reward",
@@ -35,6 +39,7 @@ STRUCTURAL_REWARD_COMPONENTS = (
     "meter_duration_closeness_reward",
     "bar_meter_consistency_reward",
     "bar_count_reward",
+    "expanded_bar_count_reward",
     "voice_declaration_reward",
     "score_voice_reward",
     "structural_validity_gate_adjustment",
@@ -42,11 +47,39 @@ STRUCTURAL_REWARD_COMPONENTS = (
 )
 
 
-HARMONY_REWARD_COMPONENTS = (
-    "aria_harmony_harmony_dtw_effective",
-    "aria_harmony_root_dtw_effective",
-    "aria_harmony_bass_dtw_effective",
+HARMONY_DTW_REWARD_COMPONENT_ALIASES = (
+    ("aria_harmony_harmony_dtw_active", "aria_harmony_harmony_dtw_effective"),
+    ("aria_harmony_root_dtw_active", "aria_harmony_root_dtw_effective"),
+    ("aria_harmony_bass_dtw_active", "aria_harmony_bass_dtw_effective"),
 )
+
+
+HARMONY_ALIGNED_REWARD_COMPONENT_ALIASES = (
+    ("aria_harmony_aligned_root_active",),
+    ("aria_harmony_aligned_bass_active",),
+    ("aria_harmony_aligned_top_active",),
+)
+
+
+HARMONY_REWARD_COMPONENT_ALIASES = HARMONY_DTW_REWARD_COMPONENT_ALIASES + HARMONY_ALIGNED_REWARD_COMPONENT_ALIASES
+
+
+def _component_sum(component_sums: dict[str, float], *names: str) -> float:
+    for name in names:
+        if name in component_sums:
+            return float(component_sums[name])
+    return 0.0
+
+
+def _component_vector(component_rewards: dict[str, list[float]], patch_count: int, *names: str) -> list[float]:
+    for name in names:
+        rewards = component_rewards.get(name)
+        if rewards is None:
+            continue
+        if len(rewards) != patch_count:
+            raise RuntimeError(f"component reward length mismatch for {name}: {len(rewards)} != {patch_count}")
+        return [float(reward) for reward in rewards]
+    return [0.0 for _idx in range(patch_count)]
 
 
 def prefix_totals(rewards: list[float]) -> list[float]:
@@ -68,16 +101,30 @@ def component_reward_sums(component_rewards: dict[str, list[float]]) -> dict[str
 
 def component_group_sums(component_sums: dict[str, float]) -> dict[str, float]:
     structural_total = sum(component_sums.get(name, 0.0) for name in STRUCTURAL_REWARD_COMPONENTS)
-    harmony_total = sum(component_sums.get(name, 0.0) for name in HARMONY_REWARD_COMPONENTS)
-    chroma_total = component_sums.get("aria_chroma_harmonic_hist_effective", 0.0)
+    harmony_dtw_total = sum(_component_sum(component_sums, *aliases) for aliases in HARMONY_DTW_REWARD_COMPONENT_ALIASES)
+    harmony_aligned_total = sum(
+        _component_sum(component_sums, *aliases) for aliases in HARMONY_ALIGNED_REWARD_COMPONENT_ALIASES
+    )
+    harmony_total = harmony_dtw_total + harmony_aligned_total
+    chroma_total = _component_sum(
+        component_sums,
+        "aria_chroma_harmonic_hist_active",
+        "aria_chroma_harmonic_hist_effective",
+    )
+    chroma_top_total = _component_sum(component_sums, "aria_chroma_top_hist_active")
     residual = component_sums.get("other_residual", 0.0)
     return {
         "structural_total_reward": float(structural_total),
+        "aria_chroma_harmonic_hist_active": float(chroma_total),
         "aria_chroma_harmonic_hist_effective": float(chroma_total),
-        "aria_harmony_dtw_effective": float(harmony_total),
-        "effective_similarity_reward": float(chroma_total + harmony_total),
+        "aria_chroma_top_hist_active": float(chroma_top_total),
+        "aria_harmony_dtw_active": float(harmony_dtw_total),
+        "aria_harmony_dtw_effective": float(harmony_dtw_total),
+        "aria_harmony_aligned_active": float(harmony_aligned_total),
+        "active_similarity_reward": float(chroma_total + chroma_top_total + harmony_total),
+        "effective_similarity_reward": float(chroma_total + chroma_top_total + harmony_total),
         "other_residual": float(residual),
-        "total_reward": float(structural_total + chroma_total + harmony_total + residual),
+        "total_reward": float(structural_total + chroma_total + chroma_top_total + harmony_total + residual),
     }
 
 
@@ -100,26 +147,54 @@ def _sum_component_vectors(
 
 def component_group_rewards(component_rewards: dict[str, list[float]], patch_count: int) -> dict[str, list[float]]:
     structural_total = _sum_component_vectors(component_rewards, STRUCTURAL_REWARD_COMPONENTS, patch_count)
-    harmony_total = _sum_component_vectors(component_rewards, HARMONY_REWARD_COMPONENTS, patch_count)
-    chroma = list(component_rewards.get("aria_chroma_harmonic_hist_effective", [0.0 for _idx in range(patch_count)]))
+    harmony_dtw_components = [
+        _component_vector(component_rewards, patch_count, *aliases)
+        for aliases in HARMONY_DTW_REWARD_COMPONENT_ALIASES
+    ]
+    harmony_aligned_components = [
+        _component_vector(component_rewards, patch_count, *aliases)
+        for aliases in HARMONY_ALIGNED_REWARD_COMPONENT_ALIASES
+    ]
+    harmony_dtw_total = [
+        float(sum(component[idx] for component in harmony_dtw_components))
+        for idx in range(patch_count)
+    ]
+    harmony_aligned_total = [
+        float(sum(component[idx] for component in harmony_aligned_components))
+        for idx in range(patch_count)
+    ]
+    harmony_total = [
+        float(dtw_value + aligned_value)
+        for dtw_value, aligned_value in zip(harmony_dtw_total, harmony_aligned_total, strict=True)
+    ]
+    chroma = _component_vector(
+        component_rewards,
+        patch_count,
+        "aria_chroma_harmonic_hist_active",
+        "aria_chroma_harmonic_hist_effective",
+    )
+    chroma_top = _component_vector(component_rewards, patch_count, "aria_chroma_top_hist_active")
     residual = list(component_rewards.get("other_residual", [0.0 for _idx in range(patch_count)]))
-    effective_similarity = [
-        float(chroma_value + harmony_value)
-        for chroma_value, harmony_value in zip(chroma, harmony_total, strict=True)
+    active_similarity = [
+        float(chroma_value + chroma_top_value + harmony_value)
+        for chroma_value, chroma_top_value, harmony_value in zip(chroma, chroma_top, harmony_total, strict=True)
     ]
     total = [
         float(structural_value + similarity_value + residual_value)
         for structural_value, similarity_value, residual_value in zip(
             structural_total,
-            effective_similarity,
+            active_similarity,
             residual,
             strict=True,
         )
     ]
     return {
         "structural_total_reward": structural_total,
-        "aria_harmony_dtw_effective": harmony_total,
-        "effective_similarity_reward": effective_similarity,
+        "aria_harmony_dtw_active": harmony_dtw_total,
+        "aria_harmony_dtw_effective": harmony_dtw_total,
+        "aria_harmony_aligned_active": harmony_aligned_total,
+        "active_similarity_reward": active_similarity,
+        "effective_similarity_reward": active_similarity,
         "total_reward": total,
     }
 

@@ -50,6 +50,14 @@ def mean_metric(rows: list[dict], key: str) -> float | None:
     return sum(values) / len(values)
 
 
+def mean_metric_first(rows: list[dict], *keys: str) -> float | None:
+    for key in keys:
+        value = mean_metric(rows, key)
+        if value is not None:
+            return value
+    return None
+
+
 def load_jsonl_rows(path: Path) -> list[dict]:
     rows = []
     with path.open("r", encoding="utf-8") as handle:
@@ -841,7 +849,11 @@ def score_rewards(
     out_path: Path,
     aria_reference: Path,
     aria_chroma_reward_weight: float,
+    aria_chroma_top_reward_weight: float,
     aria_harmony_reward_weight: float,
+    aria_harmony_aligned_root_reward_weight: float,
+    aria_harmony_aligned_bass_reward_weight: float,
+    aria_harmony_aligned_top_reward_weight: float,
     max_similarity_reward: float,
     similarity_chroma_bins: int,
     similarity_band_ratio: float,
@@ -857,6 +869,7 @@ def score_rewards(
     )
     from evaluation.similarity_rewards import (  # type: ignore
         SimilarityRewardWeights,
+        finalize_similarity_reward_fields,
         load_similarity_reference,
         score_similarity_reward,
     )
@@ -865,14 +878,18 @@ def score_rewards(
     config = GoldbergRewardConfig()
     similarity_weights = SimilarityRewardWeights(
         aria_chroma=aria_chroma_reward_weight,
+        aria_chroma_top=aria_chroma_top_reward_weight,
         aria_harmony=aria_harmony_reward_weight,
+        aria_harmony_aligned_root=aria_harmony_aligned_root_reward_weight,
+        aria_harmony_aligned_bass=aria_harmony_aligned_bass_reward_weight,
+        aria_harmony_aligned_top=aria_harmony_aligned_top_reward_weight,
     )
     aria_similarity_ref = None
     if similarity_weights.enabled:
         aria_similarity_ref = load_similarity_reference(
             aria_reference,
-            load_chroma=similarity_weights.aria_chroma != 0.0,
-            load_harmony=similarity_weights.aria_harmony != 0.0,
+            load_chroma=similarity_weights.needs_chroma,
+            load_harmony=similarity_weights.needs_harmony,
             bins=similarity_chroma_bins,
         )
     rows = []
@@ -904,22 +921,18 @@ def score_rewards(
                 timeout_s=similarity_timeout_s,
             )
             breakdown.update(similarity_payload)
-            raw_similarity_reward = float(similarity_payload.get("similarity_reward", 0.0))
-            clipped_similarity_reward = raw_similarity_reward
-            if max_similarity_reward > 0:
-                clipped_similarity_reward = max(
-                    -max_similarity_reward,
-                    min(max_similarity_reward, raw_similarity_reward),
+            breakdown.update(
+                finalize_similarity_reward_fields(
+                    similarity_payload=similarity_payload,
+                    structural_total_reward=structural_total_reward,
+                    completion_reward=breakdown.get("completion_reward", 0.0),
+                    bar_count_reward=breakdown.get("bar_count_reward", 0.0),
+                    max_similarity_reward=max_similarity_reward,
                 )
-            similarity_validity_gate = 1.0 if breakdown.get("parse_valid") else 0.0
-            effective_similarity_reward = clipped_similarity_reward * similarity_validity_gate
-            breakdown["raw_similarity_reward"] = raw_similarity_reward
-            breakdown["clipped_similarity_reward"] = clipped_similarity_reward
-            breakdown["similarity_validity_gate"] = similarity_validity_gate
-            breakdown["effective_similarity_reward"] = effective_similarity_reward
-            breakdown["total_reward"] = structural_total_reward + effective_similarity_reward
+            )
         else:
             breakdown["similarity_reward"] = 0.0
+            breakdown["active_similarity_reward"] = 0.0
             breakdown["effective_similarity_reward"] = 0.0
         prompt_header = _extract_header_context(prompt)
         duration_ratio_counts = meter_duration_ratio_counts_for_text(text)
@@ -983,9 +996,11 @@ def evaluate_checkpoint_samples(
             "mean_clamp2_variation_centroid_similarity": None,
             "mean_reward": None,
             "mean_structural_total_reward": None,
+            "mean_active_similarity_reward": None,
             "mean_effective_similarity_reward": None,
             "mean_aria_chroma_harmonic_hist": None,
-            "mean_aria_harmony_combined": None,
+            "mean_aria_chroma_top_hist": None,
+            "mean_aria_harmony_dtw_combined": None,
             "exact_pretrained_kl": None,
             "mean_exact_kl_to_pretrained": None,
             "prefix_shuffle_seed": args.prefix_shuffle_seed,
@@ -1042,7 +1057,11 @@ def evaluate_checkpoint_samples(
         out_path=rewards_jsonl,
         aria_reference=args.aria_reference,
         aria_chroma_reward_weight=args.aria_chroma_reward_weight,
+        aria_chroma_top_reward_weight=args.aria_chroma_top_reward_weight,
         aria_harmony_reward_weight=args.aria_harmony_reward_weight,
+        aria_harmony_aligned_root_reward_weight=args.aria_harmony_aligned_root_reward_weight,
+        aria_harmony_aligned_bass_reward_weight=args.aria_harmony_aligned_bass_reward_weight,
+        aria_harmony_aligned_top_reward_weight=args.aria_harmony_aligned_top_reward_weight,
         max_similarity_reward=args.max_similarity_reward,
         similarity_chroma_bins=args.similarity_chroma_bins,
         similarity_band_ratio=args.similarity_band_ratio,
@@ -1138,9 +1157,15 @@ def evaluate_checkpoint_samples(
         "mean_clamp2_variation_centroid_similarity": mean_metric(variation_scores["rows"], "cosine_similarity_to_reference") if variation_scores is not None else None,
         "mean_reward": mean_metric(reward_rows, "total_reward"),
         "mean_structural_total_reward": mean_metric(reward_rows, "structural_total_reward"),
+        "mean_active_similarity_reward": mean_metric(reward_rows, "active_similarity_reward"),
         "mean_effective_similarity_reward": mean_metric(reward_rows, "effective_similarity_reward"),
         "mean_aria_chroma_harmonic_hist": mean_metric(reward_rows, "aria_chroma_harmonic_hist"),
-        "mean_aria_harmony_combined": mean_metric(reward_rows, "aria_harmony_combined"),
+        "mean_aria_chroma_top_hist": mean_metric(reward_rows, "aria_chroma_top_hist"),
+        "mean_aria_harmony_dtw_combined": mean_metric_first(
+            reward_rows,
+            "aria_harmony_dtw_combined",
+            "aria_harmony_combined",
+        ),
         "exact_pretrained_kl": exact_pretrained_kl,
         "mean_exact_kl_to_pretrained": (
             None if exact_pretrained_kl is None else exact_pretrained_kl.get("mean_exact_kl_to_reference")
@@ -1178,12 +1203,16 @@ def print_summary_row(row: dict) -> None:
         parts.append(f"mean_reward={row['mean_reward']:.6f}")
     if row["mean_structural_total_reward"] is not None:
         parts.append(f"mean_structural={row['mean_structural_total_reward']:.6f}")
-    if row["mean_effective_similarity_reward"] is not None:
-        parts.append(f"mean_similarity={row['mean_effective_similarity_reward']:.6f}")
-    if row["mean_aria_harmony_combined"] is not None:
-        parts.append(f"aria_harmony={row['mean_aria_harmony_combined']:.6f}")
+    active_similarity = row.get("mean_active_similarity_reward", row.get("mean_effective_similarity_reward"))
+    if active_similarity is not None:
+        parts.append(f"mean_similarity={active_similarity:.6f}")
+    harmony_dtw = row.get("mean_aria_harmony_dtw_combined", row.get("mean_aria_harmony_combined"))
+    if harmony_dtw is not None:
+        parts.append(f"aria_harmony_dtw={harmony_dtw:.6f}")
     if row["mean_aria_chroma_harmonic_hist"] is not None:
         parts.append(f"aria_chroma={row['mean_aria_chroma_harmonic_hist']:.6f}")
+    if row.get("mean_aria_chroma_top_hist") is not None:
+        parts.append(f"aria_chroma_top={row['mean_aria_chroma_top_hist']:.6f}")
     meter_duration_ratio_monitor = row.get("meter_duration_ratio_monitor")
     if meter_duration_ratio_monitor is not None:
         ratio_overall = meter_duration_ratio_monitor["overall"]
@@ -1225,8 +1254,17 @@ def main() -> None:
     parser.add_argument("--prefix-manifest", type=Path, default=None)
     parser.add_argument("--aria-reference", type=Path, default=Path("/home/jl_fs/music-generation/infinite-goldberg-variations/data/processed/notagen/aria_prefix_G_streamed.abc"))
     parser.add_argument("--aria-chroma-reward-weight", type=float, default=0.0)
+    parser.add_argument(
+        "--aria-chroma-top-reward-weight",
+        type=float,
+        default=None,
+        help="Separate top-voice chroma histogram reward weight. Defaults to --aria-chroma-reward-weight.",
+    )
     parser.add_argument("--aria-harmony-reward-weight", type=float, default=0.0)
-    parser.add_argument("--max-similarity-reward", type=float, default=2.0)
+    parser.add_argument("--aria-harmony-aligned-root-reward-weight", type=float, default=None)
+    parser.add_argument("--aria-harmony-aligned-bass-reward-weight", type=float, default=None)
+    parser.add_argument("--aria-harmony-aligned-top-reward-weight", type=float, default=None)
+    parser.add_argument("--max-similarity-reward", type=float, default=3.5)
     parser.add_argument("--similarity-chroma-bins", type=int, default=128)
     parser.add_argument("--similarity-band-ratio", type=float, default=0.25)
     parser.add_argument("--similarity-timeout-s", type=float, default=20.0)
@@ -1329,6 +1367,15 @@ def main() -> None:
         help="Reference NotaGen ABC whose body/stream-line count is used for the bar-count reward.",
     )
     args = parser.parse_args()
+    if args.aria_chroma_top_reward_weight is None:
+        args.aria_chroma_top_reward_weight = args.aria_chroma_reward_weight
+    default_aligned_harmony_weight = 0.25 if args.aria_harmony_reward_weight != 0.0 else 0.0
+    if args.aria_harmony_aligned_root_reward_weight is None:
+        args.aria_harmony_aligned_root_reward_weight = default_aligned_harmony_weight
+    if args.aria_harmony_aligned_bass_reward_weight is None:
+        args.aria_harmony_aligned_bass_reward_weight = default_aligned_harmony_weight
+    if args.aria_harmony_aligned_top_reward_weight is None:
+        args.aria_harmony_aligned_top_reward_weight = 0.0
     exact_kl_reference_checkpoint = args.exact_kl_reference_checkpoint or args.pretrained
     max_generated_patches = args.max_generated_patches
     if max_generated_patches is None:
@@ -1355,7 +1402,14 @@ def main() -> None:
             flush=True,
         )
 
-    similarity_rewards_enabled = args.aria_chroma_reward_weight != 0.0 or args.aria_harmony_reward_weight != 0.0
+    similarity_rewards_enabled = (
+        args.aria_chroma_reward_weight != 0.0
+        or args.aria_chroma_top_reward_weight != 0.0
+        or args.aria_harmony_reward_weight != 0.0
+        or args.aria_harmony_aligned_root_reward_weight != 0.0
+        or args.aria_harmony_aligned_bass_reward_weight != 0.0
+        or args.aria_harmony_aligned_top_reward_weight != 0.0
+    )
     required_paths = [args.notagen_dir, args.project_dir, args.pretrained, args.train_jsonl, args.eval_jsonl, args.reward_target_json]
     required_paths.append(args.reward_target_structure_abc)
     if not args.skip_clamp2 or similarity_rewards_enabled:
@@ -1500,9 +1554,11 @@ def main() -> None:
                 "mean_clamp2_variation_centroid_similarity": None,
                 "mean_reward": None,
                 "mean_structural_total_reward": None,
+                "mean_active_similarity_reward": None,
                 "mean_effective_similarity_reward": None,
                 "mean_aria_chroma_harmonic_hist": None,
-                "mean_aria_harmony_combined": None,
+                "mean_aria_chroma_top_hist": None,
+                "mean_aria_harmony_dtw_combined": None,
                 "exact_pretrained_kl": None,
                 "mean_exact_kl_to_pretrained": None,
                 "prefix_shuffle_seed": args.prefix_shuffle_seed,

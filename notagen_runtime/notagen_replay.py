@@ -34,14 +34,31 @@ def normalize_patch_for_context(patch: list[int], eos_token_id: int, special_tok
 
 
 def normalize_and_pad_patch_for_context(patch: list[int], eos_token_id: int, special_token_id: int) -> list[int]:
-    return _pad_generated_patch(
-        normalize_patch_for_context(
-            patch,
-            eos_token_id=eos_token_id,
-            special_token_id=special_token_id,
-        ),
-        special_token_id,
+    return normalize_patch_for_replay_context(
+        patch,
+        eos_token_id=eos_token_id,
+        special_token_id=special_token_id,
     )
+
+
+def normalize_patch_for_replay_context(
+    patch: list[int],
+    eos_token_id: int,
+    special_token_id: int,
+    current_context_len: int | None = None,
+) -> list[int]:
+    normalized = normalize_patch_for_context(
+        patch,
+        eos_token_id=eos_token_id,
+        special_token_id=special_token_id,
+    )
+    if len(normalized) > PATCH_SIZE:
+        raise RuntimeError(f"generated patch is longer than {PATCH_SIZE}: {len(normalized)}")
+    if current_context_len is None:
+        return _pad_generated_patch(normalized, special_token_id)
+
+    missing = (PATCH_SIZE - ((current_context_len + len(normalized)) % PATCH_SIZE)) % PATCH_SIZE
+    return normalized + [special_token_id] * missing
 
 
 def _encoded_last_patch(
@@ -115,10 +132,11 @@ def patch_logprobs(
             tokens = torch.cat((tokens, torch.tensor([tok], device=device, dtype=torch.long)), dim=0)
 
         current_ids.extend(
-            normalize_patch_for_context(
+            normalize_patch_for_replay_context(
                 patch,
                 eos_token_id=model.eos_token_id,
                 special_token_id=model.special_token_id,
+                current_context_len=len(current_ids),
             )
         )
 
@@ -161,10 +179,11 @@ def patch_token_log_dists(
             tokens = torch.cat((tokens, torch.tensor([tok], device=device, dtype=torch.long)), dim=0)
 
         current_ids.extend(
-            normalize_patch_for_context(
+            normalize_patch_for_replay_context(
                 patch,
                 eos_token_id=model.eos_token_id,
                 special_token_id=model.special_token_id,
+                current_context_len=len(current_ids),
             )
         )
 
@@ -559,10 +578,11 @@ def batched_trajectory_logprobs(
             if logprob_list:
                 prefix_logprobs[sample_idx].append(torch.stack(logprob_list))
             current_ids.extend(
-                normalize_patch_for_context(
+                normalize_patch_for_replay_context(
                     patch,
                     eos_token_id=model.eos_token_id,
                     special_token_id=model.special_token_id,
+                    current_context_len=len(current_ids),
                 )
             )
             start_idx += 1
@@ -628,10 +648,11 @@ def batched_trajectory_token_log_dists(
                 prefix_log_dists[sample_idx].append(torch.stack(log_dist_list))
                 prefix_token_counts[sample_idx].append(len(log_dist_list))
             current_ids.extend(
-                normalize_patch_for_context(
+                normalize_patch_for_replay_context(
                     patch,
                     eos_token_id=model.eos_token_id,
                     special_token_id=model.special_token_id,
+                    current_context_len=len(current_ids),
                 )
             )
             start_idx += 1
@@ -743,10 +764,11 @@ def trajectory_logprob_chunks(
         if logprob_list:
             yield torch.stack(logprob_list)
         current_ids.extend(
-            normalize_patch_for_context(
+            normalize_patch_for_replay_context(
                 patch,
                 eos_token_id=model.eos_token_id,
                 special_token_id=model.special_token_id,
+                current_context_len=len(current_ids),
             )
         )
         start_idx += 1
