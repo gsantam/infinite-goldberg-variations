@@ -28,6 +28,7 @@ try:
         build_prompt_batch_for_step,
         build_prompt_batch_for_slots,
         batched_trajectory_patch_logprobs_values,
+        batched_trajectory_patch_hidden_states,
         batched_trajectory_token_log_dists,
         batched_trajectory_patch_values,
         batch_trajectory_returns_advantages,
@@ -56,6 +57,7 @@ try:
         trajectory_patch_hidden_states,
         trajectory_patch_logprobs_values,
         trajectory_patch_values,
+        train_value_head_on_detached_returns,
         value_mse_loss,
         value_prediction_metrics,
     )
@@ -67,7 +69,13 @@ try:
         per_patch_diagnostic_records,
     )
     from scripts.summarize_ppo_advantages import summarize_steps
-    from scripts.custom_grpo_notagen import PATCH_SIZE, GoldbergRewardConfig, SimilarityRewardWeights, _rollout_seed
+    from scripts.custom_grpo_notagen import (
+        PATCH_SIZE,
+        GoldbergRewardConfig,
+        SimilarityRewardWeights,
+        _rollout_seed,
+        build_rollout_prefix,
+    )
     from evaluation.rewards import StructuralTarget
     from utils import NotaGenLMHeadModel, Patchilizer
 except ModuleNotFoundError as exc:
@@ -723,6 +731,62 @@ class NotaGenPPOTests(unittest.TestCase):
         self.assertEqual(parallel.trajectory_logs, serial.trajectory_logs)
         self.assertEqual(parallel.reward_traces, serial.reward_traces)
 
+    def test_single_pass_reward_scores_rollout_prefix_not_raw_prompt(self):
+        prompt = "X:1\nT:Prefix scoring test\nM:3/4\nL:1/8\nK:C\nV:1\n%%score 1\n"
+        completion = "[r:0/0][V:1]C2 D2 E2|\n"
+        generated_patches = _generated_patches_from_text(completion)
+        target = StructuralTarget(expected_bars=1, expected_structure_bars=1)
+        prompt_target = PromptStructuralTarget(
+            target=target,
+            structure_path="<test>",
+            source_key="prefix_scoring_test",
+        )
+        payload = PPORolloutPayload(
+            trajectory_index=0,
+            rollout_seed=7,
+            full_text=build_rollout_prefix(prompt, 1) + completion,
+            generated_patches=generated_patches,
+            meta={"stop_reason": "target_stream_lines"},
+        )
+        seen: dict[str, str] = {}
+
+        def fake_prefix_rewards(**kwargs):
+            seen["prompt_text"] = kwargs["prompt_text"]
+            return PatchRewardTrace(
+                rewards=[1.0],
+                prefix_totals=[1.0],
+                final_score=RewardScore(total=1.0, breakdown={"total_reward": 1.0}),
+                component_rewards={"fake_reward": [1.0]},
+                component_prefix_totals={"fake_reward": [1.0]},
+            )
+
+        with patch("scripts.custom_ppo_notagen.patch_rewards_from_prefix_deltas", side_effect=fake_prefix_rewards):
+            score_ppo_rollout_payloads(
+                prompt=prompt,
+                prompt_idx=0,
+                prompt_name="prefix_scoring_test",
+                prompt_target=prompt_target,
+                target=target,
+                target_stream_lines=1,
+                rollout_payloads=[payload],
+                reward_config=GoldbergRewardConfig(parse_validation_mode="abc-tokenize"),
+                similarity_weights=SimilarityRewardWeights(),
+                aria_similarity_ref=None,
+                args=SimpleNamespace(
+                    similarity_chroma_bins=8,
+                    similarity_band_ratio=0.25,
+                    similarity_timeout_s=5.0,
+                    max_similarity_reward=2.0,
+                    reward_workers=0,
+                    patch_reward_attribution="single_pass",
+                ),
+                step_idx=0,
+                candidate_name_prefix="prefix_scoring",
+            )
+
+        self.assertEqual(seen["prompt_text"], build_rollout_prefix(prompt, 1))
+        self.assertNotEqual(seen["prompt_text"], prompt)
+
     def test_zero_policy_records_failed_batched_rollout_without_retrying(self):
         prompt = "X:1\nT:Zero failed rollout test\nM:3/4\nL:1/8\nK:C\n"
 
@@ -1289,6 +1353,96 @@ class NotaGenPPOTests(unittest.TestCase):
 
         self.assertEqual(hidden_states.shape, (3, 32))
         self.assertTrue(torch.allclose(value_head(hidden_states), values))
+
+    def test_batched_hidden_state_replay_matches_serial_for_multiple_trajectories(self):
+        torch.manual_seed(0)
+        model = _tiny_notagen()
+        model.eval()
+        prompt_ids = [3 + (i % 80) for i in range(PATCH_SIZE * 3 + 5)]
+        first_patch_len = PATCH_SIZE - 5
+        generated_batch = [
+            [
+                [11 + (i % 50) for i in range(first_patch_len)],
+                [23 + (i % 50) for i in range(PATCH_SIZE)],
+                [31 + (i % 40) for i in range(PATCH_SIZE)],
+            ],
+            [
+                [17 + (i % 45) for i in range(first_patch_len)],
+                [29 + (i % 35) for i in range(PATCH_SIZE)],
+            ],
+            [],
+        ]
+
+        serial = [
+            trajectory_patch_hidden_states(
+                model,
+                prompt_ids,
+                generated_patches,
+                precision="fp32",
+                replay_context_patches=4,
+                target_chunk_patches=1,
+                detach_policy=True,
+            )
+            for generated_patches in generated_batch
+        ]
+        batched = batched_trajectory_patch_hidden_states(
+            model,
+            prompt_ids,
+            generated_batch,
+            precision="fp32",
+            replay_context_patches=4,
+            target_chunk_patches=1,
+            detach_policy=True,
+        )
+
+        self.assertEqual(len(batched), len(serial))
+        for serial_hidden, batched_hidden in zip(serial, batched, strict=True):
+            self.assertEqual(batched_hidden.shape, serial_hidden.shape)
+            self.assertFalse(batched_hidden.requires_grad)
+            self.assertTrue(torch.allclose(batched_hidden, serial_hidden, atol=1e-6))
+
+    def test_value_head_training_on_detached_returns_reduces_error(self):
+        torch.manual_seed(0)
+        value_head = PatchValueHead(32, value_hidden_size=0)
+        optimizer = torch.optim.AdamW(value_head.parameters(), lr=5e-2)
+        hidden_state_tensors = [
+            torch.randn(6, 32),
+            torch.randn(4, 32),
+        ]
+        for hidden_states in hidden_state_tensors:
+            hidden_states.requires_grad_(False)
+        return_tensors = [
+            torch.zeros(6),
+            torch.zeros(4),
+        ]
+        args = SimpleNamespace(
+            normalize_value_loss=False,
+            value_loss_eps=1e-6,
+            value_loss_scale_min=1e-6,
+            max_grad_norm=10.0,
+        )
+        targets = torch.cat(return_tensors)
+        with torch.no_grad():
+            before_values = value_head(torch.cat(hidden_state_tensors))
+            before_loss = torch.mean((before_values - targets) ** 2).item()
+
+        log = train_value_head_on_detached_returns(
+            value_head=value_head,
+            value_optimizer=optimizer,
+            hidden_state_tensors=hidden_state_tensors,
+            return_tensors=return_tensors,
+            epochs=20,
+            args=args,
+        )
+
+        with torch.no_grad():
+            after_values = value_head(torch.cat(hidden_state_tensors))
+            after_loss = torch.mean((after_values - targets) ** 2).item()
+        self.assertEqual(log["epochs"], 20)
+        self.assertTrue(log["hidden_states_detached"])
+        self.assertEqual(log["hidden_state_source"], "current_policy_after_ppo_update")
+        self.assertEqual(log["patch_count"], 10)
+        self.assertLess(after_loss, before_loss)
 
     def test_patch_replay_handles_unaligned_prompt_prefix(self):
         torch.manual_seed(0)

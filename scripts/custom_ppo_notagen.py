@@ -273,6 +273,21 @@ def save_value_head_checkpoint(value_head: PatchValueHead, path: str | Path) -> 
     )
 
 
+def save_step_value_head_checkpoint(value_head: PatchValueHead, checkpoint_dir: str | Path, step_idx: int) -> dict:
+    checkpoint_root = Path(checkpoint_dir)
+    step_dir = checkpoint_root / f"step_{step_idx:06d}"
+    step_dir.mkdir(parents=True, exist_ok=True)
+    checkpoint_path = step_dir / "value_head.pt"
+    start = time.perf_counter()
+    save_value_head_checkpoint(value_head, checkpoint_path)
+    return {
+        "step": int(step_idx),
+        "path": str(checkpoint_path),
+        "checkpoint_type": "value_head",
+        "elapsed_s": time.perf_counter() - start,
+    }
+
+
 def save_full_policy_checkpoint(model: NotaGenLMHeadModel, checkpoint_dir: str | Path, step_idx: int) -> dict:
     checkpoint_root = Path(checkpoint_dir)
     step_dir = checkpoint_root / f"step_{step_idx:06d}"
@@ -351,6 +366,10 @@ def load_value_head_checkpoint(value_head: PatchValueHead, path: str | Path, dev
         raise RuntimeError(f"unsupported value head checkpoint payload type: {type(payload)!r}")
     value_head.load_state_dict(state_dict)
     return {"path": str(path), "config": config}
+
+
+def resume_value_head_checkpoint_path(resume_checkpoint_dir: str | Path) -> Path:
+    return Path(resume_checkpoint_dir) / "value_head.pt"
 
 
 def build_value_head(policy_shape: ModelShape, args, device: torch.device) -> tuple[PatchValueHead, dict | None]:
@@ -1103,6 +1122,37 @@ def batched_tail_patch_value_chunk(
     }
 
 
+def batched_tail_patch_hidden_state_chunk(
+    model: NotaGenLMHeadModel,
+    current_ids_batch: list[list[int]],
+    remaining_patches_batch: list[list[list[int]]],
+    chunk_start: int,
+    target_chunk_patches: int,
+    precision: str,
+    replay_context_patches: int | None = None,
+    replay_batch_size: int = 0,
+    detach_policy: bool = True,
+) -> dict[int, torch.Tensor]:
+    payload = batched_tail_encoded_targets(
+        model=model,
+        current_ids_batch=current_ids_batch,
+        remaining_patches_batch=remaining_patches_batch,
+        chunk_start=chunk_start,
+        target_chunk_patches=target_chunk_patches,
+        precision=precision,
+        replay_context_patches=replay_context_patches,
+        replay_batch_size=replay_batch_size,
+        detach_policy=detach_policy,
+        error_context="batched PPO hidden-state replay",
+    )
+    if not payload:
+        return {}
+    return {
+        sample_idx: encoded.detach() if detach_policy else encoded
+        for sample_idx, (encoded, _targets) in payload.items()
+    }
+
+
 def tail_patch_value_chunk(
     model: NotaGenLMHeadModel,
     value_head: PatchValueHead,
@@ -1564,6 +1614,78 @@ def batched_trajectory_patch_values(
     return result
 
 
+def batched_trajectory_patch_hidden_states(
+    model: NotaGenLMHeadModel,
+    flat_prompt_ids: list[int],
+    generated_patches_batch: list[list[list[int]]],
+    precision: str,
+    replay_context_patches: int | None = None,
+    target_chunk_patches: int = 0,
+    replay_batch_size: int = 0,
+    detach_policy: bool = True,
+) -> list[torch.Tensor]:
+    device = next(model.parameters()).device
+    current_ids_batch = [list(flat_prompt_ids) for _idx in generated_patches_batch]
+    remaining_batch: list[list[list[int]]] = []
+    outputs: list[list[torch.Tensor]] = [[] for _idx in generated_patches_batch]
+
+    for sample_idx, generated_patches in enumerate(generated_patches_batch):
+        current_ids = current_ids_batch[sample_idx]
+        start_idx = 0
+        while start_idx < len(generated_patches) and len(current_ids) % PATCH_SIZE != 0:
+            patch = generated_patches[start_idx]
+            outputs[sample_idx].append(
+                hidden_state_from_last_patch(
+                    model,
+                    current_ids,
+                    precision,
+                    replay_context_patches=replay_context_patches,
+                    detach_policy=detach_policy,
+                ).reshape(1, -1)
+            )
+            current_ids.extend(
+                normalize_patch_for_replay_context(
+                    patch,
+                    eos_token_id=model.eos_token_id,
+                    special_token_id=model.special_token_id,
+                    current_context_len=len(current_ids),
+                )
+            )
+            start_idx += 1
+        current_ids_batch[sample_idx] = current_ids
+        remaining_batch.append(generated_patches[start_idx:])
+
+    max_remaining = max((len(remaining) for remaining in remaining_batch), default=0)
+    chunk_size = max_remaining if target_chunk_patches <= 0 else target_chunk_patches
+    if chunk_size > 0:
+        for chunk_start in range(0, max_remaining, chunk_size):
+            chunk_payload = batched_tail_patch_hidden_state_chunk(
+                model,
+                current_ids_batch,
+                remaining_batch,
+                chunk_start,
+                target_chunk_patches,
+                precision,
+                replay_context_patches=replay_context_patches,
+                replay_batch_size=replay_batch_size,
+                detach_policy=detach_policy,
+            )
+            for sample_idx, hidden_states in chunk_payload.items():
+                if hidden_states.numel() > 0:
+                    outputs[sample_idx].append(hidden_states)
+
+    hidden_size = getattr(model.patch_level_decoder.base.config, "n_embd", None)
+    if hidden_size is None:
+        hidden_size = getattr(model.patch_level_decoder.base.config, "hidden_size")
+    result: list[torch.Tensor] = []
+    for chunks in outputs:
+        if chunks:
+            result.append(torch.cat(chunks, dim=0))
+        else:
+            result.append(torch.empty((0, int(hidden_size)), device=device))
+    return result
+
+
 def flat_prompt_ids_for_payload(payload: PPORolloutPayload, patchilizer: Patchilizer) -> list[int]:
     if not payload.prompt or payload.target_stream_lines <= 0:
         raise RuntimeError(
@@ -1675,6 +1797,37 @@ def batched_trajectory_patch_values_by_prompt(
             outputs[output_idx] = values
     if any(item is None for item in outputs):
         raise RuntimeError("grouped PPO value replay did not produce an output for every trajectory")
+    return [item for item in outputs if item is not None]
+
+
+def batched_trajectory_patch_hidden_states_by_prompt(
+    model: NotaGenLMHeadModel,
+    rollout_payloads: list[PPORolloutPayload],
+    precision: str,
+    replay_context_patches: int | None = None,
+    target_chunk_patches: int = 0,
+    replay_batch_size: int = 0,
+    detach_policy: bool = True,
+) -> list[torch.Tensor]:
+    patchilizer = Patchilizer(stream=PATCH_STREAM)
+    outputs: list[torch.Tensor | None] = [None] * len(rollout_payloads)
+    for indices in _rollout_prompt_groups(rollout_payloads).values():
+        group_payloads = [rollout_payloads[idx] for idx in indices]
+        flat_prompt_ids = flat_prompt_ids_for_payload(group_payloads[0], patchilizer)
+        group_outputs = batched_trajectory_patch_hidden_states(
+            model,
+            flat_prompt_ids,
+            [payload.generated_patches for payload in group_payloads],
+            precision,
+            replay_context_patches=replay_context_patches,
+            target_chunk_patches=target_chunk_patches,
+            replay_batch_size=replay_batch_size,
+            detach_policy=detach_policy,
+        )
+        for output_idx, hidden_states in zip(indices, group_outputs, strict=True):
+            outputs[output_idx] = hidden_states
+    if any(item is None for item in outputs):
+        raise RuntimeError("grouped PPO hidden-state replay did not produce an output for every trajectory")
     return [item for item in outputs if item is not None]
 
 
@@ -3563,12 +3716,14 @@ def run_ppo_replay_epoch_microbatched(
         microbatch_count += 1
 
     if not args.no_step:
+        grad_clip_params = [param for param in policy_model.parameters() if param.requires_grad]
+        if (
+            int(getattr(args, "value_post_update_epochs", 0) or 0) <= 0
+            and float(getattr(args, "value_loss_coef", 0.0) or 0.0) != 0.0
+        ):
+            grad_clip_params.extend(param for param in value_head.parameters() if param.requires_grad)
         grad_norm_tensor = torch.nn.utils.clip_grad_norm_(
-            [
-                param
-                for param in list(policy_model.parameters()) + list(value_head.parameters())
-                if param.requires_grad
-            ],
+            grad_clip_params,
             args.max_grad_norm,
         )
         optimizer.step()
@@ -4229,6 +4384,7 @@ def _score_ppo_rollout_payload(
         }
         return reward_trace, trajectory_log
 
+    scoring_prompt = build_rollout_prefix(prompt, target_stream_lines)
     if scoring_options.reward_mode != "goldberg":
         reward_trace = patch_rewards_simple_test(
             generated_patches=payload.generated_patches,
@@ -4237,7 +4393,7 @@ def _score_ppo_rollout_payload(
         patch_reward_mode = f"simple_{scoring_options.reward_mode}_{scoring_options.patch_reward_attribution}"
     elif scoring_options.patch_reward_attribution == "single_pass":
         reward_trace = patch_rewards_from_prefix_deltas(
-            prompt_text=prompt,
+            prompt_text=scoring_prompt,
             generated_patches=payload.generated_patches,
             target=target,
             reward_config=reward_config,
@@ -4252,7 +4408,7 @@ def _score_ppo_rollout_payload(
         patch_reward_mode = "single_pass_events_plus_terminal_residual"
     elif scoring_options.patch_reward_attribution == "terminal":
         reward_trace = patch_rewards_terminal(
-            prompt_text=prompt,
+            prompt_text=scoring_prompt,
             generated_patches=payload.generated_patches,
             target=target,
             reward_config=reward_config,
@@ -4460,6 +4616,121 @@ def fixed_eval_output_path(args) -> Path:
     return Path(args.output_json).with_name("fixed_eval.jsonl")
 
 
+def monitor_output_path(args) -> Path | None:
+    raw_path = getattr(args, "monitor_output_jsonl", None)
+    if not raw_path:
+        return None
+    return Path(raw_path)
+
+
+def compact_monitor_event(record: dict) -> dict:
+    scalar_keys = (
+        "event",
+        "label",
+        "ok",
+        "step",
+        "epoch",
+        "fixed_eval_event_index",
+        "prompt_index",
+        "prompt_name",
+        "prompt_batch_size",
+        "prompt_batch_multiple_prompts",
+        "target_stream_lines",
+        "trajectories_per_step",
+        "ppo_update_trajectories",
+        "zero_contribution_trajectories",
+        "failed_rollout_count",
+        "rollout_batch_size",
+        "rollout_failure_policy",
+        "trajectory_count",
+        "loss",
+        "policy_loss",
+        "value_loss",
+        "raw_value_loss",
+        "entropy_loss",
+        "reference_kl_loss",
+        "approx_kl",
+        "old_policy_exact_kl",
+        "reference_exact_kl",
+        "reference_kl_coef",
+        "clip_fraction",
+        "post_step_approx_kl",
+        "post_step_old_policy_exact_kl",
+        "post_step_reference_exact_kl",
+        "post_step_clip_fraction",
+        "post_step_log_ratio_mean",
+        "post_step_log_ratio_max_abs",
+        "post_step_patch_log_ratio_mean",
+        "post_step_patch_log_ratio_max_abs",
+        "grad_norm",
+        "reward",
+        "reward_mean",
+        "reward_std",
+        "reward_min",
+        "reward_max",
+        "reward_sum",
+        "patch_reward_mean",
+        "patch_reward_std",
+        "return_mean",
+        "return_std",
+        "value_target_mean",
+        "value_target_std",
+        "advantages_mean",
+        "advantages_std",
+        "gae_lambda",
+        "patch_reward_attribution",
+        "ppo_epochs",
+        "ppo_replay_microbatch_size",
+        "continuous_critic_mode",
+        "value_head_in_policy_optimizer",
+        "scored_patches",
+        "scored_tokens",
+        "generated_tokens_per_patch_mean",
+        "generated_tokens_per_patch_min",
+        "generated_tokens_per_patch_max",
+        "fixed_eval_seed_offset",
+        "fixed_eval_seed_step",
+        "fixed_eval_reference_kl_check",
+    )
+    nested_keys = (
+        "timings",
+        "rollout_sampling",
+        "rollout_length",
+        "advantage_summary",
+        "logprob_advantage_diagnostics",
+        "post_epoch_logprob_advantage_diagnostics",
+        "patch_reward_group_sums",
+        "all_patch_reward_group_sums",
+        "patch_reward_component_sums",
+        "all_patch_reward_component_sums",
+        "initial_value_return_metrics",
+        "post_warmup_value_return_metrics",
+        "post_warmup_value_target_metrics",
+        "pre_post_update_value_return_metrics",
+        "post_update_value_return_metrics",
+        "post_update_value_target_metrics",
+        "final_value_return_metrics",
+        "final_value_target_metrics",
+        "value_post_update",
+        "fixed_eval_exact_kl",
+        "checkpoint",
+    )
+    compact = {key: record[key] for key in scalar_keys if key in record}
+    for key in nested_keys:
+        if key in record:
+            compact[key] = record[key]
+    return compact
+
+
+def write_monitor_event(args, record: dict) -> None:
+    output_path = monitor_output_path(args)
+    if output_path is None:
+        return
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(compact_monitor_event(record)) + "\n")
+
+
 def compact_eval_trajectory_log(trajectory_log: dict, *, include_trajectories: bool) -> dict:
     record = {
         "trajectory_index": trajectory_log["trajectory_index"],
@@ -4656,6 +4927,7 @@ def run_fixed_eval_batch(
         output_path.parent.mkdir(parents=True, exist_ok=True)
         with output_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(summary) + "\n")
+        write_monitor_event(args, summary)
         print(json.dumps(summary), flush=True)
         return summary
     rollout_s = time.perf_counter() - rollout_start
@@ -4752,6 +5024,7 @@ def run_fixed_eval_batch(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(record) + "\n")
+    write_monitor_event(args, summary)
     print(json.dumps(summary), flush=True)
     return summary
 
@@ -4846,6 +5119,105 @@ def train_value_head_on_returns(
     }
 
 
+def train_value_head_on_detached_returns(
+    *,
+    value_head: PatchValueHead,
+    value_optimizer: torch.optim.Optimizer,
+    hidden_state_tensors: list[torch.Tensor],
+    return_tensors: list[torch.Tensor],
+    epochs: int,
+    args,
+) -> dict:
+    if epochs <= 0:
+        return {"epochs": 0, "epoch_logs": []}
+    if len(hidden_state_tensors) != len(return_tensors):
+        raise RuntimeError(
+            "value post-update tensor count mismatch: "
+            f"hidden_states={len(hidden_state_tensors)} returns={len(return_tensors)}"
+        )
+    for item_idx, (hidden_states, returns) in enumerate(zip(hidden_state_tensors, return_tensors, strict=True)):
+        if hidden_states.ndim != 2:
+            raise RuntimeError(
+                "value post-update hidden-state tensor must be rank 2: "
+                f"item={item_idx} shape={tuple(hidden_states.shape)}"
+            )
+        if hidden_states.shape[0] != returns.numel():
+            raise RuntimeError(
+                "value post-update hidden-state/return shape mismatch: "
+                f"item={item_idx} hidden_states={tuple(hidden_states.shape)} returns={tuple(returns.shape)}"
+            )
+    if not hidden_state_tensors:
+        raise RuntimeError("value post-update training needs at least one trajectory")
+
+    hidden_states = torch.cat([item.detach() for item in hidden_state_tensors], dim=0)
+    targets = torch.cat([item.detach().float() for item in return_tensors])
+    if hidden_states.shape[0] <= 0:
+        raise RuntimeError("value post-update training needs at least one patch")
+    if hidden_states.shape[1] != value_head.hidden_size:
+        raise RuntimeError(
+            "value post-update hidden size mismatch: "
+            f"hidden_states={hidden_states.shape[1]} value_head={value_head.hidden_size}"
+        )
+    if any(item.requires_grad for item in hidden_state_tensors) or hidden_states.requires_grad:
+        raise RuntimeError("value post-update hidden states must be detached before critic training")
+
+    logs: list[dict] = []
+    start = time.perf_counter()
+    value_head.train()
+    with torch.no_grad():
+        initial_values = value_head(hidden_states).detach().float()
+    initial_metrics = value_prediction_metrics(initial_values, targets)
+
+    for epoch_idx in range(1, int(epochs) + 1):
+        epoch_start = time.perf_counter()
+        value_optimizer.zero_grad(set_to_none=True)
+        values = value_head(hidden_states)
+        before_metrics = value_prediction_metrics(values.detach().float(), targets)
+        loss, raw_loss, scale = value_mse_loss(
+            values,
+            targets,
+            normalize_value_loss=args.normalize_value_loss,
+            eps=args.value_loss_eps,
+            scale_min=args.value_loss_scale_min,
+        )
+        loss.backward()
+        grad_norm = torch.nn.utils.clip_grad_norm_(
+            [param for param in value_head.parameters() if param.requires_grad],
+            args.max_grad_norm,
+        )
+        value_optimizer.step()
+        with torch.no_grad():
+            after_values = value_head(hidden_states).detach().float()
+        logs.append(
+            {
+                "epoch": epoch_idx,
+                "loss": float(loss.detach().cpu()),
+                "raw_value_loss": float(raw_loss.detach().cpu()),
+                "value_loss_scale": float(scale.detach().cpu()),
+                "value_mean": float(values.detach().mean().cpu()),
+                "value_std": float(values.detach().std(unbiased=False).cpu()),
+                "grad_norm": float(grad_norm.detach().cpu() if torch.is_tensor(grad_norm) else grad_norm),
+                "before_metrics": before_metrics,
+                "after_metrics": value_prediction_metrics(after_values, targets),
+                "duration_s": time.perf_counter() - epoch_start,
+            }
+        )
+
+    with torch.no_grad():
+        final_values = value_head(hidden_states).detach().float()
+    return {
+        "epochs": int(epochs),
+        "duration_s": time.perf_counter() - start,
+        "target_kind": "discounted_returns",
+        "hidden_state_source": "current_policy_after_ppo_update",
+        "hidden_states_detached": True,
+        "patch_count": int(targets.numel()),
+        "initial_metrics": initial_metrics,
+        "final_metrics": value_prediction_metrics(final_values, targets),
+        "epoch_logs": logs,
+    }
+
+
 def run_ppo_smoke(
     policy_model: NotaGenLMHeadModel,
     policy_shape: ModelShape,
@@ -4865,12 +5237,14 @@ def run_ppo_smoke(
         reference_policy_model is not None
         and (args.reference_kl_coef != 0.0 or args.reference_kl_check)
     )
-    optimizer = torch.optim.AdamW(
-        [
-            {"params": [param for param in policy_model.parameters() if param.requires_grad], "lr": args.learning_rate},
-            {"params": value_head.parameters(), "lr": args.value_learning_rate},
-        ]
-    )
+    continuous_critic_mode = int(getattr(args, "value_post_update_epochs", 0) or 0) > 0
+    value_head_in_policy_optimizer = (not continuous_critic_mode) and float(args.value_loss_coef) != 0.0
+    policy_optimizer_param_groups = [
+        {"params": [param for param in policy_model.parameters() if param.requires_grad], "lr": args.learning_rate},
+    ]
+    if value_head_in_policy_optimizer:
+        policy_optimizer_param_groups.append({"params": value_head.parameters(), "lr": args.value_learning_rate})
+    optimizer = torch.optim.AdamW(policy_optimizer_param_groups)
     value_optimizer = torch.optim.AdamW(value_head.parameters(), lr=args.value_learning_rate)
     policy_model.eval()
     if behavior_policy_model is not None:
@@ -4951,6 +5325,12 @@ def run_ppo_smoke(
         raise ValueError("--reference-kl-coef requires a loaded reference policy model")
     if args.value_warmup_epochs < 0:
         raise ValueError(f"value_warmup_epochs must be non-negative, got {args.value_warmup_epochs}")
+    if args.value_post_update_epochs < 0:
+        raise ValueError(f"value_post_update_epochs must be non-negative, got {args.value_post_update_epochs}")
+    if args.value_post_update_epochs > 0 and args.value_learning_rate <= 0:
+        raise ValueError("--value-post-update-epochs requires positive --value-learning-rate")
+    if args.value_post_update_epochs > 0 and args.value_loss_coef != 0:
+        raise ValueError("--value-post-update-epochs requires --value-loss-coef 0 so the critic is trained only after PPO epochs")
     if args.value_loss_eps <= 0:
         raise ValueError(f"value_loss_eps must be positive, got {args.value_loss_eps}")
     if args.value_loss_scale_min <= 0:
@@ -5119,6 +5499,7 @@ def run_ppo_smoke(
                 "trajectories": trajectory_logs,
                 "timings": timings,
             }
+            write_monitor_event(args, {"event": "ppo_rollout_only_step_complete", **step_log})
             print(json.dumps({"event": "ppo_rollout_only_step_complete", **step_log}), flush=True)
             logs.append(step_log)
             continue
@@ -5419,31 +5800,58 @@ def run_ppo_smoke(
             )
             if args.print_epoch_logs:
                 epoch_log = ppo_epoch_logs[-1]
-                print(
-                    json.dumps(
-                        {
-                            "event": "ppo_epoch_complete",
-                            "step": step_idx,
-                            "epoch": ppo_epoch_idx,
-                            "prompt_index": prompt_idx,
-                            "prompt_name": prompt_name,
-                            **prompt_batch_log,
-                            "loss": epoch_log["loss"],
-                            "policy_loss": epoch_log["policy_loss"],
-                            "approx_kl": epoch_log["approx_kl"],
-                            "old_policy_exact_kl": epoch_log["old_policy_exact_kl"],
-                            "reference_exact_kl": epoch_log["reference_exact_kl"],
-                            "reference_kl_loss": epoch_log["reference_kl_loss"],
-                            "clip_fraction": epoch_log["clip_fraction"],
-                            "grad_norm": epoch_log["grad_norm"],
-                            "duration_s": epoch_log["duration_s"],
-                            "advantage_summary": epoch_log["advantage_summary"],
-                            "post_epoch_logprob_advantage_diagnostics": (
-                                epoch_log["post_epoch_logprob_advantage_diagnostics"]
-                            ),
-                        }
+                epoch_event = {
+                    "event": "ppo_epoch_complete",
+                    "step": step_idx,
+                    "epoch": ppo_epoch_idx,
+                    "prompt_index": prompt_idx,
+                    "prompt_name": prompt_name,
+                    **prompt_batch_log,
+                    "loss": epoch_log["loss"],
+                    "policy_loss": epoch_log["policy_loss"],
+                    "value_loss": epoch_log["value_loss"],
+                    "raw_value_loss": epoch_log["raw_value_loss"],
+                    "approx_kl": epoch_log["approx_kl"],
+                    "old_policy_exact_kl": epoch_log["old_policy_exact_kl"],
+                    "reference_exact_kl": epoch_log["reference_exact_kl"],
+                    "reference_kl_loss": epoch_log["reference_kl_loss"],
+                    "clip_fraction": epoch_log["clip_fraction"],
+                    "grad_norm": epoch_log["grad_norm"],
+                    "duration_s": epoch_log["duration_s"],
+                    "advantage_summary": epoch_log["advantage_summary"],
+                    "post_epoch_logprob_advantage_diagnostics": (
+                        epoch_log["post_epoch_logprob_advantage_diagnostics"]
                     ),
-                    flush=True,
+                }
+                write_monitor_event(args, epoch_event)
+                print(json.dumps(epoch_event), flush=True)
+            else:
+                epoch_log = ppo_epoch_logs[-1]
+                write_monitor_event(
+                    args,
+                    {
+                        "event": "ppo_epoch_complete",
+                        "step": step_idx,
+                        "epoch": ppo_epoch_idx,
+                        "prompt_index": prompt_idx,
+                        "prompt_name": prompt_name,
+                        **prompt_batch_log,
+                        "loss": epoch_log["loss"],
+                        "policy_loss": epoch_log["policy_loss"],
+                        "value_loss": epoch_log["value_loss"],
+                        "raw_value_loss": epoch_log["raw_value_loss"],
+                        "approx_kl": epoch_log["approx_kl"],
+                        "old_policy_exact_kl": epoch_log["old_policy_exact_kl"],
+                        "reference_exact_kl": epoch_log["reference_exact_kl"],
+                        "reference_kl_loss": epoch_log["reference_kl_loss"],
+                        "clip_fraction": epoch_log["clip_fraction"],
+                        "grad_norm": epoch_log["grad_norm"],
+                        "timings": {"duration_s": epoch_log["duration_s"]},
+                        "advantage_summary": epoch_log["advantage_summary"],
+                        "post_epoch_logprob_advantage_diagnostics": (
+                            epoch_log["post_epoch_logprob_advantage_diagnostics"]
+                        ),
+                    },
                 )
         if loss_payload is None:
             raise RuntimeError("PPO update produced no loss payload")
@@ -5495,7 +5903,70 @@ def run_ppo_smoke(
             post_step_token_log_ratio = None
         timings["new_replay_backward_s"] = time.perf_counter() - new_replay_start
 
+        post_update_value_return_metrics = value_prediction_metrics(new_values, batch_tensors.returns)
+        post_update_value_target_metrics = value_prediction_metrics(new_values, batch_tensors.value_targets)
+        post_update_value_mean = float(new_values.mean().detach().cpu())
+        post_update_value_std = float(new_values.std(unbiased=False).detach().cpu())
+        value_post_update_log = {"epochs": 0, "epoch_logs": []}
+        if args.value_post_update_epochs > 0:
+            if args.no_step:
+                value_post_update_log = {
+                    "epochs": 0,
+                    "skipped": "no_step",
+                    "requested_epochs": int(args.value_post_update_epochs),
+                    "epoch_logs": [],
+                }
+                timings["value_post_update_s"] = 0.0
+            else:
+                value_post_update_start = time.perf_counter()
+                hidden_state_start = time.perf_counter()
+                with torch.no_grad():
+                    post_update_hidden_state_tensors = batched_trajectory_patch_hidden_states_by_prompt(
+                        policy_model,
+                        update_rollout_payloads,
+                        args.precision,
+                        replay_context_patches=args.replay_context_patches,
+                        target_chunk_patches=args.score_chunk_patches,
+                        replay_batch_size=0,
+                        detach_policy=True,
+                    )
+                timings["value_post_update_hidden_state_replay_s"] = time.perf_counter() - hidden_state_start
+                value_train_start = time.perf_counter()
+                value_post_update_log = train_value_head_on_detached_returns(
+                    value_head=value_head,
+                    value_optimizer=value_optimizer,
+                    hidden_state_tensors=post_update_hidden_state_tensors,
+                    return_tensors=return_tensors,
+                    epochs=args.value_post_update_epochs,
+                    args=args,
+                )
+                timings["value_post_update_train_s"] = time.perf_counter() - value_train_start
+                with torch.no_grad():
+                    post_update_values = torch.cat(
+                        [
+                            value_head(hidden_states.detach()).detach().float()
+                            for hidden_states in post_update_hidden_state_tensors
+                        ]
+                    )
+                post_update_value_return_metrics = value_prediction_metrics(
+                    post_update_values,
+                    batch_tensors.returns,
+                )
+                post_update_value_target_metrics = value_prediction_metrics(
+                    post_update_values,
+                    batch_tensors.value_targets,
+                )
+                post_update_value_mean = float(post_update_values.mean().detach().cpu())
+                post_update_value_std = float(post_update_values.std(unbiased=False).detach().cpu())
+                timings["value_post_update_s"] = time.perf_counter() - value_post_update_start
+                del post_update_hidden_state_tensors, post_update_values
+                if device.type == "cuda":
+                    torch.cuda.empty_cache()
+        else:
+            timings["value_post_update_s"] = 0.0
+
         checkpoint_payload = None
+        value_checkpoint_payload = None
         checkpoint_start = time.perf_counter()
         if (
             not args.no_step
@@ -5508,7 +5979,13 @@ def run_ppo_smoke(
                 args.checkpoint_dir,
                 step_idx,
                 lora_r=args.lora_r,
-        )
+            )
+            value_checkpoint_payload = save_step_value_head_checkpoint(
+                value_head,
+                args.checkpoint_dir,
+                step_idx,
+            )
+            checkpoint_payload["value_head"] = value_checkpoint_payload
         timings["checkpoint_s"] = time.perf_counter() - checkpoint_start
 
         timings["ppo_replay_backward_s"] = time.perf_counter() - replay_start
@@ -5651,13 +6128,19 @@ def run_ppo_smoke(
             "reference_policy": bool(reference_policy_model is not None),
             "ppo_epoch_logs": ppo_epoch_logs,
             "value_warmup": value_warmup_log,
+            "value_post_update": value_post_update_log,
+            "continuous_critic_mode": bool(continuous_critic_mode),
+            "value_head_in_policy_optimizer": bool(value_head_in_policy_optimizer),
             "normalize_value_loss": args.normalize_value_loss,
             "value_loss_scale_min": args.value_loss_scale_min,
             "initial_value_return_metrics": initial_value_return_metrics,
             "post_warmup_value_return_metrics": post_warmup_value_return_metrics,
             "post_warmup_value_target_metrics": post_warmup_value_target_metrics,
-            "final_value_return_metrics": value_prediction_metrics(new_values, returns),
-            "final_value_target_metrics": value_prediction_metrics(new_values, value_targets),
+            "pre_post_update_value_return_metrics": value_prediction_metrics(new_values, returns),
+            "post_update_value_return_metrics": post_update_value_return_metrics,
+            "post_update_value_target_metrics": post_update_value_target_metrics,
+            "final_value_return_metrics": post_update_value_return_metrics,
+            "final_value_target_metrics": post_update_value_target_metrics,
             "patch_reward_mean": float(patch_rewards.mean().detach().cpu()),
             "patch_reward_std": float(patch_rewards.std(unbiased=False).detach().cpu()),
             "patch_rewards": patch_rewards.detach().cpu().tolist(),
@@ -5671,8 +6154,8 @@ def run_ppo_smoke(
                 if len(update_trajectory_logs) == 1
                 else None
             ),
-            "value_mean": float(new_values.mean().detach().cpu()),
-            "value_std": float(new_values.std(unbiased=False).detach().cpu()),
+            "value_mean": post_update_value_mean,
+            "value_std": post_update_value_std,
             "scored_patches": int(new_logprobs.numel()),
             "scored_tokens": int(new_token_logprobs.numel()),
             "generated_tokens_per_patch_mean": float(old_token_counts.float().mean().detach().cpu()),
@@ -5717,6 +6200,7 @@ def run_ppo_smoke(
                 component_rewards=diagnostic_component_rewards,
                 component_lambda_returns=diagnostic_component_lambda_returns,
             )
+        write_monitor_event(args, {"event": "ppo_step_complete", **step_log})
         print(json.dumps({"event": "ppo_step_complete", **step_log}), flush=True)
         logs.append(step_log)
         del (
@@ -5857,6 +6341,13 @@ def main() -> int:
     )
     parser.add_argument("--output-json", required=True)
     parser.add_argument(
+        "--monitor-output-jsonl",
+        help=(
+            "Optional compact JSONL sidecar for live monitors. It records epoch, step, rollout-only, "
+            "and fixed-eval summary events without trajectories or large patch arrays."
+        ),
+    )
+    parser.add_argument(
         "--prompt-limit",
         type=int,
         default=1,
@@ -5954,6 +6445,17 @@ def main() -> int:
     parser.add_argument("--value-head-weights")
     parser.add_argument("--save-value-head-weights")
     parser.add_argument("--value-warmup-epochs", type=int, default=0)
+    parser.add_argument(
+        "--value-post-update-epochs",
+        type=int,
+        default=0,
+        help=(
+            "After each PPO step, replay detached patch hidden states from the updated policy "
+            "and train the value head on discounted returns for this many epochs. The updated "
+            "critic is then used to compute advantages for the next PPO step. Use "
+            "--value-loss-coef 0 for a strictly post-update-only critic."
+        ),
+    )
     parser.add_argument("--ppo-epochs", type=int, default=1)
     parser.add_argument("--ppo-clip-range", type=float, default=0.2)
     parser.add_argument("--value-loss-coef", type=float, default=0.5)
@@ -6246,6 +6748,16 @@ def main() -> int:
             reference_payload = load_policy_checkpoint(reference_policy_model, Path(args.reference_checkpoint_dir))
             print(f"Loaded reference policy LoRA checkpoint from {args.reference_checkpoint_dir}")
         print(f"Reference KL model enabled from {reference_policy_weights}")
+    auto_value_head_resume = None
+    if not args.value_head_weights and args.resume_checkpoint_dir:
+        candidate_value_head = resume_value_head_checkpoint_path(args.resume_checkpoint_dir)
+        if candidate_value_head.exists():
+            args.value_head_weights = str(candidate_value_head)
+            auto_value_head_resume = {
+                "path": str(candidate_value_head),
+                "source": "resume_checkpoint_dir",
+            }
+            print(f"Auto-loading resumed value head from {candidate_value_head}")
     value_head, value_head_load = build_value_head(policy_shape, args, device)
     prompts = load_prompt_rows(args.prompts_jsonl, limit=args.prompt_limit)
     prompt_targets = load_prompt_structural_targets(prompts, args)
@@ -6284,6 +6796,8 @@ def main() -> int:
         payload["saved_value_head_weights"] = str(args.save_value_head_weights)
     if value_head_load:
         payload["loaded_value_head_weights"] = value_head_load
+    if auto_value_head_resume:
+        payload["auto_loaded_value_head_weights"] = auto_value_head_resume
     if resume_payload:
         payload["resume_checkpoint"] = resume_payload
     if reference_payload:

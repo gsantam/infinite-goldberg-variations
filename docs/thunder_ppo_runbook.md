@@ -610,6 +610,7 @@ PPO now supports a persistent MLP value head and optional critic warmup:
 --value-head-weights <existing_value_head.pt>
 --save-value-head-weights <new_value_head.pt>
 --value-warmup-epochs <n>
+--value-post-update-epochs <n>
 --ppo-epochs <n>
 --normalize-value-loss
 --value-loss-eps 1e-6
@@ -618,6 +619,33 @@ PPO now supports a persistent MLP value head and optional critic warmup:
 
 `--normalize-value-loss` does not normalize rewards or change the critic target. It keeps the critic predicting raw discounted returns, but divides the MSE scale by the target standard deviation so value gradients stay comparable across reward scales. JSON logs include both `raw_value_loss` and the scaled `value_loss`.
 Use `--value-loss-scale-min 1.0` for early checks so tiny target variance does not over-amplify the critic loss.
+
+`--value-warmup-epochs` trains the value head before computing this step's advantages, using hidden states from the pre-update policy. `--value-post-update-epochs` trains the value head after the PPO epochs for a step have finished. In that mode, the trainer replays the same trajectories through the current post-update policy, caches detached patch hidden states, trains only the value head on discounted returns, and uses the refreshed critic on the next PPO step.
+
+For strict continuous-critic PPO, keep the critic fixed during the policy epochs and update it only after the policy update:
+
+```text
+--value-loss-coef 0
+--value-learning-rate 1e-5
+--value-warmup-epochs 0
+--value-post-update-epochs 2
+```
+
+When `--value-loss-coef 0`, the value head is not part of the PPO optimizer, so AdamW weight decay from PPO epochs cannot move it. In continuous-critic mode it belongs only to the critic optimizer. The trainer rejects `--value-post-update-epochs > 0` with nonzero `--value-loss-coef` to avoid value-loss gradients entering the policy update.
+
+The JSON step log stores this phase under `value_post_update`, with `initial_metrics`, per-epoch `before_metrics`/`after_metrics`, `final_metrics`, `patch_count`, and timings for `value_post_update_hidden_state_replay_s`, `value_post_update_train_s`, and `value_post_update_s`.
+
+When `--checkpoint-dir` and `--checkpoint-every-steps` are set, each periodic policy checkpoint also saves the matching critic to `checkpoints/step_XXXXXX/value_head.pt`, and records it under `step["checkpoint"]["value_head"]`.
+
+When resuming from `--resume-checkpoint-dir checkpoints/step_XXXXXX`, the trainer automatically loads `checkpoints/step_XXXXXX/value_head.pt` if it exists and `--value-head-weights` was not explicitly provided. Use an explicit `--value-head-weights` only when intentionally pairing the policy with a different critic.
+
+For live monitoring without tailing bulky stdout, add:
+
+```text
+--monitor-output-jsonl $RUN_DIR/monitor.jsonl
+```
+
+This appends compact `ppo_epoch_complete`, `ppo_step_complete`, `ppo_rollout_only_step_complete`, and `ppo_fixed_eval_complete` records with scalar rewards, KL/clip metrics, value diagnostics, rollout-length summaries, group reward sums, checkpoint metadata, and timings. It intentionally excludes generated trajectories and large patch arrays so runner-side live plots can tail it safely.
 
 For the first real PPO checks, use one or two value warmup epochs and keep one PPO epoch:
 
