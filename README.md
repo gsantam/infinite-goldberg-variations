@@ -183,14 +183,20 @@ logged or used as a penalty.
 
 Some qualitative renders from earlier RL runs are still useful as examples of
 what this reward-driven stage is trying to improve, independent of whether the
-policy update is done with GRPO or PPO. For example,
-[this fixed render from step 171](docs/audio/grpo_step_171_sample_01_fixed_bar4.m4a)
-has a clear two-part form, and each part splits again into two subparts, which
-is close to the phrase layout of the Aria. Another good example is
-[this high-reward render from step 54](docs/audio/grpo_step_054_sample_00_reward_8.6605.m4a).
+policy update is done with GRPO or PPO. For example, this fixed render from
+step 171 has a clear two-part form, and each part splits again into two
+subparts, which is close to the phrase layout of the Aria:
+
+https://github.com/user-attachments/assets/56f300b6-9181-48f5-94d3-d57fa0cb6746
+
+Another good example is this high-reward render from step 54:
+
+https://github.com/user-attachments/assets/87f1db78-1f7f-4797-9659-eb4514aa9d66
+
 A more imperfect one, with some mistakes but where the Aria theme is easier to
-identify, is
-[this mid-range render from step 253](docs/audio/grpo_step_253_sample_00_reward_5.0870.m4a).
+identify, is this mid-range render from step 253:
+
+https://github.com/user-attachments/assets/def7095a-93e8-4cf1-8791-d05a1c3d880d
 
 Making NotaGen work with PPO is already a challenge because its decoding is
 hierarchical: patch-level generation, token-level generation, replayed
