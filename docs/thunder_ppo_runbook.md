@@ -372,11 +372,15 @@ Defaults are:
 
 ```text
 --aria-chroma-reward-weight 1.0
+--aria-chroma-top-reward-weight same as aria chroma unless explicitly set
 --aria-harmony-reward-weight 1.0
+--aria-harmony-aligned-root-reward-weight 0.25 when aria harmony is enabled
+--aria-harmony-aligned-bass-reward-weight 0.25 when aria harmony is enabled
+--aria-harmony-aligned-top-reward-weight 0.0 by default
 --max-similarity-reward 3.5
 ```
 
-`top_hist` and `top_contour_dtw` are logged/candidate metrics, not active in the scalar reward. `density_dtw` is diagnostic only.
+`top_hist` is active as a separate top-voice chroma histogram reward. Same-bar `aligned_root` and `aligned_bass` are active low-weight auxiliaries. Same-bar `aligned_top` is available but default-off because GT is low on it. `top_contour_dtw` is logged/candidate, and `density_dtw` is diagnostic only.
 
 ## Simple PPO Sanity-Test Rewards
 
