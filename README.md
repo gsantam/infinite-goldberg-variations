@@ -181,6 +181,17 @@ Advantage Estimation controls how rewards are propagated through the trajectory.
 An exact full-vocabulary KL against the frozen SFT/reference policy can be
 logged or used as a penalty.
 
+Some qualitative renders from earlier RL runs are still useful as examples of
+what this reward-driven stage is trying to improve, independent of whether the
+policy update is done with GRPO or PPO. For example,
+[this fixed render from step 171](docs/audio/grpo_step_171_sample_01_fixed_bar4.m4a)
+has a clear two-part form, and each part splits again into two subparts, which
+is close to the phrase layout of the Aria. Another good example is
+[this high-reward render from step 54](docs/audio/grpo_step_054_sample_00_reward_8.6605.m4a).
+A more imperfect one, with some mistakes but where the Aria theme is easier to
+identify, is
+[this mid-range render from step 253](docs/audio/grpo_step_253_sample_00_reward_5.0870.m4a).
+
 Making NotaGen work with PPO is already a challenge because its decoding is
 hierarchical: patch-level generation, token-level generation, replayed
 log-probability scoring, and value prediction all have to stay aligned. Long
