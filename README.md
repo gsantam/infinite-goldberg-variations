@@ -99,13 +99,13 @@ treated as a similar variation, I also compute them on the real Goldberg
 variations. The useful metrics are the ones where the ground-truth variations
 are clearly harder to match than the base model and the first SFT versions.
 
-Values are reported as `epoch 0 / epoch 1 / epoch 8 / GT`.
+Values are reported as `baseline / epoch 1 / epoch 8 / Bach GT`.
 
 | Similarity signal | What it compares | Use | Values |
 |---|---|---|---:|
 | CLaMP2 whole-piece embedding (`clamp2_aria`) | A learned semantic similarity score between the whole generated piece and the Aria. This is useful as a broad diagnostic, but it is not the main reward because it is less explicit about harmony and form. | Whole-sequence diagnostic, logged only | `0.432 / 0.438 / 0.464 / 0.500` |
 | Active symbolic Aria score (`aria_strict_symbolic_component_global_base_z`) | The main similarity reward. It combines the local checks below and standardizes them against base-model samples, so positive values mean the piece is more Aria-like than the base model usually is. | End-of-sequence active reward | `-0.044 / -0.022 / 0.398 / 1.434` |
-| Same-bar harmony (`strict_aligned_root_bass`) | Compares each generated bar with the same-position Aria bar, using the inferred chord root and bass note. This rewards matching the local harmonic skeleton without requiring the exact surface notes. | Active component | `0.311 / 0.304 / 0.342 / 0.440` |
+| Same-bar harmony (`strict_aligned_root_bass`) | Compares each generated bar with the same-position Aria bar. All voices in the bar are collapsed to infer the chord root, and the bass is taken from the lowest note; the other voices affect the inferred harmony but are not scored as separate voices. This rewards matching the local harmonic skeleton without requiring the exact surface notes. | Active component | `0.311 / 0.304 / 0.342 / 0.440` |
 | Flexible harmonic path (`strict_dtw_combined_narrow`) | Aligns the generated bar sequence to the Aria with a narrow DTW window, so small local shifts are allowed but the piece still has to follow roughly the same harmonic route. | Active component | `0.768 / 0.768 / 0.781 / 0.804` |
 | Repeated harmonic patterns, 2-bar / 4-bar (`strict_root_bass_*gram_weighted_jaccard`) | Looks for short root/bass progressions from the Aria inside the generated piece. The 2-bar version is looser; the 4-bar version is stricter and therefore much smaller. | Active component | `0.056 / 0.064 / 0.071 / 0.100` for 2-bar; `0.000 / 0.001 / 0.003 / 0.011` for 4-bar |
 | Phrase endings (`strict_cadence_root_bass`) | Compares root and bass at cadence positions, where matching the Aria's harmonic arrivals is especially important. | Active component | `0.402 / 0.396 / 0.522 / 0.783` |
@@ -117,12 +117,15 @@ Values are reported as `epoch 0 / epoch 1 / epoch 8 / GT`.
 
 Even with this simple SFT setup, the generated samples move closer to the Aria
 on several of these signals, but the picture is mixed across the full
-similarity bundle. The active similarity reward is the strict symbolic
-Aria-similarity aggregate normalized against base-model samples. I keep CLaMP2,
+similarity bundle, and later improvements sometimes come at the expense of a
+very high KL distance from the base model. I compute this KL exactly over the
+symbol distribution rather than with a sampled approximation. The active
+similarity reward is the strict symbolic Aria-similarity aggregate normalized
+against base-model samples. I keep CLaMP2,
 chroma histogram and chroma DTW, the older broader harmony DTW and same-bar
 alignment metrics, top-voice contour DTW, and density DTW as diagnostics. Here
-epoch 0 is the base NotaGen-large model prompted with the same metadata/header
-prompt, without the Aria in the prompt.
+the base model is NotaGen-large prompted with the same metadata/header prompt,
+without the Aria in the prompt.
 
 ![SFT similarity metrics across epochs](docs/assets/sft_similarity_breakdown_all_metrics_with_gt.png)
 
