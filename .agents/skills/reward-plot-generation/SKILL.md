@@ -27,7 +27,7 @@ epoch `0`.
 ## Normalization
 
 Do not min-max normalize across epochs. Reward components are already
-normalized in `[0, 1]` as emitted by `grpo/rewards.py`. Plot validated bars as
+normalized in `[0, 1]` as emitted by `rewards/rewards.py`. Plot validated bars as
 `validated_bars / 32` so it shares the same scale and appears in the legend.
 
 For each epoch and each component:
@@ -75,7 +75,7 @@ This writes the SVG and JSON source data to `docs/assets/`.
 
 ## Refresh Rewards First
 
-If `grpo/rewards.py` changed, recompute reward JSONL files before plotting.
+If `rewards/rewards.py` changed, recompute reward JSONL files before plotting.
 The plot script only aggregates existing rewards; it does not rescore ABC files.
 
 Important scorer detail: `_ensure_renderable_abc(...)` must add missing ABC

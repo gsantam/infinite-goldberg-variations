@@ -10,7 +10,7 @@ try:
     import torch
     from transformers import GPT2Config
 
-    from evaluation.strict_similarity import STRICT_SYMBOLIC_COMPONENT_Z_KEY
+    from rewards.strict_similarity import STRICT_SYMBOLIC_COMPONENT_Z_KEY
     from scripts.custom_ppo_notagen import (
         PatchRewardTrace,
         PatchValueHead,
@@ -84,7 +84,7 @@ try:
         _rollout_seed,
         build_rollout_prefix,
     )
-    from evaluation.rewards import StructuralTarget
+    from rewards.rewards import StructuralTarget
     from utils import NotaGenLMHeadModel, Patchilizer
 except ModuleNotFoundError as exc:
     torch = None

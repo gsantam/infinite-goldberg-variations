@@ -15,7 +15,7 @@ from __future__ import annotations
 #   --eligible-prompts data/processed/goldberg/structure/aria_matching_prompt_names.txt \
 #   --samples-per-prompt 8
 #
-# The raw metrics live in evaluation.strict_similarity; these constants
+# The raw metrics live in rewards.strict_similarity; these constants
 # only calibrate "how many base-model standard deviations above baseline" a
 # generated sample is.
 

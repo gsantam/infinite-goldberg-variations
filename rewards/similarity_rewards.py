@@ -8,14 +8,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from evaluation.chroma_similarity import compare_chroma_features, load_chroma_feature_set
-from evaluation.strict_similarity import (
+from rewards.chroma_similarity import compare_chroma_features, load_chroma_feature_set
+from rewards.strict_similarity import (
     STRICT_SYMBOLIC_COMPONENT_Z_KEY,
     strict_similarity_global_base_z_scores,
     strict_symbolic_similarity,
     written_harmony_reference,
 )
-from evaluation.harmony_similarity import compare_harmony, harmony_from_path, harmony_from_text
+from rewards.harmony_similarity import compare_harmony, harmony_from_path, harmony_from_text
 from preprocessing.notagen_abc import preprocess_notagen_abc
 
 

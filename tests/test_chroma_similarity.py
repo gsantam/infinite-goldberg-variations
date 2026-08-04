@@ -7,10 +7,10 @@ from unittest.mock import patch
 
 import numpy as np
 
-from evaluation.chroma_similarity import chroma_features, load_chroma_feature_set, parse_piece_tonic
-from evaluation.harmony_similarity import compare_harmony, harmony_from_text
-from evaluation.strict_similarity import STRICT_SYMBOLIC_COMPONENT_Z_KEY
-from evaluation.similarity_rewards import (
+from rewards.chroma_similarity import chroma_features, load_chroma_feature_set, parse_piece_tonic
+from rewards.harmony_similarity import compare_harmony, harmony_from_text
+from rewards.strict_similarity import STRICT_SYMBOLIC_COMPONENT_Z_KEY
+from rewards.similarity_rewards import (
     SimilarityReference,
     SimilarityRewardWeights,
     finalize_similarity_reward_fields,
@@ -118,7 +118,7 @@ class ChromaSimilarityTests(unittest.TestCase):
                     for mode in ("full", "bass", "top")
                 }
 
-            with patch("evaluation.similarity_rewards.load_chroma_feature_set", side_effect=legacy_chroma_feature_set):
+            with patch("rewards.similarity_rewards.load_chroma_feature_set", side_effect=legacy_chroma_feature_set):
                 legacy_payload = score_similarity_reward(
                     prompt_text="",
                     completion_text=candidate,
@@ -148,7 +148,7 @@ class ChromaSimilarityTests(unittest.TestCase):
 
     def test_top_hist_similarity_weight_is_separate_from_harmonic_hist(self):
         with patch(
-            "evaluation.similarity_rewards._chroma_scores",
+            "rewards.similarity_rewards._chroma_scores",
             return_value={
                 "similarity_chroma_valid": True,
                 "aria_chroma_harmonic_hist": 0.40,
@@ -171,7 +171,7 @@ class ChromaSimilarityTests(unittest.TestCase):
 
     def test_aligned_harmony_weights_are_separate_active_similarity_terms(self):
         with patch(
-            "evaluation.similarity_rewards._harmony_scores",
+            "rewards.similarity_rewards._harmony_scores",
             return_value={
                 "similarity_harmony_valid": True,
                 "aria_harmony_dtw_combined": 0.50,
@@ -204,9 +204,9 @@ class ChromaSimilarityTests(unittest.TestCase):
         candidate_harmony = [{"root": idx, "bass": idx, "quality": "maj"} for idx in range(32)]
 
         with (
-            patch("evaluation.similarity_rewards.harmony_from_text", return_value=candidate_harmony),
+            patch("rewards.similarity_rewards.harmony_from_text", return_value=candidate_harmony),
             patch(
-                "evaluation.similarity_rewards.compare_harmony",
+                "rewards.similarity_rewards.compare_harmony",
                 return_value={"dtw_combined": 0.75},
             ) as compare,
         ):
@@ -229,7 +229,7 @@ class ChromaSimilarityTests(unittest.TestCase):
 
     def test_legacy_harmony_combined_key_still_scores(self):
         with patch(
-            "evaluation.similarity_rewards._harmony_scores",
+            "rewards.similarity_rewards._harmony_scores",
             return_value={
                 "similarity_harmony_valid": True,
                 "aria_harmony_combined": 0.50,
@@ -395,7 +395,7 @@ class ChromaSimilarityTests(unittest.TestCase):
                 (2.0, 1.0, 74, 2),
             ]
 
-            with patch("evaluation.chroma_similarity._note_events", return_value=(events, 3.0)) as note_events:
+            with patch("rewards.chroma_similarity._note_events", return_value=(events, 3.0)) as note_events:
                 features = load_chroma_feature_set(path, bins=4, normalize_key=True)
 
             self.assertEqual(note_events.call_count, 1)

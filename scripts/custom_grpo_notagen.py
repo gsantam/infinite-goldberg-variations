@@ -23,7 +23,7 @@ if str(PROJECT_ROOT) not in sys.path:
 if str(RL_DIR) not in sys.path:
     sys.path.insert(0, str(RL_DIR))
 
-from grpo import GoldbergRewardConfig, compute_group_advantages, load_structural_target  # noqa: E402
+from rewards import GoldbergRewardConfig, compute_group_advantages, load_structural_target  # noqa: E402
 from notagen_runtime.notagen_cached_generation import CachedNotaGenPatchGenerator  # noqa: E402
 from notagen_runtime.notagen_cached_generation_batch import sample_completions_cached_batch  # noqa: E402
 from notagen_runtime.notagen_replay import (  # noqa: E402
@@ -46,15 +46,15 @@ from notagen_runtime.notagen_replay import (  # noqa: E402
     trajectory_logprob_forward_count,
     trajectory_logprobs,
 )
-from evaluation.rewards import score_prompt_completion_pair  # noqa: E402
-from evaluation.similarity_rewards import (  # noqa: E402
+from rewards.rewards import score_prompt_completion_pair  # noqa: E402
+from rewards.similarity_rewards import (  # noqa: E402
     SimilarityReference,
     SimilarityRewardWeights,
     finalize_similarity_reward_fields,
     load_similarity_reference,
     score_similarity_reward,
 )
-from evaluation.stream_tags import (
+from rewards.stream_tags import (
     count_stream_lines as _count_stream_lines,
     latest_stream_line as _latest_stream_line,
     latest_stream_line_closed as _latest_stream_line_closed,

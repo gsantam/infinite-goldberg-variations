@@ -209,7 +209,7 @@ def summarize_meter_duration_ratio_counts(counts: Counter[Fraction]) -> dict:
 
 
 def meter_duration_ratio_counts_for_text(abc_text: str) -> Counter[Fraction]:
-    from evaluation.rewards import (  # type: ignore
+    from rewards.rewards import (  # type: ignore
         _extract_header_context,
         _extract_stream_line_features,
         _segment_active_meter,
@@ -862,13 +862,13 @@ def score_rewards(
 ) -> list[dict]:
     if str(project_dir) not in sys.path:
         sys.path.insert(0, str(project_dir))
-    from evaluation.rewards import (  # type: ignore
+    from rewards.rewards import (  # type: ignore
         GoldbergRewardConfig,
         _extract_header_context,
         load_structural_target,
         score_prompt_completion_pair,
     )
-    from evaluation.similarity_rewards import (  # type: ignore
+    from rewards.similarity_rewards import (  # type: ignore
         SimilarityRewardWeights,
         finalize_similarity_reward_fields,
         load_similarity_reference,

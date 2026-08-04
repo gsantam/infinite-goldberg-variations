@@ -15,8 +15,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from evaluation.harmony_similarity import harmony_from_path, infer_harmony, parse_bar_notes, strip_stream_tag
-from evaluation.strict_similarity import STRICT_SIMILARITY_SCORE_KEYS, strict_symbolic_similarity, written_harmony_reference
+from rewards.harmony_similarity import harmony_from_path, infer_harmony, parse_bar_notes, strip_stream_tag
+from rewards.strict_similarity import STRICT_SIMILARITY_SCORE_KEYS, strict_symbolic_similarity, written_harmony_reference
 from notagen_runtime.notagen_cached_generation_batch import sample_completions_cached_batch
 from notagen_runtime.notagen_wrapper import build_model, count_stream_lines
 

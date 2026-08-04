@@ -4,12 +4,12 @@ import statistics
 from collections import Counter
 from typing import Any
 
-from evaluation.harmony_similarity import (
+from rewards.harmony_similarity import (
     generic_dtw_similarity,
     pitch_class_similarity,
     token_similarity,
 )
-from evaluation.strict_similarity_baseline_norms import (
+from rewards.strict_similarity_baseline_norms import (
     STRICT_SIMILARITY_BASELINE_METRICS,
     STRICT_SIMILARITY_GLOBAL_NORMS,
     STRICT_SIMILARITY_Z_STD_FLOORS,

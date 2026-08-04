@@ -8,7 +8,7 @@ from preprocessing.notagen_abc import (
     preprocess_notagen_abc,
     strip_dangling_terminal_ties,
 )
-from evaluation.rewards import (
+from rewards.rewards import (
     GoldbergRewardConfig,
     StructuralTarget,
     _bar_count_reward,
@@ -258,7 +258,7 @@ class GoldbergRewardTests(unittest.TestCase):
         )
 
         start = time.perf_counter()
-        with patch("evaluation.rewards.converter.parseData") as parse_data:
+        with patch("rewards.rewards.converter.parseData") as parse_data:
             breakdown = score_candidate_text(text, target, GoldbergRewardConfig(music21_parse_timeout_s=1.0))
 
         parse_data.assert_not_called()
@@ -283,7 +283,7 @@ class GoldbergRewardTests(unittest.TestCase):
         )
 
         start = time.perf_counter()
-        with patch("evaluation.rewards.converter.parseData") as parse_data:
+        with patch("rewards.rewards.converter.parseData") as parse_data:
             breakdown = score_candidate_text(text, target, GoldbergRewardConfig(music21_parse_timeout_s=1.0))
 
         parse_data.assert_not_called()
@@ -310,7 +310,7 @@ class GoldbergRewardTests(unittest.TestCase):
             ]
         )
 
-        with patch("evaluation.rewards.converter.parseData") as parse_data:
+        with patch("rewards.rewards.converter.parseData") as parse_data:
             breakdown = score_candidate_text(text, target, GoldbergRewardConfig(music21_parse_timeout_s=1.0))
 
         parse_data.assert_not_called()
@@ -337,8 +337,8 @@ class GoldbergRewardTests(unittest.TestCase):
         )
 
         with (
-            patch("evaluation.rewards.abcFormat.ABCFile") as abc_file,
-            patch("evaluation.rewards.converter.parseData") as parse_data,
+            patch("rewards.rewards.abcFormat.ABCFile") as abc_file,
+            patch("rewards.rewards.converter.parseData") as parse_data,
         ):
             abc_file.return_value.readstr.side_effect = ValueError("tokenizer rejected ABC")
             breakdown = score_candidate_text(text, target, GoldbergRewardConfig(music21_parse_timeout_s=1.0))

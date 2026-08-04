@@ -85,19 +85,23 @@ then mostly plateaus, while clear overfitting only starts to appear around epoch
 ![SFT train and eval loss](docs/assets/sft_train_eval_loss.svg)
 
 In order to understand similarity, I monitor CLaMP2 semantic similarity, but the
-more important part is a set of local symbolic similarity measures between the
-generated variation and the Aria. These measures include global comparisons,
-such as pitch-class histograms, and local comparisons bar by bar, both with
-exact bar positions and with a narrow DTW alignment that allows small local
-shifts. For each bar, I infer simple harmonic signals from the
-voices, especially root and bass pitch classes, and then compare the generated
-sequence with the Aria's harmonic skeleton. I also check key structural points,
-such as phrase endings and cadences, and use weighted Jaccard overlap to ask
-whether short root/bass progressions from the Aria reappear in the generated
-piece. To check whether these measures are meaningful with respect to what Bach
-treated as a similar variation, I also compute them on the real Goldberg
-variations. The useful metrics are the ones where the ground-truth variations
-are clearly harder to match than the base model and the first SFT versions.
+more important part is a set of symbolic similarity measures between the
+generated variation and the Aria. Some of these metrics are used later as RL
+optimization terms, which is why I also refer to them as rewards.
+
+These measures include global comparisons, such as pitch-class histograms, and
+local comparisons bar by bar, both with exact bar positions and with a narrow
+DTW alignment that allows small local shifts. For each bar, I infer simple
+harmonic signals from the voices, especially root and bass pitch classes, and
+then compare the generated sequence with the Aria's harmonic skeleton.
+
+I also check key structural points, such as phrase endings and cadences, and use
+weighted Jaccard overlap to ask whether short root/bass progressions from the
+Aria reappear in the generated piece. To check whether these measures are
+meaningful with respect to what Bach treated as a similar variation, I also
+compute them on the real Goldberg variations. The useful metrics are the ones
+where the ground-truth variations are clearly harder to match than the base
+model and the first SFT versions.
 
 Values are reported as `baseline / epoch 1 / epoch 8 / Bach GT`.
 
@@ -129,7 +133,7 @@ without the Aria in the prompt.
 
 ![SFT similarity metrics across epochs](docs/assets/sft_similarity_breakdown_all_metrics_with_gt.png)
 
-At this point, around epochs 8-9, the model can already generate some
+At this point, around epoch 8, the model can already generate some
 relatively decent melodies that sound Baroque and Bach-like, and that are also
 similar to some of the variations, or at least contain clear echoes of the
 theme.
@@ -157,17 +161,30 @@ setup is close to the standard RLHF loop: generate continuations from the
 current policy, score them with automatic rewards, estimate advantages with a
 value function, and update the policy with the clipped PPO objective.
 
+The useful part of this setup is that the rewards are rule-based, so they are
+cheap to compute and do not require human preference labels in the loop. Some
+of them are also naturally local: instead of giving only one terminal reward at
+the end of the whole variation, meter, line-structure, bar-count, and harmony
+signals can be attributed at the patch or bar level, which gives PPO a denser
+training signal.
+
 The reward is a weighted sum of structural checks and Aria-similarity checks.
 The active similarity side uses the strict symbolic Aria-similarity aggregate
 defined above; chroma histograms and the older non-strict harmony DTW terms are
-retained as diagnostics. On top of those similarity metrics, I also track
-structural rewards for ABC validity, NotaGen line structure, meter consistency,
-written musical bars, and repeat-expanded rendered bars. The table below lists
-only active structural reward terms. Values are mean raw subreward scores
-before applying the listed weight, except for the subtotal row, which is already
-a weighted sum. Epoch 0 is the pretrained NotaGen-large model with the same
-prompt/evaluation setup; GT is the mean over the real Goldberg variations under
-the same scorer.
+retained as diagnostics.
+
+I keep the structural rewards as safeguards. They prevent the policy from
+improving an Aria-similarity metric by exploiting broken notation, malformed
+meter, wrong continuation length, empty lines, or other reward-hacking paths
+that would not produce a usable score. These structural checks cover ABC
+validity, NotaGen line structure, meter consistency, written musical bars, and
+repeat-expanded rendered bars.
+
+The table below lists only active structural reward terms. Values are mean raw
+subreward scores before applying the listed weight, except for the subtotal
+row, which is already a weighted sum. Epoch 0 is the pretrained NotaGen-large
+model with the same prompt/evaluation setup; GT is the mean over the real
+Goldberg variations under the same scorer.
 
 | Reward | Type | Description | Terminal / Patch | Weight | Epoch 0 | Epoch 1 | Epoch 8 | GT |
 |---|---|---|---|---:|---:|---:|---:|---:|

@@ -1,6 +1,6 @@
 import unittest
 
-from evaluation.harmony_similarity import generic_dtw_alignment, generic_dtw_similarity, harmony_from_text
+from rewards.harmony_similarity import generic_dtw_alignment, generic_dtw_similarity, harmony_from_text
 
 
 class HarmonySimilarityTests(unittest.TestCase):

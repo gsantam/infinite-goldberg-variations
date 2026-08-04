@@ -13,7 +13,7 @@ import tempfile
 
 from music21 import abcFormat, converter
 
-from evaluation.stream_tags import (
+from rewards.stream_tags import (
     StreamLine,
     StreamTag,
     extract_stream_lines,

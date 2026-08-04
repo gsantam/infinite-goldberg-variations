@@ -5,7 +5,7 @@ description: Sample ABC continuations/trajectories from NotaGen checkpoints usin
 
 # Sample NotaGen Trajectories
 
-Use the cached rollout path by default. The optimized implementation is `CachedNotaGenPatchGenerator` in `grpo/notagen_cached_generation.py`; it caches patch-level GPT keys/values and only runs the char decoder for the next patch. Do not call `model.generate(...)` for long rollouts unless explicitly comparing against the uncached baseline.
+Use the cached rollout path by default. The optimized implementation is `CachedNotaGenPatchGenerator` in `notagen_runtime/notagen_cached_generation.py`; it caches patch-level GPT keys/values and only runs the char decoder for the next patch. Do not call `model.generate(...)` for long rollouts unless explicitly comparing against the uncached baseline.
 
 ## Entry Points
 

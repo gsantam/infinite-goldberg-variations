@@ -4,7 +4,7 @@ from typing import Any, Sequence
 
 import torch
 
-from evaluation.strict_similarity import STRICT_SYMBOLIC_COMPONENT_Z_KEY
+from rewards.strict_similarity import STRICT_SYMBOLIC_COMPONENT_Z_KEY
 
 
 def _safe_float(value: torch.Tensor | float | None) -> float | None:

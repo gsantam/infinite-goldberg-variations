@@ -13,7 +13,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from evaluation.strict_similarity import STRICT_SIMILARITY_SCORE_KEYS
+from rewards.strict_similarity import STRICT_SIMILARITY_SCORE_KEYS
 
 STRICT_METRIC_KEYS = list(STRICT_SIMILARITY_SCORE_KEYS)
 

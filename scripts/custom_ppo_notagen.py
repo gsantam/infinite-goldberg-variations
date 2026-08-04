@@ -16,21 +16,21 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from evaluation.harmony_similarity import (
+from rewards.harmony_similarity import (
     generic_dtw_alignment,
     infer_harmony,
     parse_bar_notes,
     pitch_class_similarity,
     token_similarity,
 )
-from evaluation.rewards import (
+from rewards.rewards import (
     _extract_header_context,
     _extract_stream_line_features,
     _stream_line_local_metrics,
     score_candidate_text_with_local_metrics,
     score_source_structure_bars,
 )
-from evaluation.strict_similarity import STRICT_SYMBOLIC_COMPONENT_Z_KEY
+from rewards.strict_similarity import STRICT_SYMBOLIC_COMPONENT_Z_KEY
 from notagen_runtime.notagen_cached_generation_batch import sample_completions_cached_batch
 from notagen_runtime.notagen_replay import (
     PATCH_SIZE,

@@ -12,8 +12,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from grpo import GoldbergRewardConfig, load_structural_target
-from evaluation.rewards import make_trl_reward_func
+from rewards import GoldbergRewardConfig, load_structural_target
+from rewards.rewards import make_trl_reward_func
 
 
 def load_prompt_dataset(path: str | Path) -> Dataset:

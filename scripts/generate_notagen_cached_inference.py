@@ -24,7 +24,7 @@ from notagen_runtime.notagen_wrapper import (
     split_metadata_and_tunebody_lines,
     trim_to_stream_lines,
 )
-from evaluation.stream_tags import stream_target_reached
+from rewards.stream_tags import stream_target_reached
 
 
 def load_prefix_specs(*, prefix: Path | None, prefix_manifest: Path | None) -> list[dict[str, Any]]:
