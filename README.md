@@ -55,18 +55,25 @@ variation of the Goldberg Aria, rather than only sounding generically Baroque.
 I have used [NotaGen-large](https://arxiv.org/abs/2502.18008) as the
 pre-trained base model, since it seems to be the state of the art for symbolic
 classical music generation, and Bach and the Baroque period are well represented
-in its training set. With that model, I do Aria-conditioned supervised
-fine-tuning: the prompt contains the conditioning keywords `%Baroque`, `%Bach,
-Johann Sebastian`, and `%Keyboard`, as well as the Aria, while each real
-variation is used as the target continuation. This is very consistent with the
-concept of a variation.
+in its training set. With that model, I do supervised fine-tuning where the
+prompt contains the conditioning keywords `%Baroque`, `%Bach, Johann Sebastian`,
+and `%Keyboard`, together with the ABC header for the target variation, while
+each real variation is used as the target continuation. I initially also tried
+putting the Aria itself in the prompt, which is conceptually natural for a
+variation task, but I discarded that setup because it made the prompt much
+longer, made the continuation structure less stable, and did not improve the
+results enough to justify the extra complexity.
 
 There is an important caveat here: NotaGen's full pre-training corpus and the
 internal part of its fine-tuning data are not released, so I cannot completely
 rule out that BWV 988 was already seen by the base model. The public
 fine-tuning sources I checked do not seem to contain the Goldberg Variations as
-sheet data, but some large MIDI sources do contain them, so I treat this as a
-possible contamination risk rather than a settled point.
+sheet data. There is still a risk that some MIDI files in pre-training contain
+them, although this is not the most likely explanation because the prompt is
+generic and does not contain anything specific to the Goldberg Variations. I
+keep sanity metrics on the base model, before fine-tuning and under the same
+prompt, to check that it is generating generic Bach-like music rather than
+material that is already close to the Aria.
 
 Since the amount of training data is small, I keep a very low learning rate
 (`1e-6`) and use a k-fold-style cross-validation setup, keeping roughly 10-20% of the
@@ -77,40 +84,42 @@ then mostly plateaus, while clear overfitting only starts to appear around epoch
 
 ![SFT train and eval loss](docs/assets/sft_train_eval_loss.svg)
 
-In order to understand similarity, I monitor both the semantic similarity given
-by the CLaMP2 embedding and different measures of local and global similarity
-related to harmony and structure. I compare those numbers against the average
-for the real Goldberg variations to sanity-check whether each metric is
-meaningful, and to estimate how far the generations are from the kind of
-similarity Bach used when composing the variations.
+In order to understand similarity, I monitor CLaMP2 semantic similarity, but the
+more important part is a set of local symbolic similarity measures between the
+generated variation and the Aria. These measures compare the two pieces bar by
+bar, both with exact bar positions and with a narrow DTW alignment that allows
+small local shifts. For each bar, I infer simple harmonic signals from the
+voices, especially root and bass pitch classes, and then compare the generated
+sequence with the Aria's harmonic skeleton. I also check key structural points,
+such as phrase endings and cadences, and use weighted Jaccard overlap to ask
+whether short root/bass progressions from the Aria reappear in the generated
+piece. I compare all of these numbers against the average for the real Goldberg
+variations to sanity-check whether each metric is meaningful, and to estimate
+how far the generations are from the kind of similarity Bach used when
+composing the variations.
 
-| Measure | What it compares | Terminal / Patch | Reward use | Epoch 0 | Epoch 1 | Epoch 8 | GT |
+| Similarity signal | What it compares | Assignment | Reward use | Epoch 0 | Epoch 1 | Epoch 8 | GT |
 |---|---|---|---|---:|---:|---:|---:|
-| `clamp2_aria` | CLaMP2 embedding similarity to the Aria. | sequence diagnostic | Logged only | 0.432 | 0.438 | 0.464 | 0.500 |
-| `aria_strict_symbolic_component_global_base_z` | Active strict symbolic aggregate over same-bar root/bass, narrow DTW, root/bass n-grams, and cadences, normalized against base-model samples. | terminal | Active | -0.044 | -0.022 | 0.398 | 1.434 |
-| `strict_aligned_root_bass` | Same-bar soft match of inferred harmonic root and bass pitch classes to the Aria. | terminal component | Active component | 0.311 | 0.304 | 0.342 | 0.440 |
-| `strict_dtw_combined_narrow` | Narrow-band DTW over bar-level harmony, root, and bass sequences. | terminal component | Active component | 0.768 | 0.768 | 0.781 | 0.804 |
-| `strict_root_bass_bigram_weighted_jaccard` | Weighted Jaccard overlap of consecutive root/bass bar-pair tokens with the Aria. | terminal component | Active component | 0.056 | 0.064 | 0.071 | 0.100 |
-| `strict_root_bass_fourgram_weighted_jaccard` | Weighted Jaccard overlap of four-bar root/bass progression tokens with the Aria. | terminal component | Active component | 0.000 | 0.001 | 0.003 | 0.011 |
-| `strict_cadence_root_bass` | Root/bass match at phrase-ending cadence positions. | terminal component | Active component | 0.402 | 0.396 | 0.522 | 0.783 |
-| `aria_chroma_full_hist` | Full-texture pitch-class distribution after key normalization. | terminal diagnostic | Logged only | 0.830 | 0.836 | 0.871 | 0.891 |
-| `aria_chroma_bass_hist` | Bass pitch-class distribution after key normalization. | terminal diagnostic | Logged only | 0.739 | 0.731 | 0.779 | 0.824 |
-| `aria_chroma_top_hist` | Top-voice pitch-class distribution after key normalization. | terminal diagnostic | Logged only | 0.745 | 0.744 | 0.746 | 0.787 |
-| `aria_harmony_dtw_combined` | Older broad DTW mean over harmony, root, and bass sequences. | patch DTW diagnostic | Logged only | 0.772 | 0.776 | 0.788 | 0.799 |
-| `aria_harmony_root_dtw` | Older broad DTW over inferred harmonic-root pitch classes. | patch DTW diagnostic | Logged only | 0.787 | 0.792 | 0.807 | 0.812 |
-| `aria_harmony_bass_dtw` | Older broad DTW over inferred bass pitch classes. | patch DTW diagnostic | Logged only | 0.774 | 0.778 | 0.787 | 0.803 |
-| `aria_harmony_aligned_root` | Older same-bar harmonic-root pitch-class match to the Aria. | patch diagnostic | Logged only | 0.169 | 0.176 | 0.202 | 0.222 |
-| `aria_harmony_aligned_bass` | Older same-bar bass pitch-class match to the Aria. | patch diagnostic | Logged only | 0.165 | 0.180 | 0.169 | 0.257 |
-| `aria_harmony_top_contour_dtw` | Coarse top-voice up/same/down contour aligned to the Aria. | patch DTW diagnostic | Logged only | 0.869 | 0.865 | 0.868 | 0.863 |
+| CLaMP2 whole-piece embedding (`clamp2_aria`) | A learned semantic similarity score between the whole generated piece and the Aria. This is useful as a broad diagnostic, but it is not the main reward because it is less explicit about harmony and form. | whole sequence | Logged only | 0.432 | 0.438 | 0.464 | 0.500 |
+| Active symbolic Aria score (`aria_strict_symbolic_component_global_base_z`) | The main similarity reward. It combines the local checks below and standardizes them against base-model samples, so positive values mean the piece is more Aria-like than the base model usually is. | end of sequence | Active | -0.044 | -0.022 | 0.398 | 1.434 |
+| Same-bar harmony (`strict_aligned_root_bass`) | Compares each generated bar with the same-position Aria bar, using the inferred chord root and bass note. This rewards matching the local harmonic skeleton without requiring the exact surface notes. | end-of-sequence component | Active component | 0.311 | 0.304 | 0.342 | 0.440 |
+| Flexible harmonic path (`strict_dtw_combined_narrow`) | Aligns the generated bar sequence to the Aria with a narrow DTW window, so small local shifts are allowed but the piece still has to follow roughly the same harmonic route. | end-of-sequence component | Active component | 0.768 | 0.768 | 0.781 | 0.804 |
+| Repeated harmonic patterns, 2-bar / 4-bar (`strict_root_bass_*gram_weighted_jaccard`) | Looks for short root/bass progressions from the Aria inside the generated piece. The 2-bar version is looser; the 4-bar version is stricter and therefore much smaller. | end-of-sequence component | Active component | 0.056 / 0.000 | 0.064 / 0.001 | 0.071 / 0.003 | 0.100 / 0.011 |
+| Phrase endings (`strict_cadence_root_bass`) | Compares root and bass at cadence positions, where matching the Aria's harmonic arrivals is especially important. | end-of-sequence component | Active component | 0.402 | 0.396 | 0.522 | 0.783 |
+| Global pitch-class color, all notes / bass / top voice (`aria_chroma_*_hist`) | Compares the overall distribution of pitch classes after key normalization. The three values use all notes, only the bass, and only the highest voice. | whole sequence | Logged only | 0.830 / 0.739 / 0.745 | 0.836 / 0.731 / 0.744 | 0.871 / 0.779 / 0.746 | 0.891 / 0.824 / 0.787 |
+| Pitch-class sequence, all notes / bass / top voice (`aria_chroma_*_dtw`) | Compares the order of pitch-class profiles through the piece, again after key normalization. Unlike the histogram score, this keeps some time ordering by aligning the generated sequence to the Aria with DTW. | whole sequence | Logged only | 0.774 / 0.743 / 0.737 | 0.775 / 0.735 / 0.738 | 0.784 / 0.732 / 0.734 | 0.786 / 0.728 / 0.737 |
+| Broad DTW harmony diagnostics, combined / root / bass (`aria_harmony_*_dtw`) | Older, looser DTW alignment metrics. They compare the bar-level harmonic sequence using all inferred harmony features together, only chord roots, or only bass notes. | patch-level diagnostic | Logged only | 0.772 / 0.787 / 0.774 | 0.776 / 0.792 / 0.778 | 0.788 / 0.807 / 0.787 | 0.799 / 0.812 / 0.803 |
+| Direct same-bar diagnostics, root / bass (`aria_harmony_aligned_*`) | Older direct bar-position matches for chord root and bass. These are logged separately from the stricter active same-bar reward. | patch-level diagnostic | Logged only | 0.169 / 0.165 | 0.176 / 0.180 | 0.202 / 0.169 | 0.222 / 0.257 |
+| Top-voice contour (`aria_harmony_top_contour_dtw`) | Compares whether the highest voice broadly moves up, down, or stays level in a similar sequence to the Aria. | patch-level diagnostic | Logged only | 0.869 | 0.865 | 0.868 | 0.863 |
 
 Even with this simple SFT setup, the generated samples move closer to the Aria
 on several of these signals, but the picture is mixed across the full
 similarity bundle. The active similarity reward is the strict symbolic
-Aria-similarity aggregate normalized against base-model samples. I keep chroma
-histograms, the older broader harmony DTW and same-bar alignment metrics,
-CLaMP2 semantic similarity, chroma DTW, top-voice contour DTW, and density DTW
-as diagnostics. Here epoch 0 is the base NotaGen-large model prompted only with
-the metadata keywords, without the Aria in the prompt.
+Aria-similarity aggregate normalized against base-model samples. I keep CLaMP2,
+chroma histogram and chroma DTW, the older broader harmony DTW and same-bar
+alignment metrics, top-voice contour DTW, and density DTW as diagnostics. Here
+epoch 0 is the base NotaGen-large model prompted with the same metadata/header
+prompt, without the Aria in the prompt.
 
 ![SFT similarity metrics across epochs](docs/assets/sft_similarity_breakdown_all_metrics_with_gt.png)
 
