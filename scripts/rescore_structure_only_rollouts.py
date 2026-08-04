@@ -150,6 +150,7 @@ def _line_reward_components_from_metrics(
     meter_alignment = np.array(local_metrics.meter_alignment_reward, dtype=np.float32)
     meter_duration = np.array(local_metrics.meter_duration_closeness_reward, dtype=np.float32)
     bar_meter = np.array(local_metrics.bar_meter_consistency_reward, dtype=np.float32)
+    note_bearing = np.array(local_metrics.note_bearing_line_reward, dtype=np.float32)
     voice_decl = np.array(local_metrics.voice_declaration_reward, dtype=np.float32)
     score_voice = np.array(local_metrics.score_voice_reward, dtype=np.float32)
 
@@ -163,15 +164,16 @@ def _line_reward_components_from_metrics(
     add_weighted_component("countdown_reward", reward_config.countdown_weight, countdown)
     add_weighted_component("line_closure_reward", reward_config.line_closure_weight, closure)
     add_weighted_component("bar_token_reward", reward_config.bar_token_weight, bar_token)
+    add_weighted_component("note_bearing_line_reward", reward_config.note_bearing_line_weight, note_bearing)
     add_weighted_component("meter_alignment_reward", reward_config.meter_alignment_weight, meter_alignment)
     add_weighted_component("meter_duration_closeness_reward", reward_config.meter_duration_closeness_weight, meter_duration)
     add_weighted_component("bar_meter_consistency_reward", reward_config.bar_meter_consistency_weight, bar_meter)
     add_weighted_component("voice_declaration_reward", reward_config.voice_declaration_weight, voice_decl)
     add_weighted_component("score_voice_reward", reward_config.score_voice_weight, score_voice)
 
-    musical_bar_units = np.array(local_metrics.musical_bar_units, dtype=np.float32)
-    written_bar_units = np.array(local_metrics.written_bar_units, dtype=np.float32)
-    written_counts = np.cumsum(written_bar_units)
+    repeat_expanded_measure_increments = np.array(local_metrics.musical_bar_units, dtype=np.float32)
+    written_measure_increments = np.array(local_metrics.written_bar_units, dtype=np.float32)
+    written_counts = np.cumsum(written_measure_increments)
     expected = float(target.expected_bars)
     if expected > 0 and reward_config.bar_count_weight != 0.0:
         previous_written_counts = np.concatenate(([0.0], written_counts[:-1])).astype(np.float32)
@@ -181,7 +183,7 @@ def _line_reward_components_from_metrics(
 
     expanded_expected = float(getattr(target, "expected_repeat_expanded_bars", float(target.expected_bars) * 2.0))
     if expanded_expected > 0 and reward_config.expanded_bar_count_weight != 0.0:
-        expanded_counts = np.cumsum(musical_bar_units)
+        expanded_counts = np.cumsum(repeat_expanded_measure_increments)
         previous_expanded_counts = np.concatenate(([0.0], expanded_counts[:-1])).astype(np.float32)
         expanded_bar_count = np.maximum(0.0, 1.0 - np.abs(expanded_counts - expanded_expected) / expanded_expected)
         previous_expanded_bar_count = np.maximum(
@@ -217,6 +219,7 @@ def _terminal_structure_component_rewards(
         "countdown_reward": reward_config.countdown_weight,
         "line_closure_reward": reward_config.line_closure_weight,
         "bar_token_reward": reward_config.bar_token_weight,
+        "note_bearing_line_reward": reward_config.note_bearing_line_weight,
         "meter_alignment_reward": reward_config.meter_alignment_weight,
         "meter_duration_closeness_reward": reward_config.meter_duration_closeness_weight,
         "bar_meter_consistency_reward": reward_config.bar_meter_consistency_weight,

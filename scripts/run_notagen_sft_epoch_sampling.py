@@ -854,6 +854,7 @@ def score_rewards(
     aria_harmony_aligned_root_reward_weight: float,
     aria_harmony_aligned_bass_reward_weight: float,
     aria_harmony_aligned_top_reward_weight: float,
+    aria_strict_symbolic_reward_weight: float,
     max_similarity_reward: float,
     similarity_chroma_bins: int,
     similarity_band_ratio: float,
@@ -883,6 +884,7 @@ def score_rewards(
         aria_harmony_aligned_root=aria_harmony_aligned_root_reward_weight,
         aria_harmony_aligned_bass=aria_harmony_aligned_bass_reward_weight,
         aria_harmony_aligned_top=aria_harmony_aligned_top_reward_weight,
+        aria_strict_symbolic=aria_strict_symbolic_reward_weight,
     )
     aria_similarity_ref = None
     if similarity_weights.enabled:
@@ -1062,6 +1064,7 @@ def evaluate_checkpoint_samples(
         aria_harmony_aligned_root_reward_weight=args.aria_harmony_aligned_root_reward_weight,
         aria_harmony_aligned_bass_reward_weight=args.aria_harmony_aligned_bass_reward_weight,
         aria_harmony_aligned_top_reward_weight=args.aria_harmony_aligned_top_reward_weight,
+        aria_strict_symbolic_reward_weight=args.aria_strict_symbolic_reward_weight,
         max_similarity_reward=args.max_similarity_reward,
         similarity_chroma_bins=args.similarity_chroma_bins,
         similarity_band_ratio=args.similarity_band_ratio,
@@ -1264,6 +1267,15 @@ def main() -> None:
     parser.add_argument("--aria-harmony-aligned-root-reward-weight", type=float, default=None)
     parser.add_argument("--aria-harmony-aligned-bass-reward-weight", type=float, default=None)
     parser.add_argument("--aria-harmony-aligned-top-reward-weight", type=float, default=None)
+    parser.add_argument(
+        "--aria-strict-symbolic-reward-weight",
+        type=float,
+        default=0.0,
+        help=(
+            "Reward weight for strict symbolic Aria similarity, computed as fixed weights over individually "
+            "global-base-z normalized aligned, DTW, n-gram, and cadence submetrics."
+        ),
+    )
     parser.add_argument("--max-similarity-reward", type=float, default=3.5)
     parser.add_argument("--similarity-chroma-bins", type=int, default=128)
     parser.add_argument("--similarity-band-ratio", type=float, default=0.25)
@@ -1409,6 +1421,7 @@ def main() -> None:
         or args.aria_harmony_aligned_root_reward_weight != 0.0
         or args.aria_harmony_aligned_bass_reward_weight != 0.0
         or args.aria_harmony_aligned_top_reward_weight != 0.0
+        or args.aria_strict_symbolic_reward_weight != 0.0
     )
     required_paths = [args.notagen_dir, args.project_dir, args.pretrained, args.train_jsonl, args.eval_jsonl, args.reward_target_json]
     required_paths.append(args.reward_target_structure_abc)

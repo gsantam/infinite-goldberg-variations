@@ -9,6 +9,12 @@ from pathlib import Path
 from typing import Any
 
 from evaluation.chroma_similarity import compare_chroma_features, load_chroma_feature_set
+from evaluation.strict_similarity import (
+    STRICT_SYMBOLIC_COMPONENT_Z_KEY,
+    strict_similarity_global_base_z_scores,
+    strict_symbolic_similarity,
+    written_harmony_reference,
+)
 from evaluation.harmony_similarity import compare_harmony, harmony_from_path, harmony_from_text
 from preprocessing.notagen_abc import preprocess_notagen_abc
 
@@ -32,6 +38,7 @@ class SimilarityRewardWeights:
     aria_harmony_aligned_root: float = 0.0
     aria_harmony_aligned_bass: float = 0.0
     aria_harmony_aligned_top: float = 0.0
+    aria_strict_symbolic: float = 0.0
     variation_harmony: float = 0.0
 
     @property
@@ -45,6 +52,7 @@ class SimilarityRewardWeights:
             or self.aria_harmony_aligned_root != 0.0
             or self.aria_harmony_aligned_bass != 0.0
             or self.aria_harmony_aligned_top != 0.0
+            or self.aria_strict_symbolic != 0.0
             or self.variation_harmony != 0.0
         )
 
@@ -163,14 +171,32 @@ def _harmony_scores(
     variation: SimilarityReference | None,
     band_ratio: float,
     timeout_s: float,
+    include_aria_harmony: bool = False,
+    include_aria_strict_similarity: bool = False,
+    include_variation_harmony: bool = False,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {"similarity_harmony_valid": False}
     with time_limit(timeout_s, "harmony similarity timed out"):
         candidate = harmony_from_text(candidate_abc)
         payload["similarity_harmony_valid"] = True
         if aria is not None and aria.harmony is not None:
-            _add_prefixed_scores(payload, "aria_harmony", compare_harmony(aria.harmony, candidate, band_ratio=band_ratio))
-        if variation is not None and variation.harmony is not None:
+            aria_harmony_reference = written_harmony_reference(aria.harmony)
+            if include_aria_harmony:
+                _add_prefixed_scores(
+                    payload,
+                    "aria_harmony",
+                    compare_harmony(aria_harmony_reference, candidate, band_ratio=band_ratio),
+                )
+            if include_aria_strict_similarity:
+                strict_scores = strict_symbolic_similarity(
+                    aria_harmony_reference,
+                    candidate,
+                    band_ratio=0.05,
+                )
+                strict_scores.update(strict_similarity_global_base_z_scores(strict_scores))
+                _add_prefixed_scores(payload, "aria", strict_scores)
+                payload["aria_strict_similarity_band_ratio"] = 0.05
+        if include_variation_harmony and variation is not None and variation.harmony is not None:
             _add_prefixed_scores(
                 payload,
                 "variation_harmony",
@@ -276,6 +302,14 @@ def score_similarity_reward(
                     variation=variation,
                     band_ratio=band_ratio,
                     timeout_s=timeout_s,
+                    include_aria_harmony=(
+                        weights.aria_harmony != 0.0
+                        or weights.aria_harmony_aligned_root != 0.0
+                        or weights.aria_harmony_aligned_bass != 0.0
+                        or weights.aria_harmony_aligned_top != 0.0
+                    ),
+                    include_aria_strict_similarity=weights.aria_strict_symbolic != 0.0,
+                    include_variation_harmony=weights.variation_harmony != 0.0,
                 )
             )
         except Exception as exc:
@@ -292,6 +326,9 @@ def score_similarity_reward(
     reward += weights.aria_harmony_aligned_root * float(payload.get("aria_harmony_aligned_root", 0.0))
     reward += weights.aria_harmony_aligned_bass * float(payload.get("aria_harmony_aligned_bass", 0.0))
     reward += weights.aria_harmony_aligned_top * float(payload.get("aria_harmony_aligned_top", 0.0))
+    reward += weights.aria_strict_symbolic * float(
+        payload.get(f"aria_{STRICT_SYMBOLIC_COMPONENT_Z_KEY}", 0.0)
+    )
     reward += weights.variation_harmony * float(
         payload.get("variation_harmony_dtw_combined", payload.get("variation_harmony_combined", 0.0))
     )

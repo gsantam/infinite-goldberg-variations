@@ -87,33 +87,30 @@ similarity Bach used when composing the variations.
 | Measure | What it compares | Terminal / Patch | Reward use | Epoch 0 | Epoch 1 | Epoch 8 | GT |
 |---|---|---|---|---:|---:|---:|---:|
 | `clamp2_aria` | CLaMP2 embedding similarity to the Aria. | sequence diagnostic | Logged only | 0.432 | 0.438 | 0.464 | 0.500 |
-| `aria_chroma_full_hist` | Full-texture pitch-class distribution after key normalization. | terminal | Active through harmonic histogram | 0.835 | 0.845 | 0.874 | 0.888 |
-| `aria_chroma_bass_hist` | Bass pitch-class distribution after key normalization. | terminal | Active through harmonic histogram | 0.737 | 0.744 | 0.779 | 0.818 |
-| `aria_chroma_harmonic_hist` | Mean of full-texture and bass chroma histograms. | terminal | Active | 0.786 | 0.794 | 0.827 | 0.853 |
-| `aria_chroma_top_hist` | Top-voice pitch-class distribution after key normalization. | terminal | Active | 0.753 | 0.754 | 0.754 | 0.794 |
-| `aria_harmony_dtw_combined` | Mean of composite harmony, root, and bass DTW. | patch DTW | Active | 0.773 | 0.775 | 0.786 | 0.791 |
-| `aria_harmony_harmony_dtw` | Bar-level harmony tokens combining root, bass, and chord quality. | patch DTW | Active through DTW mean | 0.756 | 0.758 | 0.768 | 0.774 |
-| `aria_harmony_root_dtw` | Inferred harmonic-root pitch-class sequence aligned to the Aria. | patch DTW | Active through DTW mean | 0.789 | 0.791 | 0.805 | 0.803 |
-| `aria_harmony_bass_dtw` | Inferred bass pitch-class sequence aligned to the Aria. | patch DTW | Active through DTW mean | 0.774 | 0.778 | 0.786 | 0.795 |
-| `aria_harmony_aligned_root` | Same-bar harmonic root pitch-class match to the Aria. | patch same-bar | Active, low weight | 0.175 | 0.165 | 0.196 | 0.218 |
-| `aria_harmony_aligned_bass` | Same-bar bass pitch-class match to the Aria. | patch same-bar | Active, low weight | 0.164 | 0.166 | 0.165 | 0.232 |
-| `aria_chroma_full_dtw` | Full-texture chroma sequence aligned to the Aria. | sequence DTW | Logged only | 0.777 | 0.778 | 0.784 | 0.785 |
-| `aria_chroma_bass_dtw` | Bass chroma sequence aligned to the Aria. | sequence DTW | Logged only | 0.742 | 0.735 | 0.731 | 0.729 |
-| `aria_chroma_top_dtw` | Top-voice chroma sequence aligned to the Aria. | sequence DTW | Logged only | 0.737 | 0.737 | 0.735 | 0.736 |
-| `aria_harmony_aligned_top` | Same-bar top-voice pitch-class match to the Aria. | patch same-bar | Logged only | 0.152 | 0.135 | 0.137 | 0.131 |
-| `aria_harmony_aligned_quality` | Same-bar inferred chord-quality match to the Aria. | patch same-bar | Logged only | 0.202 | 0.193 | 0.223 | 0.249 |
-| `aria_harmony_aligned_combined` | Strict same-bar combined root, bass, and quality score. | patch same-bar | Logged only | 0.279 | 0.270 | 0.294 | 0.322 |
-| `aria_harmony_top_contour_dtw` | Coarse top-voice up/same/down contour aligned to the Aria. | patch DTW | Logged only | 0.868 | 0.864 | 0.869 | 0.860 |
-| `aria_harmony_density_dtw` | Note-density sequence aligned to the Aria. | patch DTW | Logged only | 0.825 | 0.798 | 0.811 | 0.777 |
+| `aria_strict_symbolic_component_global_base_z` | Active strict symbolic aggregate over same-bar root/bass, narrow DTW, root/bass n-grams, and cadences, normalized against base-model samples. | terminal | Active | -0.044 | -0.022 | 0.398 | 1.434 |
+| `strict_aligned_root_bass` | Same-bar soft match of inferred harmonic root and bass pitch classes to the Aria. | terminal component | Active component | 0.311 | 0.304 | 0.342 | 0.440 |
+| `strict_dtw_combined_narrow` | Narrow-band DTW over bar-level harmony, root, and bass sequences. | terminal component | Active component | 0.768 | 0.768 | 0.781 | 0.804 |
+| `strict_root_bass_bigram_weighted_jaccard` | Weighted Jaccard overlap of consecutive root/bass bar-pair tokens with the Aria. | terminal component | Active component | 0.056 | 0.064 | 0.071 | 0.100 |
+| `strict_root_bass_fourgram_weighted_jaccard` | Weighted Jaccard overlap of four-bar root/bass progression tokens with the Aria. | terminal component | Active component | 0.000 | 0.001 | 0.003 | 0.011 |
+| `strict_cadence_root_bass` | Root/bass match at phrase-ending cadence positions. | terminal component | Active component | 0.402 | 0.396 | 0.522 | 0.783 |
+| `aria_chroma_full_hist` | Full-texture pitch-class distribution after key normalization. | terminal diagnostic | Logged only | 0.830 | 0.836 | 0.871 | 0.891 |
+| `aria_chroma_bass_hist` | Bass pitch-class distribution after key normalization. | terminal diagnostic | Logged only | 0.739 | 0.731 | 0.779 | 0.824 |
+| `aria_chroma_top_hist` | Top-voice pitch-class distribution after key normalization. | terminal diagnostic | Logged only | 0.745 | 0.744 | 0.746 | 0.787 |
+| `aria_harmony_dtw_combined` | Older broad DTW mean over harmony, root, and bass sequences. | patch DTW diagnostic | Logged only | 0.772 | 0.776 | 0.788 | 0.799 |
+| `aria_harmony_root_dtw` | Older broad DTW over inferred harmonic-root pitch classes. | patch DTW diagnostic | Logged only | 0.787 | 0.792 | 0.807 | 0.812 |
+| `aria_harmony_bass_dtw` | Older broad DTW over inferred bass pitch classes. | patch DTW diagnostic | Logged only | 0.774 | 0.778 | 0.787 | 0.803 |
+| `aria_harmony_aligned_root` | Older same-bar harmonic-root pitch-class match to the Aria. | patch diagnostic | Logged only | 0.169 | 0.176 | 0.202 | 0.222 |
+| `aria_harmony_aligned_bass` | Older same-bar bass pitch-class match to the Aria. | patch diagnostic | Logged only | 0.165 | 0.180 | 0.169 | 0.257 |
+| `aria_harmony_top_contour_dtw` | Coarse top-voice up/same/down contour aligned to the Aria. | patch DTW diagnostic | Logged only | 0.869 | 0.865 | 0.868 | 0.863 |
 
 Even with this simple SFT setup, the generated samples move closer to the Aria
 on several of these signals, but the picture is mixed across the full
-similarity bundle. The active reward tracks chroma histograms for the full
-texture, bass, and top voice; bar-level DTW for composite harmony, root, and
-bass; and low-weight same-bar root and bass agreement. I also keep logged
-diagnostics for CLaMP2 semantic similarity, chroma DTW, top-voice contour DTW,
-and density DTW. Here epoch 0 is the base NotaGen-large model prompted only
-with the metadata keywords, without the Aria in the prompt.
+similarity bundle. The active similarity reward is the strict symbolic
+Aria-similarity aggregate normalized against base-model samples. I keep chroma
+histograms, the older broader harmony DTW and same-bar alignment metrics,
+CLaMP2 semantic similarity, chroma DTW, top-voice contour DTW, and density DTW
+as diagnostics. Here epoch 0 is the base NotaGen-large model prompted only with
+the metadata keywords, without the Aria in the prompt.
 
 ![SFT similarity metrics across epochs](docs/assets/sft_similarity_breakdown_all_metrics_with_gt.png)
 
@@ -146,32 +143,35 @@ current policy, score them with automatic rewards, estimate advantages with a
 value function, and update the policy with the clipped PPO objective.
 
 The reward is a weighted sum of structural checks and Aria-similarity checks.
-The similarity side uses the chroma and harmony signals defined above. On top
-of those similarity metrics, I also track structural rewards for ABC validity,
-NotaGen line structure, meter consistency, written musical bars, and
-repeat-expanded rendered bars. The table below lists only active structural
-reward terms. Values are mean raw subreward scores before applying the listed
-weight, except for the subtotal row, which is already a weighted sum. Epoch 0
-is the pretrained NotaGen-large model with the same prompt/evaluation setup;
-GT is the mean over the real Goldberg variations under the same scorer.
+The active similarity side uses the strict symbolic Aria-similarity aggregate
+defined above; chroma histograms and the older non-strict harmony DTW terms are
+retained as diagnostics. On top of those similarity metrics, I also track
+structural rewards for ABC validity, NotaGen line structure, meter consistency,
+written musical bars, and repeat-expanded rendered bars. The table below lists
+only active structural reward terms. Values are mean raw subreward scores
+before applying the listed weight, except for the subtotal row, which is already
+a weighted sum. Epoch 0 is the pretrained NotaGen-large model with the same
+prompt/evaluation setup; GT is the mean over the real Goldberg variations under
+the same scorer.
 
 | Reward | Type | Description | Terminal / Patch | Weight | Epoch 0 | Epoch 1 | Epoch 8 | GT |
 |---|---|---|---|---:|---:|---:|---:|---:|
-| `completion_reward` | Structural | Target written/effective bar count reached. | terminal | 0.250 | 1 | 0.967 | 1 | 0.900 |
-| `expanded_completion_reward` | Structural | Target repeat-expanded/rendered bar count reached. | terminal | 0.250 | 0.500 | 0.417 | 0.583 | 0.900 |
+| `completion_reward` | Structural | Target written score-measure count reached. | terminal | 0.250 | 1 | 0.967 | 1 | 0.900 |
+| `expanded_completion_reward` | Structural | Target repeat-expanded/rendered score-measure count reached. | terminal | 0.250 | 0.500 | 0.417 | 0.583 | 0.900 |
 | `parse_reward` | Structural | Graded ABC syntax/tokenizer/music21 parse quality. | terminal | 0.250 | 0.993 | 0.923 | 0.950 | 1 |
 | `syntax_penalty_reward` | Structural | Fast malformed-syntax penalty; negative when triggered. | terminal | 0.250 | 0 | -0.100 | -0.083 | 0 |
 | `countdown_reward` | Structural | NotaGen stream countdown `[r:i/j]` progression. | patch | 0.250 | 1 | 0.999 | 1 | 1 |
 | `line_closure_reward` | Structural | Generated stream lines close syntactically. | patch | 0.250 | 1 | 0.999 | 1 | 1 |
 | `bar_token_reward` | Structural | Stream lines contain bar/repeat tokens. | patch | 0.100 | 1 | 1 | 1 | 1 |
+| `note_bearing_line_reward` | Structural | Stream lines contain at least one ABC note in some voice, so rest-only generated lines lose structural credit. | patch | 0.250 | 1 | 0.990 | 0.997 | 1 |
 | `meter_alignment_reward` | Structural | Populated voices align with expected meter. | patch | 0.750 | 0.969 | 0.927 | 0.974 | 0.987 |
 | `meter_duration_closeness_reward` | Structural | Bar durations are close to expected meter. | patch | 0.750 | 0.996 | 0.964 | 0.997 | 0.994 |
 | `bar_meter_consistency_reward` | Structural | Voices inside a bar are mutually meter-consistent. | patch | 0.750 | 0.970 | 0.939 | 0.997 | 0.997 |
-| `bar_count_reward` | Structural | Written/effective musical bars close to target 32. | patch marginal | 1 | 1 | 0.999 | 1 | 0.902 |
-| `expanded_bar_count_reward` | Structural | Repeat-expanded/rendered bars close to target 64. | patch marginal | 1 | 0.764 | 0.757 | 0.834 | 0.899 |
+| `bar_count_reward` | Structural | Written score measures close to target 32. | patch marginal | 1 | 1 | 0.999 | 1 | 0.902 |
+| `expanded_bar_count_reward` | Structural | Repeat-expanded/rendered score measures close to target 64. | patch marginal | 1 | 0.764 | 0.757 | 0.834 | 0.899 |
 | `voice_declaration_reward` | Structural | Generated voices are declared in the header. | patch | 1 | 1 | 1 | 1 | 1 |
 | `score_voice_reward` | Structural | Generated voices match the `%%score` voice set. | patch | 0.500 | 1 | 1 | 1 | 1 |
-| `structural_total_reward` | Subtotal | Weighted structural subtotal. | mixed | 1 | 6.689 | 6.530 | 6.773 | 6.834 |
+| `structural_total_reward` | Subtotal | Weighted structural subtotal. | mixed | 1 | 6.939 | 6.777 | 7.023 | 7.084 |
 
 In the current PPO implementation, rewards and value targets are computed per
 NotaGen patch for tractability, while the policy loss is reduced over generated

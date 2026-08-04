@@ -28,7 +28,9 @@ from evaluation.rewards import (
     _extract_stream_line_features,
     _stream_line_local_metrics,
     score_candidate_text_with_local_metrics,
+    score_source_structure_bars,
 )
+from evaluation.strict_similarity import STRICT_SYMBOLIC_COMPONENT_Z_KEY
 from notagen_runtime.notagen_cached_generation_batch import sample_completions_cached_batch
 from notagen_runtime.notagen_replay import (
     PATCH_SIZE,
@@ -440,12 +442,94 @@ def load_prompt_structural_targets(prompts: list[dict], args) -> list[PromptStru
     return prompt_targets
 
 
+def filter_prompts_by_bar_target(
+    prompts: list[dict],
+    prompt_targets: list[PromptStructuralTarget],
+    args,
+) -> tuple[list[dict], list[PromptStructuralTarget], dict]:
+    mode = getattr(args, "prompt_bar_filter", "none")
+    tolerance = float(getattr(args, "prompt_bar_filter_tolerance", 1e-6))
+    metadata = {
+        "mode": mode,
+        "tolerance": tolerance,
+        "input_count": len(prompts),
+        "kept_count": len(prompts),
+        "excluded_count": 0,
+        "kept": [],
+        "excluded": [],
+    }
+    if mode == "none":
+        metadata["kept"] = [
+            {
+                "prompt_idx": idx,
+                "prompt_name": prompt_row_name(row, idx),
+                "structure_path": target.structure_path,
+            }
+            for idx, (row, target) in enumerate(zip(prompts, prompt_targets, strict=True))
+        ]
+        return prompts, prompt_targets, metadata
+    if mode != "aria-matching":
+        raise ValueError(f"unsupported prompt bar filter: {mode}")
+
+    kept_prompts: list[dict] = []
+    kept_targets: list[PromptStructuralTarget] = []
+    kept: list[dict] = []
+    excluded: list[dict] = []
+    for idx, (row, prompt_target) in enumerate(zip(prompts, prompt_targets, strict=True)):
+        target = prompt_target.target
+        structure_text = Path(prompt_target.structure_path).read_text(encoding="utf-8")
+        bar_counts = score_source_structure_bars(
+            structure_text,
+            musical_bar_unit=target.musical_bar_unit,
+        )
+        expected_bars = float(target.expected_bars)
+        expected_expanded_bars = float(target.expected_repeat_expanded_bars)
+        matches = (
+            abs(float(bar_counts.observed_bars) - expected_bars) <= tolerance
+            and abs(float(bar_counts.observed_repeat_expanded_bars) - expected_expanded_bars) <= tolerance
+        )
+        record = {
+            "prompt_idx": idx,
+            "prompt_name": prompt_row_name(row, idx),
+            "structure_path": prompt_target.structure_path,
+            "source_format": bar_counts.source_format,
+            "observed_lines": int(bar_counts.observed_lines),
+            "observed_bars": float(bar_counts.observed_bars),
+            "expected_bars": expected_bars,
+            "observed_repeat_expanded_bars": float(bar_counts.observed_repeat_expanded_bars),
+            "expected_repeat_expanded_bars": expected_expanded_bars,
+            "source_key": prompt_target.source_key,
+        }
+        if matches:
+            kept_prompts.append(row)
+            kept_targets.append(prompt_target)
+            kept.append(record)
+        else:
+            excluded.append(record)
+
+    if not kept_prompts:
+        raise ValueError(
+            f"--prompt-bar-filter={mode} removed all {len(prompts)} prompts; "
+            "check target bars or disable the filter"
+        )
+    metadata.update(
+        {
+            "kept_count": len(kept_prompts),
+            "excluded_count": len(excluded),
+            "kept": kept,
+            "excluded": excluded,
+        }
+    )
+    return kept_prompts, kept_targets, metadata
+
+
 def prompt_structural_target_metadata(prompt_targets: list[PromptStructuralTarget]) -> list[dict]:
     return [
         {
             "structure_path": item.structure_path,
             "source_key": item.source_key,
             "expected_bars": int(item.target.expected_bars),
+            "expected_structure_bars": int(item.target.expected_structure_bars),
             "expected_reward_bars": int(item.target.expected_reward_bars),
         }
         for item in prompt_targets
@@ -733,6 +817,7 @@ def build_fixed_eval_prompt_batch(
         return []
     if event_index < 0:
         raise ValueError(f"fixed eval event index must be non-negative, got {event_index}")
+    schedule_event_index = 0 if bool(getattr(args, "fixed_eval_reuse_prompt_batch", True)) else int(event_index)
     prompt_batch_mode = resolve_fixed_eval_prompt_batch_mode(args)
     if prompt_batch_mode == "event":
         return build_prompt_batch_for_repeated_slot(
@@ -740,12 +825,12 @@ def build_fixed_eval_prompt_batch(
             prompt_targets=prompt_targets,
             selection=resolve_fixed_eval_prompt_selection(args),
             seed=int(args.seed) + int(getattr(args, "fixed_eval_prompt_seed_offset", 2_000_000)),
-            slot_index=int(event_index),
+            slot_index=schedule_event_index,
             count=int(args.fixed_eval_trajectories),
         )
     if prompt_batch_mode != "trajectory":
         raise ValueError(f"unsupported fixed eval prompt batch mode: {prompt_batch_mode!r}")
-    start_slot = int(event_index) * int(args.fixed_eval_trajectories)
+    start_slot = schedule_event_index * int(args.fixed_eval_trajectories)
     return build_prompt_batch_for_slots(
         prompts=prompts,
         prompt_targets=prompt_targets,
@@ -2545,6 +2630,7 @@ def _terminal_structural_component_rewards(
         "countdown_reward": reward_config.countdown_weight,
         "line_closure_reward": reward_config.line_closure_weight,
         "bar_token_reward": reward_config.bar_token_weight,
+        "note_bearing_line_reward": reward_config.note_bearing_line_weight,
         "meter_alignment_reward": reward_config.meter_alignment_weight,
         "meter_duration_closeness_reward": reward_config.meter_duration_closeness_weight,
         "bar_meter_consistency_reward": reward_config.bar_meter_consistency_weight,
@@ -2613,6 +2699,10 @@ def _terminal_similarity_component_rewards(
         ("aria_harmony_aligned_root", similarity_weights.aria_harmony_aligned_root),
         ("aria_harmony_aligned_bass", similarity_weights.aria_harmony_aligned_bass),
         ("aria_harmony_aligned_top", similarity_weights.aria_harmony_aligned_top),
+        (
+            f"aria_{STRICT_SYMBOLIC_COMPONENT_Z_KEY}",
+            similarity_weights.aria_strict_symbolic,
+        ),
     ):
         if weight == 0.0:
             continue
@@ -2878,6 +2968,7 @@ def _line_reward_components_from_metrics(
     meter_alignment = np.array(local_metrics.meter_alignment_reward, dtype=np.float32)
     meter_duration = np.array(local_metrics.meter_duration_closeness_reward, dtype=np.float32)
     bar_meter = np.array(local_metrics.bar_meter_consistency_reward, dtype=np.float32)
+    note_bearing = np.array(local_metrics.note_bearing_line_reward, dtype=np.float32)
     voice_decl = np.array(local_metrics.voice_declaration_reward, dtype=np.float32)
     score_voice = np.array(local_metrics.score_voice_reward, dtype=np.float32)
 
@@ -2891,6 +2982,7 @@ def _line_reward_components_from_metrics(
     add_weighted_component("countdown_reward", reward_config.countdown_weight, countdown)
     add_weighted_component("line_closure_reward", reward_config.line_closure_weight, closure)
     add_weighted_component("bar_token_reward", reward_config.bar_token_weight, bar_token)
+    add_weighted_component("note_bearing_line_reward", reward_config.note_bearing_line_weight, note_bearing)
     add_weighted_component("meter_alignment_reward", reward_config.meter_alignment_weight, meter_alignment)
     add_weighted_component(
         "meter_duration_closeness_reward",
@@ -2901,9 +2993,9 @@ def _line_reward_components_from_metrics(
     add_weighted_component("voice_declaration_reward", reward_config.voice_declaration_weight, voice_decl)
     add_weighted_component("score_voice_reward", reward_config.score_voice_weight, score_voice)
 
-    musical_bar_units = np.array(local_metrics.musical_bar_units, dtype=np.float32)
-    written_bar_units = np.array(local_metrics.written_bar_units, dtype=np.float32)
-    written_counts = np.cumsum(written_bar_units)
+    repeat_expanded_measure_increments = np.array(local_metrics.musical_bar_units, dtype=np.float32)
+    written_measure_increments = np.array(local_metrics.written_bar_units, dtype=np.float32)
+    written_counts = np.cumsum(written_measure_increments)
     expected = float(target.expected_bars)
     if expected > 0 and reward_config.bar_count_weight != 0.0:
         previous_written_counts = np.concatenate(([0.0], written_counts[:-1])).astype(np.float32)
@@ -2913,7 +3005,7 @@ def _line_reward_components_from_metrics(
 
     expanded_expected = float(getattr(target, "expected_repeat_expanded_bars", float(target.expected_bars) * 2.0))
     if expanded_expected > 0 and reward_config.expanded_bar_count_weight != 0.0:
-        expanded_counts = np.cumsum(musical_bar_units)
+        expanded_counts = np.cumsum(repeat_expanded_measure_increments)
         previous_expanded_counts = np.concatenate(([0.0], expanded_counts[:-1])).astype(np.float32)
         expanded_bar_count = np.maximum(0.0, 1.0 - np.abs(expanded_counts - expanded_expected) / expanded_expected)
         previous_expanded_bar_count = np.maximum(
@@ -3063,6 +3155,16 @@ def patch_rewards_single_pass(
         component_rewards["aria_chroma_top_hist_active"] = _terminal_patch_rewards(
             len(patch_texts),
             top_component,
+        )
+    if similarity_weights.aria_strict_symbolic != 0.0:
+        strict_component = _active_similarity_component(
+            similarity_weights.aria_strict_symbolic
+            * float(final_score.breakdown.get(f"aria_{STRICT_SYMBOLIC_COMPONENT_Z_KEY}", 0.0)),
+            final_score,
+        )
+        component_rewards[f"aria_{STRICT_SYMBOLIC_COMPONENT_Z_KEY}_active"] = _terminal_patch_rewards(
+            len(patch_texts),
+            strict_component,
         )
 
     rewards = [
@@ -4714,6 +4816,9 @@ def compact_monitor_event(record: dict) -> dict:
         "value_post_update",
         "fixed_eval_exact_kl",
         "checkpoint",
+        "sample_rewards",
+        "update_sample_rewards",
+        "ppo_epoch_logs",
     )
     compact = {key: record[key] for key in scalar_keys if key in record}
     for key in nested_keys:
@@ -5272,6 +5377,7 @@ def run_ppo_smoke(
             aria_harmony_aligned_root=args.aria_harmony_aligned_root_reward_weight,
             aria_harmony_aligned_bass=args.aria_harmony_aligned_bass_reward_weight,
             aria_harmony_aligned_top=args.aria_harmony_aligned_top_reward_weight,
+            aria_strict_symbolic=args.aria_strict_symbolic_reward_weight,
         )
     else:
         similarity_weights = SimilarityRewardWeights()
@@ -6250,17 +6356,42 @@ def main() -> int:
     parser.add_argument("--target-json", default=str(Path("data/processed/goldberg/structure/aria_bar_skeleton.json")))
     parser.add_argument("--target-structure-abc", required=True)
     parser.add_argument("--aria-reference-abc", default=str(Path("data/processed/goldberg/abc/aria-bwv-988.abc")))
-    parser.add_argument("--aria-chroma-reward-weight", type=float, default=1.0)
+    parser.add_argument(
+        "--aria-chroma-reward-weight",
+        type=float,
+        default=0.0,
+        help=(
+            "Aria chroma histogram reward weight. Default is 0 because strict symbolic "
+            "similarity is the active similarity reward; set this positive to re-enable chroma."
+        ),
+    )
     parser.add_argument(
         "--aria-chroma-top-reward-weight",
         type=float,
         default=None,
         help="Separate top-voice chroma histogram reward weight. Defaults to --aria-chroma-reward-weight.",
     )
-    parser.add_argument("--aria-harmony-reward-weight", type=float, default=1.0)
+    parser.add_argument(
+        "--aria-harmony-reward-weight",
+        type=float,
+        default=0.0,
+        help=(
+            "Legacy/non-strict Aria harmony DTW reward weight. Default is 0 because "
+            "--aria-strict-symbolic-reward-weight is the active symbolic harmony reward."
+        ),
+    )
     parser.add_argument("--aria-harmony-aligned-root-reward-weight", type=float, default=None)
     parser.add_argument("--aria-harmony-aligned-bass-reward-weight", type=float, default=None)
     parser.add_argument("--aria-harmony-aligned-top-reward-weight", type=float, default=None)
+    parser.add_argument(
+        "--aria-strict-symbolic-reward-weight",
+        type=float,
+        default=1.0,
+        help=(
+            "Terminal reward weight for strict symbolic Aria similarity, computed as fixed weights "
+            "over individually global-base-z normalized aligned, DTW, n-gram, and cadence submetrics."
+        ),
+    )
     parser.add_argument("--max-similarity-reward", type=float, default=3.5)
     parser.add_argument("--similarity-chroma-bins", type=int, default=128)
     parser.add_argument("--similarity-band-ratio", type=float, default=0.25)
@@ -6284,6 +6415,7 @@ def main() -> int:
     parser.add_argument("--countdown-reward-weight", type=float, default=0.25)
     parser.add_argument("--line-closure-reward-weight", type=float, default=0.25)
     parser.add_argument("--bar-token-reward-weight", type=float, default=0.10)
+    parser.add_argument("--note-bearing-line-reward-weight", type=float, default=0.25)
     parser.add_argument("--meter-alignment-reward-weight", type=float, default=0.75)
     parser.add_argument("--meter-duration-closeness-reward-weight", type=float, default=0.75)
     parser.add_argument("--bar-meter-consistency-reward-weight", type=float, default=0.75)
@@ -6352,6 +6484,21 @@ def main() -> int:
         type=int,
         default=1,
         help="Number of prompt rows to load from --prompts-jsonl. Use 30 for the full Goldberg PPO prompt set.",
+    )
+    parser.add_argument(
+        "--prompt-bar-filter",
+        choices=("none", "aria-matching"),
+        default="aria-matching",
+        help=(
+            "Optional prompt subset filter. aria-matching keeps only prompts whose source structure "
+            "has the target written score-measure count and repeat-expanded count."
+        ),
+    )
+    parser.add_argument(
+        "--prompt-bar-filter-tolerance",
+        type=float,
+        default=1e-6,
+        help="Absolute tolerance for --prompt-bar-filter aria-matching bar-count comparisons.",
     )
     parser.add_argument(
         "--prompt-selection",
@@ -6626,6 +6773,15 @@ def main() -> int:
         help="Offset added to --seed for the independent fixed-eval prompt shuffle.",
     )
     parser.add_argument(
+        "--fixed-eval-reuse-prompt-batch",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Reuse the same fixed-eval prompt batch at every fixed-eval event. "
+            "Disable with --no-fixed-eval-reuse-prompt-batch to rotate eval prompts over events."
+        ),
+    )
+    parser.add_argument(
         "--fixed-eval-rollout-batch-size",
         type=int,
         default=0,
@@ -6761,6 +6917,7 @@ def main() -> int:
     value_head, value_head_load = build_value_head(policy_shape, args, device)
     prompts = load_prompt_rows(args.prompts_jsonl, limit=args.prompt_limit)
     prompt_targets = load_prompt_structural_targets(prompts, args)
+    prompts, prompt_targets, prompt_bar_filter_metadata = filter_prompts_by_bar_target(prompts, prompt_targets, args)
     reward_config = GoldbergRewardConfig(
         completion_weight=args.completion_reward_weight,
         expanded_completion_weight=args.expanded_completion_reward_weight,
@@ -6770,6 +6927,7 @@ def main() -> int:
         countdown_weight=args.countdown_reward_weight,
         line_closure_weight=args.line_closure_reward_weight,
         bar_token_weight=args.bar_token_reward_weight,
+        note_bearing_line_weight=args.note_bearing_line_reward_weight,
         meter_alignment_weight=args.meter_alignment_reward_weight,
         meter_duration_closeness_weight=args.meter_duration_closeness_reward_weight,
         bar_meter_consistency_weight=args.bar_meter_consistency_reward_weight,
@@ -6821,6 +6979,7 @@ def main() -> int:
         "prompt_schedule": {
             "prompt_limit": args.prompt_limit,
             "loaded_prompt_count": len(prompts),
+            "prompt_bar_filter": prompt_bar_filter_metadata,
             "prompt_selection": args.prompt_selection,
             "prompt_batch_mode": args.prompt_batch_mode,
             "consumption_granularity": args.prompt_batch_mode,
@@ -6838,6 +6997,7 @@ def main() -> int:
             "resolved_prompt_selection": resolve_fixed_eval_prompt_selection(args),
             "prompt_seed": args.seed + args.fixed_eval_prompt_seed_offset,
             "prompt_seed_offset": args.fixed_eval_prompt_seed_offset,
+            "reuse_prompt_batch": args.fixed_eval_reuse_prompt_batch,
             "prompt_batch_mode": args.fixed_eval_prompt_batch_mode,
             "resolved_prompt_batch_mode": resolve_fixed_eval_prompt_batch_mode(args),
             "consumption_granularity": resolve_fixed_eval_prompt_batch_mode(args),

@@ -9,6 +9,7 @@ import numpy as np
 
 from evaluation.chroma_similarity import chroma_features, load_chroma_feature_set, parse_piece_tonic
 from evaluation.harmony_similarity import compare_harmony, harmony_from_text
+from evaluation.strict_similarity import STRICT_SYMBOLIC_COMPONENT_Z_KEY
 from evaluation.similarity_rewards import (
     SimilarityReference,
     SimilarityRewardWeights,
@@ -198,6 +199,34 @@ class ChromaSimilarityTests(unittest.TestCase):
         mocked_harmony.assert_called_once()
         self.assertAlmostEqual(payload["similarity_reward"], 2.0 * 0.50 + 3.0 * 0.25 + 5.0 * 0.75 + 7.0 * 0.40)
 
+    def test_aria_harmony_scores_use_written_reference_not_repeat_expanded_reference(self):
+        aria_harmony = [{"root": idx, "bass": idx, "quality": "maj"} for idx in range(64)]
+        candidate_harmony = [{"root": idx, "bass": idx, "quality": "maj"} for idx in range(32)]
+
+        with (
+            patch("evaluation.similarity_rewards.harmony_from_text", return_value=candidate_harmony),
+            patch(
+                "evaluation.similarity_rewards.compare_harmony",
+                return_value={"dtw_combined": 0.75},
+            ) as compare,
+        ):
+            payload = score_similarity_reward(
+                prompt_text="",
+                completion_text="X:1\nM:4/4\nL:1/4\nK:C\n[V:1]C|\n",
+                weights=SimilarityRewardWeights(aria_harmony=1.0),
+                aria=SimilarityReference(path=Path("aria.abc"), harmony=aria_harmony),
+                variation=None,
+                bins=8,
+                band_ratio=0.25,
+                timeout_s=1.0,
+            )
+
+        reference_arg = compare.call_args.args[0]
+        self.assertEqual(len(reference_arg), 32)
+        self.assertEqual([item["root"] for item in reference_arg[:2]], [0, 1])
+        self.assertEqual([item["root"] for item in reference_arg[16:18]], [32, 33])
+        self.assertEqual(payload["aria_harmony_dtw_combined"], 0.75)
+
     def test_legacy_harmony_combined_key_still_scores(self):
         with patch(
             "evaluation.similarity_rewards._harmony_scores",
@@ -218,6 +247,86 @@ class ChromaSimilarityTests(unittest.TestCase):
             )
 
         self.assertAlmostEqual(payload["similarity_reward"], 1.0)
+
+    def test_strict_symbolic_similarity_adds_component_z_reward(self):
+        aria_text = "\n".join(
+            [
+                "X:1",
+                "M:4/4",
+                "L:1/4",
+                "K:C",
+                "V:1",
+                "[V:1]C E G c|",
+                "[V:1]F A c f|",
+                "[V:1]G B d g|",
+                "[V:1]C E G c|",
+            ]
+        )
+        prompt = "X:1\nM:4/4\nL:1/4\nK:C\nV:1\n"
+        completion = "\n".join(
+            [
+                "[r:0/3][V:1]C E G c|",
+                "[r:1/2][V:1]F A c f|",
+                "[r:2/1][V:1]G B d g|",
+                "[r:3/0][V:1]C E G c|",
+            ]
+        )
+
+        payload = score_similarity_reward(
+            prompt_text=prompt,
+            completion_text=completion,
+            weights=SimilarityRewardWeights(aria_strict_symbolic=0.5),
+            aria=SimilarityReference(path=Path("aria.abc"), harmony=harmony_from_text(aria_text)),
+            variation=None,
+            bins=8,
+            band_ratio=0.25,
+            timeout_s=1.0,
+        )
+
+        active_key = f"aria_{STRICT_SYMBOLIC_COMPONENT_Z_KEY}"
+        self.assertTrue(payload["similarity_harmony_valid"])
+        self.assertIn(active_key, payload)
+        self.assertIn("aria_strict_aligned_root_bass_global_base_z", payload)
+        expected_component_z = (
+            0.30 * payload["aria_strict_aligned_root_bass_global_base_z"]
+            + 0.25 * payload["aria_strict_dtw_combined_narrow_global_base_z"]
+            + 0.20 * payload["aria_strict_root_bass_bigram_weighted_jaccard_global_base_z"]
+            + 0.15 * payload["aria_strict_root_bass_fourgram_weighted_jaccard_global_base_z"]
+            + 0.10 * payload["aria_strict_cadence_root_bass_global_base_z"]
+        )
+        self.assertAlmostEqual(payload[active_key], expected_component_z)
+        self.assertAlmostEqual(payload["similarity_reward"], 0.5 * payload[active_key])
+
+    def test_strict_symbolic_similarity_does_not_emit_legacy_harmony_scores(self):
+        aria_text = "\n".join(
+            [
+                "X:1",
+                "M:4/4",
+                "L:1/4",
+                "K:C",
+                "V:1",
+                "[V:1]C E G c|",
+                "[V:1]F A c f|",
+            ]
+        )
+        completion = "[r:0/1][V:1]C E G c|\n[r:1/0][V:1]F A c f|\n"
+
+        payload = score_similarity_reward(
+            prompt_text="X:1\nM:4/4\nL:1/4\nK:C\nV:1\n",
+            completion_text=completion,
+            weights=SimilarityRewardWeights(aria_strict_symbolic=1.0),
+            aria=SimilarityReference(path=Path("aria.abc"), harmony=harmony_from_text(aria_text)),
+            variation=None,
+            bins=8,
+            band_ratio=0.25,
+            timeout_s=1.0,
+        )
+
+        self.assertTrue(payload["similarity_harmony_valid"])
+        self.assertIn(f"aria_{STRICT_SYMBOLIC_COMPONENT_Z_KEY}", payload)
+        self.assertNotIn("aria_harmony_harmony_dtw", payload)
+        self.assertNotIn("aria_harmony_aligned_root", payload)
+        self.assertNotIn("aria_harmony_combined", payload)
 
     def test_final_similarity_reward_fields_do_not_apply_diagnostic_gate(self):
         fields = finalize_similarity_reward_fields(

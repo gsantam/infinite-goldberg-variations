@@ -604,6 +604,7 @@ def run_smoke(
         aria_harmony_aligned_root=args.aria_harmony_aligned_root_reward_weight,
         aria_harmony_aligned_bass=args.aria_harmony_aligned_bass_reward_weight,
         aria_harmony_aligned_top=args.aria_harmony_aligned_top_reward_weight,
+        aria_strict_symbolic=args.aria_strict_symbolic_reward_weight,
     )
     aria_similarity_ref: SimilarityReference | None = None
     if similarity_weights.enabled:
@@ -1097,17 +1098,42 @@ def main() -> int:
         help="Reference NotaGen ABC whose body/stream-line count is used for the bar-count reward.",
     )
     parser.add_argument("--aria-reference-abc", default=str(PROJECT_ROOT / "data" / "processed" / "goldberg" / "abc" / "aria-bwv-988.abc"))
-    parser.add_argument("--aria-chroma-reward-weight", type=float, default=1.0)
+    parser.add_argument(
+        "--aria-chroma-reward-weight",
+        type=float,
+        default=0.0,
+        help=(
+            "Aria chroma histogram reward weight. Default is 0 because strict symbolic "
+            "similarity is the active similarity reward; set this positive to re-enable chroma."
+        ),
+    )
     parser.add_argument(
         "--aria-chroma-top-reward-weight",
         type=float,
         default=None,
         help="Separate top-voice chroma histogram reward weight. Defaults to --aria-chroma-reward-weight.",
     )
-    parser.add_argument("--aria-harmony-reward-weight", type=float, default=1.0)
+    parser.add_argument(
+        "--aria-harmony-reward-weight",
+        type=float,
+        default=0.0,
+        help=(
+            "Legacy/non-strict Aria harmony DTW reward weight. Default is 0 because "
+            "--aria-strict-symbolic-reward-weight is the active symbolic harmony reward."
+        ),
+    )
     parser.add_argument("--aria-harmony-aligned-root-reward-weight", type=float, default=None)
     parser.add_argument("--aria-harmony-aligned-bass-reward-weight", type=float, default=None)
     parser.add_argument("--aria-harmony-aligned-top-reward-weight", type=float, default=None)
+    parser.add_argument(
+        "--aria-strict-symbolic-reward-weight",
+        type=float,
+        default=1.0,
+        help=(
+            "Sequence-level reward weight for strict symbolic Aria similarity, computed as fixed "
+            "weights over individually global-base-z normalized aligned, DTW, n-gram, and cadence submetrics."
+        ),
+    )
     parser.add_argument("--max-similarity-reward", type=float, default=3.5, help="Cap raw added similarity reward. Use <=0 to disable.")
     parser.add_argument("--similarity-chroma-bins", type=int, default=128)
     parser.add_argument("--similarity-band-ratio", type=float, default=0.25)
@@ -1238,6 +1264,7 @@ def main() -> int:
             "aria_harmony_aligned_root_weight": args.aria_harmony_aligned_root_reward_weight,
             "aria_harmony_aligned_bass_weight": args.aria_harmony_aligned_bass_reward_weight,
             "aria_harmony_aligned_top_weight": args.aria_harmony_aligned_top_reward_weight,
+            "aria_strict_symbolic_weight": args.aria_strict_symbolic_reward_weight,
             "max_similarity_reward": args.max_similarity_reward,
             "aria_reference_abc": args.aria_reference_abc,
             "chroma_bins": args.similarity_chroma_bins,

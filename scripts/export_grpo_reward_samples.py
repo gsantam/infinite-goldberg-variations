@@ -24,6 +24,7 @@ COMPONENT_KEYS = (
     "countdown_reward",
     "line_closure_reward",
     "bar_token_reward",
+    "note_bearing_line_reward",
     "meter_alignment_reward",
     "meter_duration_closeness_reward",
     "bar_meter_consistency_reward",

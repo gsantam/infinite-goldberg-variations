@@ -197,8 +197,10 @@ $REMOTE_PY scripts/run_notagen_sft_epoch_sampling.py \
   --timeout-s 1800 \
   --precision bf16 \
   --clamp2-dir "$REMOTE_NOTAGEN/clamp2" \
-  --aria-chroma-reward-weight 1 \
-  --aria-harmony-reward-weight 1 \
+  --aria-chroma-reward-weight 0 \
+  --aria-chroma-top-reward-weight 0 \
+  --aria-harmony-reward-weight 0 \
+  --aria-strict-symbolic-reward-weight 1 \
   --max-similarity-reward 3.5 \
   --similarity-chroma-bins 128 \
   --similarity-band-ratio 0.25 \
@@ -322,6 +324,7 @@ $SSH "$HOST" "cd $REMOTE_REPO && \
     --output-json data/processed/notagen/remote_runs/ppo_e3_dryrun_\$(date -u +%Y%m%dT%H%M%SZ).json \
     --max-steps 1 \
     --prompt-limit 1 \
+    --prompt-bar-filter aria-matching \
     --no-step \
     --cached-rollout \
     --precision bf16 \
@@ -332,10 +335,11 @@ $SSH "$HOST" "cd $REMOTE_REPO && \
     --gae-lambda 0.95"
 ```
 
-Default PPO similarity rewards are currently active:
+Default PPO similarity reward:
 
-- `--aria-chroma-reward-weight 1.0`
-- `--aria-harmony-reward-weight 1.0`
+- `--aria-strict-symbolic-reward-weight 1.0`
+- `--aria-chroma-reward-weight 0.0`
+- `--aria-harmony-reward-weight 0.0`
 - `--max-similarity-reward 3.5`
 
 The dry run logs timings for rollout, reward scoring, replay/logprob, and PPO loss. Use these timings before launching longer training.
@@ -350,37 +354,38 @@ total_reward = structural_total_reward + active_similarity_reward
 
 Structural terms are `parse_reward`, `countdown_reward`, `line_closure_reward`, `bar_token_reward`, `meter_alignment_reward`, `meter_duration_closeness_reward`, `bar_meter_consistency_reward`, `bar_count_reward`, `voice_declaration_reward`, and `score_voice_reward`.
 
-The active aria similarity terms are:
+The active aria similarity term is:
 
 ```text
-aria_chroma_harmonic_hist = mean(aria_chroma_full_hist, aria_chroma_bass_hist)
-aria_harmony_dtw_combined = mean(aria_harmony_harmony_dtw, aria_harmony_root_dtw, aria_harmony_bass_dtw)
 active_similarity_reward = min(
-  aria_chroma_harmonic_hist
-    + aria_chroma_top_hist
-    + aria_harmony_dtw_combined
-    + 0.25 * aria_harmony_aligned_root
-    + 0.25 * aria_harmony_aligned_bass,
+  aria_strict_symbolic_component_global_base_z,
   max_similarity_reward,
 )
 ```
 
-`aria_harmony_combined` is the legacy name used by older score files.
+Chroma histogram metrics and old non-strict `aria_harmony_*` DTW/aligned metrics
+are logged diagnostics unless explicitly re-enabled. `aria_harmony_combined` is
+the legacy name used by older score files.
 `similarity_validity_gate` is logged for diagnostics only; it is not multiplied into the scalar reward.
 
 Defaults are:
 
 ```text
---aria-chroma-reward-weight 1.0
+--aria-chroma-reward-weight 0.0
 --aria-chroma-top-reward-weight same as aria chroma unless explicitly set
---aria-harmony-reward-weight 1.0
---aria-harmony-aligned-root-reward-weight 0.25 when aria harmony is enabled
---aria-harmony-aligned-bass-reward-weight 0.25 when aria harmony is enabled
+--aria-harmony-reward-weight 0.0
+--aria-harmony-aligned-root-reward-weight 0.0 when aria harmony is disabled
+--aria-harmony-aligned-bass-reward-weight 0.0 when aria harmony is disabled
 --aria-harmony-aligned-top-reward-weight 0.0 by default
+--aria-strict-symbolic-reward-weight 1.0
 --max-similarity-reward 3.5
 ```
 
-`top_hist` is active as a separate top-voice chroma histogram reward. Same-bar `aligned_root` and `aligned_bass` are active low-weight auxiliaries. Same-bar `aligned_top` is available but default-off because GT is low on it. `top_contour_dtw` is logged/candidate, and `density_dtw` is diagnostic only.
+`top_hist`, same-bar `aligned_root`/`aligned_bass`, and old harmony DTW can be
+re-enabled for ablations, but they are not part of the current default scalar
+reward. Same-bar `aligned_top` is available but default-off because GT is low
+on it. `top_contour_dtw` is logged/candidate, and `density_dtw` is diagnostic
+only because it was easy to game.
 
 ## Simple PPO Sanity-Test Rewards
 
@@ -481,6 +486,7 @@ $SSH "$HOST" "cd $REMOTE_REPO && \
     --output-json data/processed/notagen/remote_runs/ppo_e3_rollout_only.json \
     --max-steps 3 \
     --prompt-limit 3 \
+    --prompt-bar-filter aria-matching \
     --trajectories-per-step 4 \
     --rollout-batch-size 4 \
     --rollout-only \
@@ -505,6 +511,7 @@ $SSH "$HOST" "cd $REMOTE_REPO && \
     --output-json \$RUN_DIR/result.json \
     --max-steps 30 \
     --prompt-limit 30 \
+    --prompt-bar-filter aria-matching \
     --prompt-selection ordered \
     --prompt-batch-mode step \
     --rollout-seed-scope run \
@@ -534,6 +541,7 @@ python scripts/train_notagen_ppo_value_head_offline.py \
   --hidden-cache-out data/processed/notagen/remote_runs/ppo_value_hidden_cache.pt \
   --output-value-head data/processed/notagen/remote_runs/ppo_value_head_offline.pt \
   --output-json data/processed/notagen/remote_runs/ppo_value_head_offline_metrics.json \
+  --save-dataset-split-json data/processed/notagen/remote_runs/ppo_value_head_offline_split.json \
   --epochs 50 \
   --holdout-last-step \
   --normalize-value-loss \
@@ -547,17 +555,17 @@ python scripts/train_notagen_ppo_value_head_offline.py \
   --hidden-cache-in data/processed/notagen/remote_runs/ppo_value_hidden_cache.pt \
   --output-value-head data/processed/notagen/remote_runs/ppo_value_head_offline_h1024.pt \
   --output-json data/processed/notagen/remote_runs/ppo_value_head_offline_h1024_metrics.json \
+  --dataset-split-json data/processed/notagen/remote_runs/ppo_value_head_offline_split.json \
   --epochs 100 \
   --value-head-hidden-size 1024 \
   --value-head-dropout 0.05 \
-  --holdout-last-step \
   --normalize-value-loss \
   --value-loss-scale-min 1.0
 ```
 
 The main diagnostics are `explained_variance`, `correlation`, `mse`, `mae`, and `bias` on both train and holdout samples. A useful critic should improve explained variance/correlation, not just reduce train MSE.
 
-`scripts/train_notagen_ppo_value_head_offline.py` saves the best checkpoint by default: `--output-value-head` is selected by lowest holdout/eval MSE when an eval split is present, otherwise by lowest train MSE. The metrics JSON records this under `training.best_value_head` and `saved_value_head_selection`.
+`scripts/train_notagen_ppo_value_head_offline.py` saves the best checkpoint by default: `--output-value-head` is selected by lowest holdout/eval MSE when an eval split is present, otherwise by lowest train MSE. The metrics JSON records this under `training.best_value_head` and `saved_value_head_selection`. Use `--save-dataset-split-json` and `--dataset-split-json` to keep critic sweeps on the same train/eval rows. After selecting by holdout, `--final-train-all-epochs N` optionally starts from the selected value head and refits on all prepared samples before saving.
 
 Patch rewards can be assigned in two ways:
 
@@ -671,6 +679,7 @@ $SSH "$HOST" "cd $REMOTE_REPO && \
     --output-json data/processed/notagen/remote_runs/ppo_e3_step1_\$(date -u +%Y%m%dT%H%M%SZ).json \
     --max-steps 1 \
     --prompt-limit 1 \
+    --prompt-bar-filter aria-matching \
     --cached-rollout \
     --precision bf16 \
     --max-generated-patches 256 \
@@ -701,6 +710,7 @@ $SSH "$HOST" "cd $REMOTE_REPO && \
     --output-json \$OUT \
     --max-steps 1 \
     --prompt-limit 1 \
+    --prompt-bar-filter aria-matching \
     --trajectories-per-step 4 \
     --rollout-batch-size 4 \
     --rollout-retries 1 \
@@ -752,6 +762,7 @@ $SSH "$HOST" "cd $REMOTE_REPO && \
     --output-json \$RUN_DIR/result.json \
     --max-steps 1 \
     --prompt-limit 1 \
+    --prompt-bar-filter aria-matching \
     --trajectories-per-step 16 \
     --rollout-batch-size 16 \
     --ppo-replay-microbatch-size 4 \

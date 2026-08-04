@@ -106,6 +106,107 @@ def _json_safe(value):
     return value
 
 
+def _source_json_split_id(value: str | Path) -> str:
+    path = Path(str(value))
+    parts = path.parts
+    if "remote_runs" in parts:
+        start = parts.index("remote_runs")
+        return "/".join(parts[start:])
+    suffix_len = min(4, len(parts))
+    if suffix_len > 0:
+        return "/".join(parts[-suffix_len:])
+    return str(value)
+
+
+def _sample_split_key(sample: PreparedValueSample) -> str:
+    meta = sample.meta
+    source_id = _source_json_split_id(str(meta.get("source_json", "")))
+    rollout_seed = meta.get("rollout_seed")
+    seed_part = "none" if rollout_seed is None else str(int(rollout_seed))
+    return "|".join(
+        (
+            source_id,
+            f"step={int(meta['step'])}",
+            f"prompt={int(meta.get('prompt_index', 0))}",
+            f"trajectory={int(meta['trajectory_index'])}",
+            f"seed={seed_part}",
+        )
+    )
+
+
+def _sample_split_record(sample: PreparedValueSample) -> dict:
+    meta = sample.meta
+    return {
+        "key": _sample_split_key(sample),
+        "source_json_id": _source_json_split_id(str(meta.get("source_json", ""))),
+        "source_json_name": Path(str(meta.get("source_json", ""))).name,
+        "step": int(meta["step"]),
+        "prompt_index": int(meta.get("prompt_index", 0)),
+        "prompt_name": meta.get("prompt_name"),
+        "trajectory_index": int(meta["trajectory_index"]),
+        "rollout_seed": meta.get("rollout_seed"),
+        "patch_count": int(meta.get("patch_count", sample.targets.numel())),
+        "reward": meta.get("reward"),
+    }
+
+
+def _split_manifest_records(samples: list[PreparedValueSample]) -> list[dict]:
+    return [_sample_split_record(sample) for sample in samples]
+
+
+def _split_keys_from_records(records: list) -> set[str]:
+    keys: set[str] = set()
+    for record in records:
+        if isinstance(record, str):
+            keys.add(record)
+        elif isinstance(record, dict):
+            key = record.get("key")
+            if key is None:
+                raise RuntimeError(f"stored split record is missing key: {record}")
+            keys.add(str(key))
+        else:
+            raise RuntimeError(f"unsupported stored split record type: {type(record)!r}")
+    return keys
+
+
+def _load_dataset_split(path: Path) -> tuple[set[str], set[str], dict]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    split_payload = payload.get("dataset_split") if isinstance(payload, dict) else None
+    if split_payload is None and isinstance(payload, dict):
+        split_payload = payload.get("run_config", {}).get("split")
+    if split_payload is None:
+        split_payload = payload
+    if not isinstance(split_payload, dict):
+        raise RuntimeError(f"dataset split {path} must be a JSON object")
+
+    train_records = split_payload.get("train") or split_payload.get("train_keys")
+    eval_records = split_payload.get("eval") or split_payload.get("eval_keys") or []
+    if train_records is None:
+        raise RuntimeError(f"dataset split {path} is missing train/train_keys")
+    if not isinstance(train_records, list) or not isinstance(eval_records, list):
+        raise RuntimeError(f"dataset split {path} train/eval entries must be lists")
+    return _split_keys_from_records(train_records), _split_keys_from_records(eval_records), split_payload
+
+
+def _split_meta(
+    *,
+    mode: str,
+    train: list[PreparedValueSample],
+    eval_samples: list[PreparedValueSample],
+    **extra,
+) -> dict:
+    return {
+        "mode": mode,
+        **extra,
+        "train_count": len(train),
+        "eval_count": len(eval_samples),
+        "train": _split_manifest_records(train),
+        "eval": _split_manifest_records(eval_samples),
+        "train_keys": [_sample_split_key(sample) for sample in train],
+        "eval_keys": [_sample_split_key(sample) for sample in eval_samples],
+    }
+
+
 def discounted_returns(rewards: torch.Tensor, gamma: float) -> torch.Tensor:
     returns = torch.empty_like(rewards, dtype=torch.float32)
     running = torch.zeros((), device=rewards.device, dtype=torch.float32)
@@ -545,26 +646,68 @@ def _split_samples(
     holdout_last_step: bool,
     eval_fraction: float,
     seed: int,
+    dataset_split_json: Path | None = None,
 ) -> tuple[list[PreparedValueSample], list[PreparedValueSample], dict]:
+    if dataset_split_json is not None:
+        train_keys, eval_keys, split_payload = _load_dataset_split(dataset_split_json)
+        overlap = train_keys & eval_keys
+        if overlap:
+            preview = sorted(overlap)[:5]
+            raise RuntimeError(f"stored dataset split has overlapping train/eval keys: {preview}")
+        samples_by_key = {_sample_split_key(sample): sample for sample in samples}
+        duplicate_count = len(samples) - len(samples_by_key)
+        if duplicate_count:
+            raise RuntimeError(f"prepared samples contain {duplicate_count} duplicate split keys")
+        missing_train = sorted(train_keys - set(samples_by_key))
+        missing_eval = sorted(eval_keys - set(samples_by_key))
+        if missing_train or missing_eval:
+            raise RuntimeError(
+                f"stored dataset split does not match prepared samples: "
+                f"missing_train={missing_train[:3]} missing_eval={missing_eval[:3]}"
+            )
+        train = [samples_by_key[key] for key in split_payload.get("train_keys", []) if key in samples_by_key]
+        eval_samples = [samples_by_key[key] for key in split_payload.get("eval_keys", []) if key in samples_by_key]
+        if not train:
+            train = [samples_by_key[key] for key in sorted(train_keys)]
+        if not eval_samples:
+            eval_samples = [samples_by_key[key] for key in sorted(eval_keys)]
+        return train, eval_samples, _split_meta(
+            mode="stored",
+            train=train,
+            eval_samples=eval_samples,
+            source=str(dataset_split_json),
+            stored_mode=split_payload.get("mode"),
+        )
+
     if holdout_last_step:
         last_step = max(int(sample.meta["step"]) for sample in samples)
         train = [sample for sample in samples if int(sample.meta["step"]) != last_step]
         eval_samples = [sample for sample in samples if int(sample.meta["step"]) == last_step]
         if train and eval_samples:
-            return train, eval_samples, {"mode": "holdout_last_step", "last_step": last_step}
+            return train, eval_samples, _split_meta(
+                mode="holdout_last_step",
+                train=train,
+                eval_samples=eval_samples,
+                last_step=last_step,
+            )
 
     if eval_fraction > 0.0 and len(samples) > 1:
         rng = random.Random(seed)
         shuffled = samples[:]
         rng.shuffle(shuffled)
         eval_count = max(1, min(len(shuffled) - 1, round(len(shuffled) * eval_fraction)))
-        return shuffled[eval_count:], shuffled[:eval_count], {
-            "mode": "random_fraction",
-            "eval_fraction": eval_fraction,
-            "eval_count": eval_count,
-        }
+        eval_samples = shuffled[:eval_count]
+        train = shuffled[eval_count:]
+        return train, eval_samples, _split_meta(
+            mode="random_fraction",
+            train=train,
+            eval_samples=eval_samples,
+            eval_fraction=eval_fraction,
+            seed=seed,
+        )
 
-    return samples[:], [], {"mode": "train_all"}
+    train = samples[:]
+    return train, [], _split_meta(mode="train_all", train=train, eval_samples=[])
 
 
 def _iter_sample_batches(samples: list[PreparedValueSample], batch_size: int):
@@ -767,10 +910,36 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--holdout-last-step", action="store_true")
     parser.add_argument("--eval-fraction", type=float, default=0.0)
+    parser.add_argument(
+        "--dataset-split-json",
+        type=Path,
+        default=None,
+        help=(
+            "Reuse a stored train/eval split. Accepts this script's output JSON "
+            "or a JSON object with dataset_split/run_config.split train/eval keys."
+        ),
+    )
+    parser.add_argument(
+        "--save-dataset-split-json",
+        type=Path,
+        default=None,
+        help="Write the resolved train/eval split manifest for reproducible critic retraining.",
+    )
+    parser.add_argument(
+        "--final-train-all-epochs",
+        type=int,
+        default=0,
+        help=(
+            "After selecting the best validation state, train that value head on all prepared "
+            "samples for this many extra epochs before saving."
+        ),
+    )
     args = parser.parse_args()
 
     if args.epochs < 0:
         raise ValueError(f"--epochs must be non-negative, got {args.epochs}")
+    if args.final_train_all_epochs < 0:
+        raise ValueError(f"--final-train-all-epochs must be non-negative, got {args.final_train_all_epochs}")
     if args.trajectory_batch_size <= 0:
         raise ValueError(f"--trajectory-batch-size must be positive, got {args.trajectory_batch_size}")
     if not 0.0 <= args.eval_fraction < 1.0:
@@ -869,12 +1038,40 @@ def main() -> int:
         holdout_last_step=args.holdout_last_step,
         eval_fraction=args.eval_fraction,
         seed=args.seed,
+        dataset_split_json=args.dataset_split_json,
     )
     if not train_samples:
         raise ValueError("offline value training split produced no training samples")
+    if args.save_dataset_split_json:
+        args.save_dataset_split_json.parent.mkdir(parents=True, exist_ok=True)
+        args.save_dataset_split_json.write_text(
+            json.dumps({"dataset_split": split_meta}, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
 
     train_log, best_value_head_state_dict = _train_value_head(value_head, train_samples, eval_samples, args, device)
     value_head.load_state_dict(best_value_head_state_dict)
+    saved_value_head_selection = train_log.get("best_value_head")
+    final_train_all_log = None
+    if args.final_train_all_epochs > 0:
+        final_args = argparse.Namespace(**vars(args))
+        final_args.epochs = int(args.final_train_all_epochs)
+        final_args.seed = int(args.seed) + 1_000_000
+        final_train_all_log, final_value_head_state_dict = _train_value_head(
+            value_head,
+            prepared_samples,
+            [],
+            final_args,
+            device,
+        )
+        value_head.load_state_dict(final_value_head_state_dict)
+        saved_value_head_selection = {
+            "mode": "final_train_all",
+            "source": "best_value_head",
+            "final_train_all_epochs": int(args.final_train_all_epochs),
+            "initial_best_value_head": train_log.get("best_value_head"),
+            "final_best_value_head": final_train_all_log.get("best_value_head"),
+        }
     save_value_head_checkpoint(value_head, args.output_value_head)
 
     patch_counts = [int(sample.targets.numel()) for sample in prepared_samples]
@@ -887,6 +1084,7 @@ def main() -> int:
             "loaded_value_head": loaded_value_head,
             "value_head": value_head.config(),
             "split": split_meta,
+            "saved_value_head_selection": saved_value_head_selection,
         },
         "dataset": {
             "trajectories": len(prepared_samples),
@@ -898,9 +1096,12 @@ def main() -> int:
             "patch_count_max": int(max(patch_counts)),
             "samples": [sample.meta for sample in prepared_samples],
         },
-        "training": train_log,
+        "training": {
+            **train_log,
+            "final_train_all": final_train_all_log,
+        },
         "saved_value_head": str(args.output_value_head),
-        "saved_value_head_selection": train_log.get("best_value_head"),
+        "saved_value_head_selection": saved_value_head_selection,
         "saved_hidden_cache": None if args.hidden_cache_out is None else str(args.hidden_cache_out),
     }
     args.output_json.parent.mkdir(parents=True, exist_ok=True)

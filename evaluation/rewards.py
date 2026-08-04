@@ -35,9 +35,9 @@ class StructuralTarget:
 
     @property
     def expected_reward_bars(self) -> int:
-        # Kept for rollout/stopping code that still needs the NotaGen
-        # serialization length. Structural scoring uses expected_bars.
-        return self.expected_structure_bars
+        # Rollout/stopping and structural scoring should use the target score
+        # measure count, not the source variation's serialized line count.
+        return self.expected_bars
 
 
 @dataclass
@@ -50,6 +50,7 @@ class GoldbergRewardConfig:
     countdown_weight: float = 0.25
     line_closure_weight: float = 0.25
     bar_token_weight: float = 0.10
+    note_bearing_line_weight: float = 0.25
     meter_alignment_weight: float = 0.75
     meter_duration_closeness_weight: float = 0.75
     bar_meter_consistency_weight: float = 0.75
@@ -88,6 +89,7 @@ class RewardBreakdown:
     countdown_reward: float
     line_closure_reward: float
     bar_token_reward: float
+    note_bearing_line_reward: float
     meter_alignment_reward: float
     meter_duration_closeness_reward: float
     bar_meter_consistency_reward: float
@@ -134,6 +136,7 @@ class MeterValidationMetrics:
     validated_bars: int
     observed_musical_bars: float
     written_bars: int
+    written_bar_units: float
     strict_validated_bars: int
     bar_meter_consistency_reward: float
     strict_bar_meter_consistency_reward: float
@@ -162,6 +165,7 @@ class StreamLineLocalMetrics:
     meter_alignment_reward: list[float]
     meter_duration_closeness_reward: list[float]
     bar_meter_consistency_reward: list[float]
+    note_bearing_line_reward: list[float]
     musical_bar_units: list[float]
     written_bar_units: list[float]
     voice_declaration_reward: list[float]
@@ -180,6 +184,14 @@ class CandidateStructuralScore:
     breakdown: RewardBreakdown
     stream_lines: list[StreamLineFeatures]
     local_metrics: StreamLineLocalMetrics
+
+
+@dataclass(frozen=True)
+class SourceStructureBarCounts:
+    observed_bars: float
+    observed_repeat_expanded_bars: float
+    observed_lines: int
+    source_format: str
 
 
 def count_notagen_structure_lines(text: str) -> int:
@@ -236,6 +248,28 @@ def _extract_stream_line_features(text: str) -> list[StreamLineFeatures]:
                 body=body,
                 has_bar_token="|" in body or "::" in body,
                 closed=stream_line_closed(line),
+            )
+        )
+    return features
+
+
+def _extract_raw_score_line_features(text: str) -> list[StreamLineFeatures]:
+    features: list[StreamLineFeatures] = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("%"):
+            continue
+        if re.match(r"^[A-Za-z]:", line):
+            continue
+        if "|" not in line and "[V:" not in line:
+            continue
+        features.append(
+            StreamLineFeatures(
+                index=len(features),
+                tag_marker=0,
+                body=line,
+                has_bar_token="|" in line or "::" in line,
+                closed="|" in line or "::" in line,
             )
         )
     return features
@@ -309,21 +343,24 @@ def _split_voice_segments(body: str) -> list[tuple[int | None, str]]:
 
 
 def _parse_length_multiplier(token: str | None) -> Fraction:
-    if not token:
-        return Fraction(1, 1)
-    if token == "/":
-        return Fraction(1, 2)
-    if token.startswith("/"):
-        den = token[1:]
-        if not den:
+    try:
+        if not token:
+            return Fraction(1, 1)
+        if token == "/":
             return Fraction(1, 2)
-        return Fraction(1, int(den))
-    if "/" in token:
-        num, den = token.split("/", 1)
-        if not den:
-            return Fraction(int(num), 2)
-        return Fraction(int(num), int(den))
-    return Fraction(int(token), 1)
+        if token.startswith("/"):
+            den = token[1:]
+            if not den:
+                return Fraction(1, 2)
+            return Fraction(1, int(den))
+        if "/" in token:
+            num, den = token.split("/", 1)
+            if not den:
+                return Fraction(int(num), 2)
+            return Fraction(int(num), int(den))
+        return Fraction(int(token), 1)
+    except Exception:
+        return Fraction(0, 1)
 
 
 def _voice_segment_duration(segment: str, base_length: Fraction) -> Fraction:
@@ -353,6 +390,21 @@ def _voice_segment_duration(segment: str, base_length: Fraction) -> Fraction:
                 tuplet_ratio = Fraction(1, 1)
         total += base_length * multiplier
     return total
+
+
+def _strip_non_note_context(segment: str) -> str:
+    cleaned = re.sub(r'"[^"\n]*"', " ", segment)
+    cleaned = re.sub(r"![^!\n]*!", " ", cleaned)
+    cleaned = re.sub(r"\[[A-Za-z]:[^\]]*\]", " ", cleaned)
+    cleaned = re.sub(r"\{[^}]*\}", " ", cleaned)
+    return cleaned
+
+
+_ABC_NOTE_RE = re.compile(r"[_=^]*[A-Ga-g][,']*(?:\d+(?:/\d*)?|/\d+|/)?")
+
+
+def _line_has_note(segment: str) -> bool:
+    return _ABC_NOTE_RE.search(_strip_non_note_context(segment)) is not None
 
 
 class _Music21ParseTimeout(TimeoutError):
@@ -655,12 +707,15 @@ def _musical_bar_units_by_stream_line(
     header: HeaderContext,
     *,
     musical_bar_unit: Fraction,
-) -> tuple[list[float], float, int, list[float]]:
+) -> tuple[list[float], float, int, list[float], float]:
+    # Historical name: these are score-measure counts, not duration-normalized
+    # aria units. Meter/default length validation happens in the meter rewards.
     if musical_bar_unit <= 0:
         empty = [0.0 for _line in stream_lines]
-        return empty, 0.0, 0, empty
+        return empty, 0.0, 0, empty, 0.0
 
     voice_totals: dict[int | None, Fraction] = {}
+    voice_written_units: dict[int | None, Fraction] = {}
     voice_written_bars: dict[int | None, int] = {}
     voice_repeat_starts: dict[int | None, Fraction] = {}
     voice_meters: dict[int | None, Fraction] = {}
@@ -684,6 +739,7 @@ def _musical_bar_units_by_stream_line(
                     units = Fraction(1, 1)
                     voice_totals[voice] = voice_totals.get(voice, Fraction(0, 1)) + units
                     increments[voice] = increments.get(voice, Fraction(0, 1)) + units
+                    voice_written_units[voice] = voice_written_units.get(voice, Fraction(0, 1)) + units
                     voice_written_bars[voice] = voice_written_bars.get(voice, 0) + 1
                     written_increments[voice] = written_increments.get(voice, Fraction(0, 1)) + units
 
@@ -704,7 +760,46 @@ def _musical_bar_units_by_stream_line(
 
     total_units = float(max(voice_totals.values())) if voice_totals else 0.0
     written_bars = max(voice_written_bars.values()) if voice_written_bars else 0
-    return line_units, total_units, written_bars, line_written_units
+    written_units = float(max(voice_written_units.values())) if voice_written_units else 0.0
+    return line_units, total_units, written_bars, line_written_units, written_units
+
+
+def score_source_structure_bars(
+    abc_text: str,
+    *,
+    musical_bar_unit: Fraction = Fraction(3, 4),
+) -> SourceStructureBarCounts:
+    """Count written and repeat-expanded score measures in source ABC.
+
+    Generated completions are represented as NotaGen `[r:i/j]` stream lines,
+    while PPO prompt source files may be ordinary ABC body lines. This helper
+    supports both formats and intentionally computes only bar counts, not full
+    structural rewards.
+    """
+
+    stream_lines = _extract_stream_line_features(abc_text)
+    source_format = "notagen-stream"
+    if not stream_lines:
+        stream_lines = _extract_raw_score_line_features(abc_text)
+        source_format = "raw-abc"
+    header = _extract_header_context(abc_text)
+    (
+        _line_units,
+        observed_repeat_expanded_bars,
+        _observed_written_bars,
+        _line_written_units,
+        observed_bars,
+    ) = _musical_bar_units_by_stream_line(
+        stream_lines,
+        header,
+        musical_bar_unit=musical_bar_unit,
+    )
+    return SourceStructureBarCounts(
+        observed_bars=float(observed_bars),
+        observed_repeat_expanded_bars=float(observed_repeat_expanded_bars),
+        observed_lines=len(stream_lines),
+        source_format=source_format,
+    )
 
 
 def _duration_closeness(duration: Fraction, meter: Fraction) -> float:
@@ -761,7 +856,13 @@ def _validated_bar_metrics(
         if populated > 0:
             total_stream_bars += 1
 
-    _line_units, observed_musical_bars, observed_written_bars, _line_written_units = _musical_bar_units_by_stream_line(
+    (
+        _line_units,
+        observed_musical_bars,
+        observed_written_bars,
+        _line_written_units,
+        observed_written_bar_units,
+    ) = _musical_bar_units_by_stream_line(
         stream_lines,
         header,
         musical_bar_unit=musical_bar_unit,
@@ -776,6 +877,7 @@ def _validated_bar_metrics(
         validated_bars=validated_stream_bars,
         observed_musical_bars=observed_musical_bars,
         written_bars=observed_written_bars,
+        written_bar_units=observed_written_bar_units,
         strict_validated_bars=strict_validated_bars,
         bar_meter_consistency_reward=bar_meter_consistency_reward,
         strict_bar_meter_consistency_reward=strict_bar_meter_consistency_reward,
@@ -823,9 +925,16 @@ def _stream_line_metric_bundle(
     local_meter_alignment: list[float] = []
     local_meter_duration: list[float] = []
     local_bar_meter: list[float] = []
+    local_note_bearing: list[float] = []
     local_voice_declaration: list[float] = []
     local_score_voice: list[float] = []
-    local_musical_units, observed_musical_bars, observed_written_bars, local_written_units = _musical_bar_units_by_stream_line(
+    (
+        local_musical_units,
+        observed_musical_bars,
+        observed_written_bars,
+        local_written_units,
+        observed_written_bar_units,
+    ) = _musical_bar_units_by_stream_line(
         stream_lines,
         header,
         musical_bar_unit=musical_bar_unit,
@@ -834,6 +943,7 @@ def _stream_line_metric_bundle(
     declared_voices = set(header.voice_lengths)
     for stream_line in stream_lines:
         voice_segments = _split_voice_segments(stream_line.body)
+        local_note_bearing.append(1.0 if any(_line_has_note(segment) for _voice, segment in voice_segments) else 0.0)
         used_voices = {voice for voice, _segment in voice_segments if voice is not None}
         global_used_voices.update(used_voices)
 
@@ -925,6 +1035,7 @@ def _stream_line_metric_bundle(
         validated_bars=global_validated_bars,
         observed_musical_bars=observed_musical_bars,
         written_bars=observed_written_bars,
+        written_bar_units=observed_written_bar_units,
         strict_validated_bars=global_strict_validated_bars,
         bar_meter_consistency_reward=_safe_fraction(global_validated_bars, global_total_stream_bars),
         strict_bar_meter_consistency_reward=_safe_fraction(global_strict_validated_bars, global_total_stream_bars),
@@ -937,6 +1048,7 @@ def _stream_line_metric_bundle(
         meter_alignment_reward=local_meter_alignment,
         meter_duration_closeness_reward=local_meter_duration,
         bar_meter_consistency_reward=local_bar_meter,
+        note_bearing_line_reward=local_note_bearing,
         musical_bar_units=local_musical_units,
         written_bar_units=local_written_units,
         voice_declaration_reward=local_voice_declaration,
@@ -984,6 +1096,12 @@ def _bar_token_reward(stream_lines: list[StreamLineFeatures]) -> float:
     return sum(1 for line in stream_lines if line.has_bar_token) / len(stream_lines)
 
 
+def _note_bearing_line_reward(stream_lines: list[StreamLineFeatures]) -> float:
+    if not stream_lines:
+        return 0.0
+    return sum(1 for line in stream_lines if _line_has_note(line.body)) / len(stream_lines)
+
+
 def _bar_count_reward(observed_bars: float, expected_bars: float) -> float:
     if expected_bars <= 0:
         return 0.0
@@ -1011,6 +1129,7 @@ def _ungated_total_reward(
     countdown_reward: float,
     line_closure_reward: float,
     bar_token_reward: float,
+    note_bearing_line_reward: float,
     meter_alignment_reward: float,
     meter_duration_closeness_reward: float,
     bar_meter_consistency_reward: float,
@@ -1032,6 +1151,7 @@ def _ungated_total_reward(
         + config.countdown_weight * countdown_reward
         + config.line_closure_weight * line_closure_reward
         + config.bar_token_weight * bar_token_reward
+        + config.note_bearing_line_weight * note_bearing_line_reward
         + config.meter_alignment_weight * meter_alignment_reward
         + config.meter_duration_closeness_weight * meter_duration_closeness_reward
         + config.bar_meter_consistency_weight * bar_meter_consistency_reward
@@ -1055,6 +1175,7 @@ def _total_reward(
     bar_count_reward: float,
     voice_declaration_reward: float,
     score_voice_reward: float,
+    note_bearing_line_reward: float = 1.0,
     completion_reward: float = 0.0,
     expanded_completion_reward: float = 0.0,
     expanded_bar_count_reward: float = 0.0,
@@ -1071,6 +1192,7 @@ def _total_reward(
         countdown_reward=countdown_reward,
         line_closure_reward=line_closure_reward,
         bar_token_reward=bar_token_reward,
+        note_bearing_line_reward=note_bearing_line_reward,
         meter_alignment_reward=meter_alignment_reward,
         meter_duration_closeness_reward=meter_duration_closeness_reward,
         bar_meter_consistency_reward=bar_meter_consistency_reward,
@@ -1100,11 +1222,12 @@ def score_candidate_file(
     primary_validated_bars = meter_metrics.validated_bars
     validated_bars = primary_validated_bars
     observed_repeat_expanded_bars = meter_metrics.observed_musical_bars
-    observed_bars = float(meter_metrics.written_bars)
+    observed_bars = float(meter_metrics.written_bar_units)
     parse_reward = parse_metrics.parse_reward
     countdown_reward = _countdown_reward(stream_lines)
     line_closure_reward = _line_closure_reward(stream_lines)
     bar_token_reward = _bar_token_reward(stream_lines)
+    note_bearing_line_reward = _note_bearing_line_reward(stream_lines)
     expected_reward_bars = target.expected_bars
     expected_expanded_bars = target.expected_repeat_expanded_bars
     bar_count_reward = _bar_count_reward(observed_bars, expected_reward_bars)
@@ -1123,6 +1246,7 @@ def score_candidate_file(
         countdown_reward=countdown_reward,
         line_closure_reward=line_closure_reward,
         bar_token_reward=bar_token_reward,
+        note_bearing_line_reward=note_bearing_line_reward,
         meter_alignment_reward=meter_alignment_reward,
         meter_duration_closeness_reward=meter_metrics.meter_duration_closeness_reward,
         bar_meter_consistency_reward=meter_metrics.bar_meter_consistency_reward,
@@ -1160,6 +1284,7 @@ def score_candidate_file(
         countdown_reward=countdown_reward,
         line_closure_reward=line_closure_reward,
         bar_token_reward=bar_token_reward,
+        note_bearing_line_reward=note_bearing_line_reward,
         meter_alignment_reward=meter_alignment_reward,
         meter_duration_closeness_reward=meter_metrics.meter_duration_closeness_reward,
         bar_meter_consistency_reward=meter_metrics.bar_meter_consistency_reward,
@@ -1209,11 +1334,12 @@ def score_candidate_text(
     primary_validated_bars = meter_metrics.validated_bars
     validated_bars = primary_validated_bars
     observed_repeat_expanded_bars = meter_metrics.observed_musical_bars
-    observed_bars = float(meter_metrics.written_bars)
+    observed_bars = float(meter_metrics.written_bar_units)
     parse_reward = parse_metrics.parse_reward
     countdown_reward = _countdown_reward(stream_lines)
     line_closure_reward = _line_closure_reward(stream_lines)
     bar_token_reward = _bar_token_reward(stream_lines)
+    note_bearing_line_reward = _note_bearing_line_reward(stream_lines)
     expected_reward_bars = target.expected_bars
     expected_expanded_bars = target.expected_repeat_expanded_bars
     bar_count_reward = _bar_count_reward(observed_bars, expected_reward_bars)
@@ -1232,6 +1358,7 @@ def score_candidate_text(
         countdown_reward=countdown_reward,
         line_closure_reward=line_closure_reward,
         bar_token_reward=bar_token_reward,
+        note_bearing_line_reward=note_bearing_line_reward,
         meter_alignment_reward=meter_alignment_reward,
         meter_duration_closeness_reward=meter_metrics.meter_duration_closeness_reward,
         bar_meter_consistency_reward=meter_metrics.bar_meter_consistency_reward,
@@ -1269,6 +1396,7 @@ def score_candidate_text(
         countdown_reward=countdown_reward,
         line_closure_reward=line_closure_reward,
         bar_token_reward=bar_token_reward,
+        note_bearing_line_reward=note_bearing_line_reward,
         meter_alignment_reward=meter_alignment_reward,
         meter_duration_closeness_reward=meter_metrics.meter_duration_closeness_reward,
         bar_meter_consistency_reward=meter_metrics.bar_meter_consistency_reward,
@@ -1303,11 +1431,12 @@ def score_candidate_text_with_local_metrics(
     primary_validated_bars = meter_metrics.validated_bars
     validated_bars = primary_validated_bars
     observed_repeat_expanded_bars = meter_metrics.observed_musical_bars
-    observed_bars = float(meter_metrics.written_bars)
+    observed_bars = float(meter_metrics.written_bar_units)
     parse_reward = parse_metrics.parse_reward
     countdown_reward = _countdown_reward(stream_lines)
     line_closure_reward = _line_closure_reward(stream_lines)
     bar_token_reward = _bar_token_reward(stream_lines)
+    note_bearing_line_reward = _note_bearing_line_reward(stream_lines)
     expected_reward_bars = target.expected_bars
     expected_expanded_bars = target.expected_repeat_expanded_bars
     bar_count_reward = _bar_count_reward(observed_bars, expected_reward_bars)
@@ -1326,6 +1455,7 @@ def score_candidate_text_with_local_metrics(
         countdown_reward=countdown_reward,
         line_closure_reward=line_closure_reward,
         bar_token_reward=bar_token_reward,
+        note_bearing_line_reward=note_bearing_line_reward,
         meter_alignment_reward=meter_alignment_reward,
         meter_duration_closeness_reward=meter_metrics.meter_duration_closeness_reward,
         bar_meter_consistency_reward=meter_metrics.bar_meter_consistency_reward,
@@ -1363,6 +1493,7 @@ def score_candidate_text_with_local_metrics(
         countdown_reward=countdown_reward,
         line_closure_reward=line_closure_reward,
         bar_token_reward=bar_token_reward,
+        note_bearing_line_reward=note_bearing_line_reward,
         meter_alignment_reward=meter_alignment_reward,
         meter_duration_closeness_reward=meter_metrics.meter_duration_closeness_reward,
         bar_meter_consistency_reward=meter_metrics.bar_meter_consistency_reward,

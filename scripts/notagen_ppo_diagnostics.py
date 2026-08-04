@@ -4,6 +4,8 @@ from typing import Any, Sequence
 
 import torch
 
+from evaluation.strict_similarity import STRICT_SYMBOLIC_COMPONENT_Z_KEY
+
 
 def _safe_float(value: torch.Tensor | float | None) -> float | None:
     if value is None:
@@ -35,6 +37,7 @@ STRUCTURAL_REWARD_COMPONENTS = (
     "countdown_reward",
     "line_closure_reward",
     "bar_token_reward",
+    "note_bearing_line_reward",
     "meter_alignment_reward",
     "meter_duration_closeness_reward",
     "bar_meter_consistency_reward",
@@ -62,6 +65,11 @@ HARMONY_ALIGNED_REWARD_COMPONENT_ALIASES = (
 
 
 HARMONY_REWARD_COMPONENT_ALIASES = HARMONY_DTW_REWARD_COMPONENT_ALIASES + HARMONY_ALIGNED_REWARD_COMPONENT_ALIASES
+
+
+STRICT_SYMBOLIC_REWARD_COMPONENT_ALIASES = (
+    (f"aria_{STRICT_SYMBOLIC_COMPONENT_Z_KEY}_active",),
+)
 
 
 def _component_sum(component_sums: dict[str, float], *names: str) -> float:
@@ -112,6 +120,10 @@ def component_group_sums(component_sums: dict[str, float]) -> dict[str, float]:
         "aria_chroma_harmonic_hist_effective",
     )
     chroma_top_total = _component_sum(component_sums, "aria_chroma_top_hist_active")
+    strict_symbolic_total = sum(
+        _component_sum(component_sums, *aliases) for aliases in STRICT_SYMBOLIC_REWARD_COMPONENT_ALIASES
+    )
+    similarity_total = chroma_total + chroma_top_total + harmony_total + strict_symbolic_total
     residual = component_sums.get("other_residual", 0.0)
     return {
         "structural_total_reward": float(structural_total),
@@ -121,10 +133,11 @@ def component_group_sums(component_sums: dict[str, float]) -> dict[str, float]:
         "aria_harmony_dtw_active": float(harmony_dtw_total),
         "aria_harmony_dtw_effective": float(harmony_dtw_total),
         "aria_harmony_aligned_active": float(harmony_aligned_total),
-        "active_similarity_reward": float(chroma_total + chroma_top_total + harmony_total),
-        "effective_similarity_reward": float(chroma_total + chroma_top_total + harmony_total),
+        "aria_strict_symbolic_active": float(strict_symbolic_total),
+        "active_similarity_reward": float(similarity_total),
+        "effective_similarity_reward": float(similarity_total),
         "other_residual": float(residual),
-        "total_reward": float(structural_total + chroma_total + chroma_top_total + harmony_total + residual),
+        "total_reward": float(structural_total + similarity_total + residual),
     }
 
 
@@ -174,10 +187,24 @@ def component_group_rewards(component_rewards: dict[str, list[float]], patch_cou
         "aria_chroma_harmonic_hist_effective",
     )
     chroma_top = _component_vector(component_rewards, patch_count, "aria_chroma_top_hist_active")
+    strict_symbolic_components = [
+        _component_vector(component_rewards, patch_count, *aliases)
+        for aliases in STRICT_SYMBOLIC_REWARD_COMPONENT_ALIASES
+    ]
+    strict_symbolic_total = [
+        float(sum(component[idx] for component in strict_symbolic_components))
+        for idx in range(patch_count)
+    ]
     residual = list(component_rewards.get("other_residual", [0.0 for _idx in range(patch_count)]))
     active_similarity = [
-        float(chroma_value + chroma_top_value + harmony_value)
-        for chroma_value, chroma_top_value, harmony_value in zip(chroma, chroma_top, harmony_total, strict=True)
+        float(chroma_value + chroma_top_value + harmony_value + strict_value)
+        for chroma_value, chroma_top_value, harmony_value, strict_value in zip(
+            chroma,
+            chroma_top,
+            harmony_total,
+            strict_symbolic_total,
+            strict=True,
+        )
     ]
     total = [
         float(structural_value + similarity_value + residual_value)
@@ -193,6 +220,7 @@ def component_group_rewards(component_rewards: dict[str, list[float]], patch_cou
         "aria_harmony_dtw_active": harmony_dtw_total,
         "aria_harmony_dtw_effective": harmony_dtw_total,
         "aria_harmony_aligned_active": harmony_aligned_total,
+        "aria_strict_symbolic_active": strict_symbolic_total,
         "active_similarity_reward": active_similarity,
         "effective_similarity_reward": active_similarity,
         "total_reward": total,

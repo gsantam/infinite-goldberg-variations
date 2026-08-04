@@ -10,6 +10,7 @@ try:
     import torch
     from transformers import GPT2Config
 
+    from evaluation.strict_similarity import STRICT_SYMBOLIC_COMPONENT_Z_KEY
     from scripts.custom_ppo_notagen import (
         PatchRewardTrace,
         PatchValueHead,
@@ -20,6 +21,7 @@ try:
         RewardScore,
         _dtw_metric_reward_events,
         _score_total_reward_from_structural_breakdown,
+        _terminal_similarity_component_rewards,
         _project_reward_events_to_patches,
         _stream_line_end_patch_indices,
         _stream_line_spans,
@@ -37,6 +39,7 @@ try:
         fixed_eval_event_index_after_step,
         fixed_eval_event_index_before_training,
         fixed_eval_should_run_after_step,
+        filter_prompts_by_bar_target,
         generalized_advantage_estimates,
         load_prompt_structural_targets,
         load_value_head_checkpoint,
@@ -63,10 +66,15 @@ try:
     )
     from scripts.notagen_ppo_diagnostics import (
         advantage_distribution_summary,
+        component_group_sums,
         component_lambda_return_tensors,
         component_reward_tensors,
         logprob_advantage_diagnostics,
         per_patch_diagnostic_records,
+    )
+    from scripts.train_notagen_ppo_value_head_offline import (
+        PreparedValueSample as OfflinePreparedValueSample,
+        _split_samples as split_offline_value_samples,
     )
     from scripts.summarize_ppo_advantages import summarize_steps
     from scripts.custom_grpo_notagen import (
@@ -145,6 +153,137 @@ class NotaGenPPOTests(unittest.TestCase):
         self.assertEqual(score.breakdown["active_similarity_reward"], 1.25)
         self.assertEqual(score.breakdown["effective_similarity_reward"], 1.25)
         self.assertEqual(score.total, 2.75)
+
+    def test_strict_symbolic_similarity_component_is_terminal(self):
+        score = RewardScore(
+            total=1.5,
+            breakdown={
+                "raw_similarity_reward": 1.5,
+                "clipped_similarity_reward": 1.5,
+                f"aria_{STRICT_SYMBOLIC_COMPONENT_Z_KEY}": 1.5,
+            },
+        )
+
+        components = _terminal_similarity_component_rewards(
+            final_score=score,
+            similarity_weights=SimilarityRewardWeights(aria_strict_symbolic=1.0),
+            patch_count=3,
+        )
+
+        rewards = components[f"aria_{STRICT_SYMBOLIC_COMPONENT_Z_KEY}_active"]
+        self.assertEqual(rewards, [0.0, 0.0, 1.5])
+
+    def test_strict_symbolic_similarity_is_in_grouped_diagnostics(self):
+        groups = component_group_sums(
+            {
+                "completion_reward": 0.25,
+                f"aria_{STRICT_SYMBOLIC_COMPONENT_Z_KEY}_active": 1.5,
+            }
+        )
+
+        self.assertEqual(groups["structural_total_reward"], 0.25)
+        self.assertEqual(groups["aria_strict_symbolic_active"], 1.5)
+        self.assertEqual(groups["active_similarity_reward"], 1.5)
+        self.assertEqual(groups["effective_similarity_reward"], 1.5)
+        self.assertEqual(groups["total_reward"], 1.75)
+
+    def test_strict_symbolic_similarity_is_in_grouped_patch_diagnostics(self):
+        trace = PatchRewardTrace(
+            rewards=[0.0, 1.75],
+            prefix_totals=[0.0, 1.75],
+            final_score=RewardScore(total=1.75, breakdown={}),
+            component_rewards={
+                "completion_reward": [0.0, 0.25],
+                f"aria_{STRICT_SYMBOLIC_COMPONENT_Z_KEY}_active": [0.0, 1.5],
+            },
+            component_prefix_totals={},
+        )
+
+        tensors = component_reward_tensors([trace], device=torch.device("cpu"))
+
+        self.assertTrue(torch.allclose(tensors["structural_total_reward"], torch.tensor([0.0, 0.25])))
+        self.assertTrue(torch.allclose(tensors["aria_strict_symbolic_active"], torch.tensor([0.0, 1.5])))
+        self.assertTrue(torch.allclose(tensors["active_similarity_reward"], torch.tensor([0.0, 1.5])))
+        self.assertTrue(torch.allclose(tensors["total_reward"], torch.tensor([0.0, 1.75])))
+
+    def test_offline_value_split_can_be_saved_and_reused(self):
+        samples = [
+            OfflinePreparedValueSample(
+                hidden_states=torch.zeros(2, 3),
+                targets=torch.ones(2),
+                meta={
+                    "source_json": "/tmp/rollouts.json",
+                    "step": idx,
+                    "prompt_index": idx % 2,
+                    "prompt_name": f"prompt-{idx}",
+                    "trajectory_index": idx,
+                    "rollout_seed": 100 + idx,
+                    "patch_count": 2,
+                    "reward": float(idx),
+                },
+            )
+            for idx in range(4)
+        ]
+        train, eval_samples, split_meta = split_offline_value_samples(
+            samples,
+            holdout_last_step=False,
+            eval_fraction=0.5,
+            seed=7,
+        )
+        self.assertEqual(len(train), 2)
+        self.assertEqual(len(eval_samples), 2)
+        self.assertIn("train_keys", split_meta)
+        self.assertIn("eval_keys", split_meta)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            split_path = Path(tmp) / "split.json"
+            split_path.write_text(json.dumps({"dataset_split": split_meta}), encoding="utf-8")
+            train_reused, eval_reused, reused_meta = split_offline_value_samples(
+                list(reversed(samples)),
+                holdout_last_step=False,
+                eval_fraction=0.0,
+                seed=999,
+                dataset_split_json=split_path,
+            )
+
+        self.assertEqual([sample.meta["trajectory_index"] for sample in train_reused], [
+            sample.meta["trajectory_index"] for sample in train
+        ])
+        self.assertEqual([sample.meta["trajectory_index"] for sample in eval_reused], [
+            sample.meta["trajectory_index"] for sample in eval_samples
+        ])
+        self.assertEqual(reused_meta["mode"], "stored")
+
+    def test_offline_value_split_keys_distinguish_same_filename_inputs(self):
+        samples = [
+            OfflinePreparedValueSample(
+                hidden_states=torch.zeros(1, 3),
+                targets=torch.ones(1),
+                meta={
+                    "source_json": f"/tmp/gpu{idx}/result.json",
+                    "step": 1,
+                    "prompt_index": 0,
+                    "prompt_name": "prompt",
+                    "trajectory_index": 0,
+                    "rollout_seed": 123,
+                    "patch_count": 1,
+                    "reward": 1.0,
+                },
+            )
+            for idx in range(2)
+        ]
+
+        _train, _eval_samples, split_meta = split_offline_value_samples(
+            samples,
+            holdout_last_step=False,
+            eval_fraction=0.0,
+            seed=0,
+        )
+
+        self.assertEqual(len(split_meta["train_keys"]), 2)
+        self.assertEqual(len(set(split_meta["train_keys"])), 2)
+        self.assertIn("gpu0/result.json", split_meta["train_keys"][0])
+        self.assertIn("gpu1/result.json", split_meta["train_keys"][1])
 
     def test_ordered_prompt_schedule_cycles_by_update_index(self):
         selections = [
@@ -321,6 +460,7 @@ class NotaGenPPOTests(unittest.TestCase):
             prompt_batch_mode="trajectory",
             seed=3,
             fixed_eval_prompt_seed_offset=100,
+            fixed_eval_reuse_prompt_batch=False,
         )
 
         first_eval = build_fixed_eval_prompt_batch(
@@ -340,6 +480,43 @@ class NotaGenPPOTests(unittest.TestCase):
         self.assertEqual([item.prompt_idx for item in second_eval], [4, 5, 6, 7])
         self.assertEqual([item.target_stream_lines for item in first_eval], [1, 2, 3, 4])
         self.assertTrue(all(item.schedule.selection == "ordered" for item in first_eval + second_eval))
+
+    def test_fixed_eval_prompt_batch_reuses_same_batch_by_default(self):
+        prompts = [{"name": f"p{idx}", "prompt": f"prompt {idx}\n"} for idx in range(30)]
+        prompt_targets = [
+            PromptStructuralTarget(
+                target=StructuralTarget(expected_bars=idx + 1, expected_structure_bars=idx + 1),
+                structure_path=f"target_{idx}.abc",
+                source_key="test",
+            )
+            for idx in range(30)
+        ]
+        args = SimpleNamespace(
+            fixed_eval_trajectories=4,
+            fixed_eval_prompt_selection="ordered",
+            fixed_eval_prompt_batch_mode="trajectory",
+            prompt_selection="random",
+            prompt_batch_mode="trajectory",
+            seed=3,
+            fixed_eval_prompt_seed_offset=100,
+        )
+
+        first_eval = build_fixed_eval_prompt_batch(
+            prompts=prompts,
+            prompt_targets=prompt_targets,
+            args=args,
+            event_index=0,
+        )
+        later_eval = build_fixed_eval_prompt_batch(
+            prompts=prompts,
+            prompt_targets=prompt_targets,
+            args=args,
+            event_index=4,
+        )
+
+        self.assertEqual([item.prompt_idx for item in first_eval], [0, 1, 2, 3])
+        self.assertEqual([item.prompt_idx for item in later_eval], [0, 1, 2, 3])
+        self.assertEqual([item.target_stream_lines for item in later_eval], [1, 2, 3, 4])
 
     def test_fixed_eval_same_selection_uses_independent_shuffle_seed(self):
         prompts = [{"name": f"p{idx}", "prompt": f"prompt {idx}\n"} for idx in range(30)]
@@ -391,6 +568,7 @@ class NotaGenPPOTests(unittest.TestCase):
             prompt_batch_mode="trajectory",
             seed=0,
             fixed_eval_prompt_seed_offset=100,
+            fixed_eval_reuse_prompt_batch=False,
         )
 
         second_eval = build_fixed_eval_prompt_batch(
@@ -655,9 +833,71 @@ class NotaGenPPOTests(unittest.TestCase):
             )
 
         self.assertEqual(prompt_targets[0].source_key, "source")
-        self.assertEqual(prompt_targets[0].target.expected_reward_bars, 2)
+        self.assertEqual(prompt_targets[0].target.expected_structure_bars, 2)
+        self.assertEqual(prompt_targets[0].target.expected_reward_bars, 1)
         self.assertEqual(prompt_targets[1].source_key, "fallback_target_structure_abc")
+        self.assertEqual(prompt_targets[1].target.expected_structure_bars, 1)
         self.assertEqual(prompt_targets[1].target.expected_reward_bars, 1)
+
+    def test_aria_matching_prompt_bar_filter_keeps_only_matching_source_structures(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            matching = tmp / "matching.abc"
+            matching.write_text(
+                "\n".join(
+                    [
+                        "X:1",
+                        "M:3/4",
+                        "L:1/8",
+                        "K:C",
+                        "V:1",
+                        "[V:1]C2D2E2|",
+                        "[V:1]F2G2A2:|",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            mismatched = tmp / "mismatched.abc"
+            mismatched.write_text(
+                "\n".join(
+                    [
+                        "X:1",
+                        "M:12/8",
+                        "L:1/8",
+                        "K:C",
+                        "V:1",
+                        "[V:1]C12:|",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            prompts = [
+                {"name": "matching", "prompt": "", "source": str(matching)},
+                {"name": "mismatched", "prompt": "", "source": str(mismatched)},
+            ]
+            prompt_targets = [
+                PromptStructuralTarget(
+                    target=StructuralTarget(expected_bars=2, expected_structure_bars=2),
+                    structure_path=str(matching),
+                    source_key="source",
+                ),
+                PromptStructuralTarget(
+                    target=StructuralTarget(expected_bars=2, expected_structure_bars=1),
+                    structure_path=str(mismatched),
+                    source_key="source",
+                ),
+            ]
+            args = SimpleNamespace(prompt_bar_filter="aria-matching", prompt_bar_filter_tolerance=1e-6)
+
+            filtered_prompts, filtered_targets, metadata = filter_prompts_by_bar_target(prompts, prompt_targets, args)
+
+        self.assertEqual([row["name"] for row in filtered_prompts], ["matching"])
+        self.assertEqual([Path(item.structure_path).name for item in filtered_targets], ["matching.abc"])
+        self.assertEqual(metadata["input_count"], 2)
+        self.assertEqual(metadata["kept_count"], 1)
+        self.assertEqual(metadata["excluded_count"], 1)
+        self.assertEqual(metadata["kept"][0]["source_format"], "raw-abc")
+        self.assertEqual(metadata["excluded"][0]["prompt_name"], "mismatched")
 
     def test_parallel_rollout_scoring_matches_serial_exactly(self):
         if "fork" not in mp.get_all_start_methods():
