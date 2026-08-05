@@ -226,9 +226,11 @@ epochs. On the fixed evaluation set, that run improves total reward from
 
 ![PPO train and fixed-eval returns](docs/assets/ppo_monitoring/ppo_returns_onpolicy_zoom.png)
 
-The component plot shows that the reward increase is not only a structural
-formatting gain: the active similarity component rises substantially in the
-better controlled runs. The most aggressive-looking peak in this sweep reaches
+The train-only component plot zooms the on-policy structural and similarity
+subrewards, so the component movement is easier to see. It shows that the
+reward increase is not only a structural formatting gain: the active similarity
+component rises substantially in the better controlled runs. The most
+aggressive-looking peak in this sweep reaches
 a higher fixed-eval reward (`7.831` at step 50), but then drops back to `7.479`
 as exact KL climbs to about `1.106`. This is the failure mode I want to avoid:
 without enough reference control, the policy can move quickly away from the SFT
