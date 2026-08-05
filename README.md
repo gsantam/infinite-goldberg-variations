@@ -213,6 +213,39 @@ Advantage Estimation controls how rewards are propagated through the trajectory.
 An exact full-vocabulary KL against the frozen SFT/reference policy can be
 logged or used as a penalty.
 
+The current PPO sweeps vary the learning rate, the number of PPO epochs per
+rollout batch, the reference-KL penalty coefficient, the learning-rate schedule,
+and whether the token loss is reduced with a token-uniform or
+trajectory-balanced mean. For example, one stable configuration uses
+`lr=1.2e-5`, `ppo_epochs=4`, `reference_kl_coef=0.15`, cosine decay over 100
+steps, trajectory-balanced token reduction, and two post-update value-head
+epochs. On the fixed evaluation set, that run improves total reward from
+`7.043` to `7.745`, and the active symbolic Aria-similarity reward from
+`0.135` to `0.595`, while keeping the exact KL to the SFT reference around
+`0.288`.
+
+![PPO train and fixed-eval returns](docs/assets/ppo_monitoring/ppo_returns_onpolicy_zoom.png)
+
+The component plot shows that the reward increase is not only a structural
+formatting gain: the active similarity component rises substantially in the
+better controlled runs. The most aggressive-looking peak in this sweep reaches
+a higher fixed-eval reward (`7.831` at step 50), but then drops back to `7.479`
+as exact KL climbs to about `1.106`. This is the failure mode I want to avoid:
+without enough reference control, the policy can move quickly away from the SFT
+model, and the sampled trajectories start degrading even if an intermediate
+checkpoint looked promising.
+
+![PPO structural and similarity components](docs/assets/ppo_monitoring/ppo_component_returns.png)
+
+The KL plot uses a log-scale y-axis. The top panel is the exact categorical KL
+between the current policy and the frozen SFT reference over the full symbol
+distribution, not a sampled-action approximation. The lower panels track local
+movement from the rollout behavior policy and the sampled-token KL proxy used
+for PPO-style diagnostics. This separation matters: the behavior KL can stay
+small while cumulative drift from the SFT reference keeps growing.
+
+![PPO exact KL and trust-region diagnostics](docs/assets/ppo_monitoring/ppo_trust_region_logkl.png)
+
 Some qualitative renders from earlier RL runs are still useful as examples of
 what this reward-driven stage is trying to improve, independent of whether the
 policy update is done with GRPO or PPO. For example, this fixed render from
