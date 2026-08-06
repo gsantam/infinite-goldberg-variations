@@ -180,30 +180,29 @@ that would not produce a usable score. These structural checks cover ABC
 validity, NotaGen line structure, meter consistency, written musical bars, and
 repeat-expanded rendered bars.
 
-The table below lists only active structural reward terms. Values are mean raw
-subreward scores before applying the listed weight, except for the subtotal
-row, which is already a weighted sum. Epoch 0 is the pretrained NotaGen-large
-model with the same prompt/evaluation setup; GT is the mean over the real
-Goldberg variations under the same scorer.
+The table below lists only active structural reward terms, using the same
+convention as the similarity table. Values are reported as `baseline / epoch 1
+/ epoch 8 / Bach GT`. Individual rows show mean raw subreward scores before
+applying the listed weight; the subtotal row is already a weighted sum.
 
-| Reward | Type | Description | Terminal / Patch | Weight | Epoch 0 | Epoch 1 | Epoch 8 | GT |
-|---|---|---|---|---:|---:|---:|---:|---:|
-| `completion_reward` | Structural | Target written score-measure count reached. | terminal | 0.250 | 1 | 0.967 | 1 | 0.900 |
-| `expanded_completion_reward` | Structural | Target repeat-expanded/rendered score-measure count reached. | terminal | 0.250 | 0.500 | 0.417 | 0.583 | 0.900 |
-| `parse_reward` | Structural | Graded ABC syntax/tokenizer/music21 parse quality. | terminal | 0.250 | 0.993 | 0.923 | 0.950 | 1 |
-| `syntax_penalty_reward` | Structural | Fast malformed-syntax penalty; negative when triggered. | terminal | 0.250 | 0 | -0.100 | -0.083 | 0 |
-| `countdown_reward` | Structural | NotaGen stream countdown `[r:i/j]` progression. | patch | 0.250 | 1 | 0.999 | 1 | 1 |
-| `line_closure_reward` | Structural | Generated stream lines close syntactically. | patch | 0.250 | 1 | 0.999 | 1 | 1 |
-| `bar_token_reward` | Structural | Stream lines contain bar/repeat tokens. | patch | 0.100 | 1 | 1 | 1 | 1 |
-| `note_bearing_line_reward` | Structural | Stream lines contain at least one ABC note in some voice, so rest-only generated lines lose structural credit. | patch | 0.250 | 1 | 0.990 | 0.997 | 1 |
-| `meter_alignment_reward` | Structural | Populated voices align with expected meter. | patch | 0.750 | 0.969 | 0.927 | 0.974 | 0.987 |
-| `meter_duration_closeness_reward` | Structural | Bar durations are close to expected meter. | patch | 0.750 | 0.996 | 0.964 | 0.997 | 0.994 |
-| `bar_meter_consistency_reward` | Structural | Voices inside a bar are mutually meter-consistent. | patch | 0.750 | 0.970 | 0.939 | 0.997 | 0.997 |
-| `bar_count_reward` | Structural | Written score measures close to target 32. | patch marginal | 1 | 1 | 0.999 | 1 | 0.902 |
-| `expanded_bar_count_reward` | Structural | Repeat-expanded/rendered score measures close to target 64. | patch marginal | 1 | 0.764 | 0.757 | 0.834 | 0.899 |
-| `voice_declaration_reward` | Structural | Generated voices are declared in the header. | patch | 1 | 1 | 1 | 1 | 1 |
-| `score_voice_reward` | Structural | Generated voices match the `%%score` voice set. | patch | 0.500 | 1 | 1 | 1 | 1 |
-| `structural_total_reward` | Subtotal | Weighted structural subtotal. | mixed | 1 | 6.939 | 6.777 | 7.023 | 7.084 |
+| Structural signal | What it checks | Use | Values |
+|---|---|---|---:|
+| Written completion (`completion_reward`) | Whether the continuation reaches the target written score-measure count, usually 32 Goldberg measures. | Terminal active reward, weight `0.250` | `1.000 / 0.967 / 1.000 / 0.900` |
+| Rendered completion (`expanded_completion_reward`) | Whether repeat expansion gives the target rendered score-measure count, usually 64 measures after repeats. | Terminal active reward, weight `0.250` | `0.500 / 0.417 / 0.583 / 0.900` |
+| ABC parse quality (`parse_reward`) | A graded syntax score across balanced constructs, inline fields, duration sanity, tokenizer success, and music21 parsing. | Terminal active reward, weight `0.250` | `0.993 / 0.923 / 0.950 / 1.000` |
+| Malformed syntax penalty (`syntax_penalty_reward`) | Fast preflight detection of clearly malformed ABC patterns. Negative values mean the penalty was triggered. | Terminal active penalty, weight `0.250` | `0.000 / -0.100 / -0.083 / 0.000` |
+| NotaGen countdown (`countdown_reward`) | Whether generated stream lines follow the expected `[r:i/j]` countdown progression. | Patch-attributed active reward, weight `0.250` | `1.000 / 0.999 / 1.000 / 1.000` |
+| Stream-line closure (`line_closure_reward`) | Whether generated stream lines close syntactically instead of leaving open fragments. | Patch-attributed active reward, weight `0.250` | `1.000 / 0.999 / 1.000 / 1.000` |
+| Bar-token presence (`bar_token_reward`) | Whether stream lines contain ABC bar or repeat markers. | Patch-attributed active reward, weight `0.100` | `1.000 / 1.000 / 1.000 / 1.000` |
+| Note-bearing lines (`note_bearing_line_reward`) | Whether generated stream lines contain at least one note in some voice, so empty or rest-only lines lose a small amount of credit. | Patch-attributed active reward, weight `0.250` | `1.000 / 0.990 / 0.997 / 1.000` |
+| Meter alignment (`meter_alignment_reward`) | Whether populated voices fill the expected duration implied by the current meter. | Patch-attributed active reward, weight `0.750` | `0.969 / 0.927 / 0.974 / 0.987` |
+| Meter-duration closeness (`meter_duration_closeness_reward`) | How close generated bar durations are to the expected meter, with partial credit for near misses. | Patch-attributed active reward, weight `0.750` | `0.996 / 0.964 / 0.997 / 0.994` |
+| Cross-voice meter consistency (`bar_meter_consistency_reward`) | Whether voices inside the same generated bar agree on duration. | Patch-attributed active reward, weight `0.750` | `0.970 / 0.939 / 0.997 / 0.997` |
+| Written bar count (`bar_count_reward`) | Graded closeness to the target written score-measure count, separate from repeat expansion. | Patch-marginal active reward, weight `1.000` | `1.000 / 0.999 / 1.000 / 0.902` |
+| Repeat-expanded bar count (`expanded_bar_count_reward`) | Graded closeness to the target rendered measure count after accounting for repeat syntax. | Patch-marginal active reward, weight `1.000` | `0.764 / 0.757 / 0.834 / 0.899` |
+| Voice declarations (`voice_declaration_reward`) | Whether generated voice references are declared in the ABC header. | Patch-attributed active reward, weight `1.000` | `1.000 / 1.000 / 1.000 / 1.000` |
+| Score voice set (`score_voice_reward`) | Whether generated voices match the `%%score` voice set expected by the prompt. | Patch-attributed active reward, weight `0.500` | `1.000 / 1.000 / 1.000 / 1.000` |
+| Structural subtotal (`structural_total_reward`) | Weighted sum of the active structural checks above. This is the structural contribution before adding Aria-similarity reward. | Mixed active subtotal | `6.939 / 6.777 / 7.023 / 7.084` |
 
 In the current PPO implementation, rewards and value targets are computed per
 NotaGen patch for tractability, while the policy loss is reduced over generated
