@@ -69,6 +69,13 @@ HARMONY_REWARD_COMPONENT_ALIASES = HARMONY_DTW_REWARD_COMPONENT_ALIASES + HARMON
 
 STRICT_SYMBOLIC_REWARD_COMPONENT_ALIASES = (
     (f"aria_{STRICT_SYMBOLIC_COMPONENT_Z_KEY}_active",),
+    ("aria_strict_aligned_root_bass_active",),
+    ("aria_strict_harmony_dtw_narrow_active",),
+    ("aria_strict_root_dtw_narrow_active",),
+    ("aria_strict_bass_dtw_narrow_active",),
+    ("aria_strict_root_bass_bigram_weighted_jaccard_active",),
+    ("aria_strict_root_bass_fourgram_weighted_jaccard_active",),
+    ("aria_strict_cadence_root_bass_active",),
 )
 
 

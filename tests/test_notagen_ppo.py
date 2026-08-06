@@ -10,7 +10,7 @@ try:
     import torch
     from transformers import GPT2Config
 
-    from rewards.strict_similarity import STRICT_SYMBOLIC_COMPONENT_Z_KEY
+    from rewards.strict_similarity import STRICT_SYMBOLIC_COMPONENT_WEIGHTS, STRICT_SYMBOLIC_COMPONENT_Z_KEY
     from scripts.custom_ppo_notagen import (
         PatchRewardTrace,
         PatchValueHead,
@@ -21,6 +21,7 @@ try:
         RewardScore,
         _dtw_metric_reward_events,
         _score_total_reward_from_structural_breakdown,
+        _strict_symbolic_reward_events,
         _terminal_similarity_component_rewards,
         _project_reward_events_to_patches,
         _stream_line_end_patch_indices,
@@ -134,7 +135,7 @@ class NotaGenPPOTests(unittest.TestCase):
                 }
 
         with patch(
-            "scripts.custom_ppo_notagen.score_similarity_reward",
+            "scripts.notagen_ppo_rewards.score_similarity_reward",
             return_value={"similarity_reward": 1.25, "aria_chroma_harmonic_hist": 1.25},
         ):
             score = _score_total_reward_from_structural_breakdown(
@@ -178,14 +179,16 @@ class NotaGenPPOTests(unittest.TestCase):
             {
                 "completion_reward": 0.25,
                 f"aria_{STRICT_SYMBOLIC_COMPONENT_Z_KEY}_active": 1.5,
+                "aria_strict_aligned_root_bass_active": 0.2,
+                "aria_strict_cadence_root_bass_active": 0.3,
             }
         )
 
         self.assertEqual(groups["structural_total_reward"], 0.25)
-        self.assertEqual(groups["aria_strict_symbolic_active"], 1.5)
-        self.assertEqual(groups["active_similarity_reward"], 1.5)
-        self.assertEqual(groups["effective_similarity_reward"], 1.5)
-        self.assertEqual(groups["total_reward"], 1.75)
+        self.assertEqual(groups["aria_strict_symbolic_active"], 2.0)
+        self.assertEqual(groups["active_similarity_reward"], 2.0)
+        self.assertEqual(groups["effective_similarity_reward"], 2.0)
+        self.assertEqual(groups["total_reward"], 2.25)
 
     def test_strict_symbolic_similarity_is_in_grouped_patch_diagnostics(self):
         trace = PatchRewardTrace(
@@ -195,6 +198,8 @@ class NotaGenPPOTests(unittest.TestCase):
             component_rewards={
                 "completion_reward": [0.0, 0.25],
                 f"aria_{STRICT_SYMBOLIC_COMPONENT_Z_KEY}_active": [0.0, 1.5],
+                "aria_strict_aligned_root_bass_active": [0.2, 0.0],
+                "aria_strict_cadence_root_bass_active": [0.0, 0.3],
             },
             component_prefix_totals={},
         )
@@ -202,9 +207,55 @@ class NotaGenPPOTests(unittest.TestCase):
         tensors = component_reward_tensors([trace], device=torch.device("cpu"))
 
         self.assertTrue(torch.allclose(tensors["structural_total_reward"], torch.tensor([0.0, 0.25])))
-        self.assertTrue(torch.allclose(tensors["aria_strict_symbolic_active"], torch.tensor([0.0, 1.5])))
-        self.assertTrue(torch.allclose(tensors["active_similarity_reward"], torch.tensor([0.0, 1.5])))
-        self.assertTrue(torch.allclose(tensors["total_reward"], torch.tensor([0.0, 1.75])))
+        self.assertTrue(torch.allclose(tensors["aria_strict_symbolic_active"], torch.tensor([0.2, 1.8])))
+        self.assertTrue(torch.allclose(tensors["active_similarity_reward"], torch.tensor([0.2, 1.8])))
+        self.assertTrue(torch.allclose(tensors["total_reward"], torch.tensor([0.2, 2.05])))
+
+    def test_strict_symbolic_similarity_can_be_dense_events(self):
+        reference_harmony = [
+            {"root": 0, "bass": 0, "quality": "maj", "top_midi": 64},
+            {"root": 7, "bass": 7, "quality": "maj", "top_midi": 67},
+            {"root": 9, "bass": 9, "quality": "min", "top_midi": 69},
+            {"root": 0, "bass": 0, "quality": "maj", "top_midi": 72},
+        ]
+        candidate_harmony = [dict(item) for item in reference_harmony]
+        candidate_spans = [(0, 4), (4, 8), (8, 12), (12, 16)]
+        metric_z_scores = {
+            "strict_aligned_root_bass": 0.4,
+            "strict_dtw_combined_narrow": 0.6,
+            "strict_root_bass_bigram_weighted_jaccard": 0.2,
+            "strict_root_bass_fourgram_weighted_jaccard": 0.1,
+            "strict_cadence_root_bass": 0.5,
+        }
+        expected_total = sum(
+            STRICT_SYMBOLIC_COMPONENT_WEIGHTS[name] * value
+            for name, value in metric_z_scores.items()
+        )
+        breakdown = {
+            "raw_similarity_reward": expected_total,
+            "clipped_similarity_reward": expected_total,
+        }
+        breakdown.update({f"aria_{name}_global_base_z": value for name, value in metric_z_scores.items()})
+
+        events = _strict_symbolic_reward_events(
+            reference_harmony=reference_harmony,
+            candidate_harmony=candidate_harmony,
+            candidate_spans=candidate_spans,
+            similarity_weights=SimilarityRewardWeights(aria_strict_symbolic=1.0),
+            final_score=RewardScore(total=expected_total, breakdown=breakdown),
+            band_ratio=0.05,
+        )
+
+        event_names = {event.name for event in events}
+        self.assertIn("aria_strict_aligned_root_bass_active", event_names)
+        self.assertIn("aria_strict_harmony_dtw_narrow_active", event_names)
+        self.assertIn("aria_strict_root_dtw_narrow_active", event_names)
+        self.assertIn("aria_strict_bass_dtw_narrow_active", event_names)
+        self.assertIn("aria_strict_root_bass_bigram_weighted_jaccard_active", event_names)
+        self.assertIn("aria_strict_root_bass_fourgram_weighted_jaccard_active", event_names)
+        self.assertIn("aria_strict_cadence_root_bass_active", event_names)
+        self.assertAlmostEqual(sum(event.value for event in events), expected_total)
+        self.assertTrue(any(event.end < candidate_spans[-1][1] for event in events))
 
     def test_offline_value_split_can_be_saved_and_reused(self):
         samples = [
