@@ -264,7 +264,10 @@ https://github.com/user-attachments/assets/b8bf218d-3af3-4be6-90ad-04f487520ba0
 And this one has the first notes of the beginning of each part, but then it
 evolves them in a nice way:
 
-<video controls src="docs/assets/readme_media/another_one_beginning_notes_evolved.mp4"></video>
+
+
+https://github.com/user-attachments/assets/fd759a4e-45c8-4795-aa50-34744582e7f5
+
 
 
 Another good example is this high-reward render from step 54:
