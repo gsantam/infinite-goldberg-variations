@@ -269,6 +269,10 @@ evolves them in a nice way:
 https://github.com/user-attachments/assets/fd759a4e-45c8-4795-aa50-34744582e7f5
 
 
+This is an even better version of that same idea:
+
+<video controls src="docs/assets/readme_media/even_better_variation_evolved.mp4"></video>
+
 
 Another good example is this high-reward render from step 54:
 
