@@ -255,6 +255,11 @@ subparts, which is close to the phrase layout of the Aria:
 
 https://github.com/user-attachments/assets/56f300b6-9181-48f5-94d3-d57fa0cb6746
 
+This one seems like a variation of the first variation, but with very
+interesting harmony and a second theme:
+
+<video controls src="docs/assets/readme_media/var_new_first_variation_harmony.mp4"></video>
+
 Another good example is this high-reward render from step 54:
 
 https://github.com/user-attachments/assets/87f1db78-1f7f-4797-9659-eb4514aa9d66
