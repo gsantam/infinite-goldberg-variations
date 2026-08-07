@@ -277,6 +277,14 @@ https://github.com/user-attachments/assets/427a07cf-7f30-42b5-bd7c-acb23ebce884
 
 
 
+Or these two, where the melody is almost the same as the Aria. This is when PPO
+starts making reward hacking visible, but it develops the material in very
+interesting, and sometimes almost Frankenstein-like, ways:
+
+<video controls src="docs/assets/readme_media/aria_changed_aria_like_reward_hacking.mp4"></video>
+
+<video controls src="docs/assets/readme_media/aria_changed_2_aria_like_reward_hacking.mp4"></video>
+
 
 Another good example is this high-reward render from step 54:
 
