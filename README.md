@@ -258,7 +258,10 @@ https://github.com/user-attachments/assets/56f300b6-9181-48f5-94d3-d57fa0cb6746
 This one seems like a variation of the first variation, but with very
 interesting harmony and a second theme:
 
-<video controls src="docs/assets/readme_media/var_new_first_variation_harmony.mp4"></video>
+
+
+https://github.com/user-attachments/assets/b8bf218d-3af3-4be6-90ad-04f487520ba0
+
 
 Another good example is this high-reward render from step 54:
 
