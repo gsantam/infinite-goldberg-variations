@@ -2,28 +2,42 @@
 
 ## TL;DR
 
-We try to play at being a Baroque god (Bach) and train a symbolic music
+We play at being Baroque god (Bach) and train a music
 model based on [NotaGen](https://arxiv.org/abs/2502.18008) to generate
 infinitely many new
 [*Goldberg Variations*](https://en.wikipedia.org/wiki/Goldberg_Variations).
 I try some of the RL post-training methods that work for text in the context of
 music, by having rewards that try to make the generated piece similar to the
-Goldberg Aria, structurally, harmonically, musically, which is:
+Goldberg Aria, structurally, harmonically, musically. The original Aria sounds like:
 
 https://github.com/user-attachments/assets/fa3557df-cc84-4e95-8cbd-53407603f8d6
 
-Some examples sound quite convincing:
-
-https://github.com/user-attachments/assets/56f300b6-9181-48f5-94d3-d57fa0cb6746
-
-This one starts each part with notes from the Aria, but then evolves them in a
-nice way:
+These are some examples of the result. One takes the initial notes and copies
+the harmony, but develops something completely different:
 
 https://github.com/user-attachments/assets/fd759a4e-45c8-4795-aa50-34744582e7f5
 
-And this is a stronger version of that same idea:
+Another produces a different melody, but keeps the same structure and has
+subtle reminiscences of certain parts:
+
+https://github.com/user-attachments/assets/56f300b6-9181-48f5-94d3-d57fa0cb6746
+
+Others take the start of some of the real variations, but then develop them by
+fusing them with the Aria:
+
+https://github.com/user-attachments/assets/b8bf218d-3af3-4be6-90ad-04f487520ba0
 
 https://github.com/user-attachments/assets/427a07cf-7f30-42b5-bd7c-acb23ebce884
+
+Others copy the Aria theme almost literally, but add different harmonizations:
+
+https://github.com/gsantam/infinite-goldberg-variations/raw/main/docs/assets/readme_media/aria_changed_aria_like_reward_hacking.mp4
+
+https://github.com/gsantam/infinite-goldberg-variations/raw/main/docs/assets/readme_media/aria_changed_2_aria_like_reward_hacking.mp4
+
+And others are more free, but still have quite a lot of similarities:
+
+https://github.com/user-attachments/assets/87f1db78-1f7f-4797-9659-eb4514aa9d66
 
 Bach's [*Goldberg Variations*](https://open.spotify.com/album/1aCpHSQE5ghxibsQ5gkBe0?si=8XK24O7ZTUShSqC-5yzbNQ) have fascinated listeners and musicians for a long time:
 they have something hypnotic and even a bit obsessive, but they are also
