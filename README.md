@@ -15,7 +15,10 @@ https://github.com/user-attachments/assets/fa3557df-cc84-4e95-8cbd-53407603f8d6
 These are some examples of the result. One takes the initial notes and copies
 the harmony, but develops something completely different:
 
-https://github.com/user-attachments/assets/fd759a4e-45c8-4795-aa50-34744582e7f5
+
+
+https://github.com/user-attachments/assets/4834aecf-cf61-498f-932e-ca07fee34acc
+
 
 Another produces a different melody, but keeps the same structure and has
 subtle reminiscences of certain parts:
