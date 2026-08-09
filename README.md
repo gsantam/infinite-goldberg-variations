@@ -12,15 +12,15 @@ Goldberg Aria, structurally, harmonically, musically. The original Aria sounds l
 
 https://github.com/user-attachments/assets/fa3557df-cc84-4e95-8cbd-53407603f8d6
 
-These are some examples of the result. One takes the initial notes and copies
-the harmony, but develops something completely different:
-
-https://github.com/user-attachments/assets/fd759a4e-45c8-4795-aa50-34744582e7f5
-
-Another produces a different melody, but keeps the same structure and has
-subtle reminiscences of certain parts:
+These are some examples of the result. One produces a different melody, but
+keeps the same structure and has subtle reminiscences of certain parts:
 
 https://github.com/user-attachments/assets/56f300b6-9181-48f5-94d3-d57fa0cb6746
+
+Another takes the initial notes and copies the harmony, but develops something
+completely different:
+
+https://github.com/user-attachments/assets/fd759a4e-45c8-4795-aa50-34744582e7f5
 
 Others take the start of some of the real variations, but then develop them by
 fusing them with the Aria:
