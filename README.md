@@ -300,43 +300,26 @@ https://github.com/user-attachments/assets/56f300b6-9181-48f5-94d3-d57fa0cb6746
 And this one has the first notes of the beginning of each part, but then it
 evolves them in a nice way:
 
-
-
 https://github.com/user-attachments/assets/fd759a4e-45c8-4795-aa50-34744582e7f5
-
 
 This is an even better version of that same idea:
 
-
-
 https://github.com/user-attachments/assets/427a07cf-7f30-42b5-bd7c-acb23ebce884
-
 
 This one seems like a variation of the first variation, but with very
 interesting harmony and a second theme:
 
-
-
 https://github.com/user-attachments/assets/b8bf218d-3af3-4be6-90ad-04f487520ba0
-
-
 
 Or these two, where the melody is almost the same as the Aria. This is when PPO
 starts making reward hacking visible, but it develops the material in very
 interesting, and sometimes almost Frankenstein-like, ways:
 
- 
-
 https://github.com/user-attachments/assets/7bcd20ce-b491-487b-b384-a615286e707f
-
-
-
 
 This other one has quite a different left hand:
 
 https://github.com/user-attachments/assets/e6d5aca0-998b-4b6c-9272-4e3b9b583a81
-
-
 
 Another good example is this high-reward render from step 54:
 
