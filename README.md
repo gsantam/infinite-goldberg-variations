@@ -1,5 +1,30 @@
 # Infinite Goldberg Variations
 
+## TL;DR
+
+We try to play at being a Baroque god (Bach) and train a symbolic music
+model based on [NotaGen](https://arxiv.org/abs/2502.18008) to generate
+infinitely many new
+[*Goldberg Variations*](https://en.wikipedia.org/wiki/Goldberg_Variations).
+I try some of the RL post-training methods that work for text in the context of
+music, by having rewards that try to make the generated piece similar to the
+Goldberg Aria, structurally, harmonically, musically, which is:
+
+https://github.com/user-attachments/assets/fa3557df-cc84-4e95-8cbd-53407603f8d6
+
+Some examples sound quite convincing:
+
+https://github.com/user-attachments/assets/56f300b6-9181-48f5-94d3-d57fa0cb6746
+
+This one starts each part with notes from the Aria, but then evolves them in a
+nice way:
+
+https://github.com/user-attachments/assets/fd759a4e-45c8-4795-aa50-34744582e7f5
+
+And this is a stronger version of that same idea:
+
+https://github.com/user-attachments/assets/427a07cf-7f30-42b5-bd7c-acb23ebce884
+
 Bach's [*Goldberg Variations*](https://open.spotify.com/album/1aCpHSQE5ghxibsQ5gkBe0?si=8XK24O7ZTUShSqC-5yzbNQ) have fascinated listeners and musicians for a long time:
 they have something hypnotic and even a bit obsessive, but they are also
 delicate and playful, built around a melody that keeps coming and going. I have
