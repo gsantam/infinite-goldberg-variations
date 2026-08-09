@@ -25,19 +25,21 @@ https://github.com/user-attachments/assets/56f300b6-9181-48f5-94d3-d57fa0cb6746
 Others take the start of some of the real variations, but then develop them by
 fusing them with the Aria:
 
-https://github.com/user-attachments/assets/b8bf218d-3af3-4be6-90ad-04f487520ba0
-
 https://github.com/user-attachments/assets/427a07cf-7f30-42b5-bd7c-acb23ebce884
+
+https://github.com/user-attachments/assets/b8bf218d-3af3-4be6-90ad-04f487520ba0
 
 Others copy the Aria theme almost literally, but add different harmonizations:
 
-https://github.com/gsantam/infinite-goldberg-variations/raw/main/docs/assets/readme_media/aria_changed_aria_like_reward_hacking.mp4
+https://github.com/user-attachments/assets/7bcd20ce-b491-487b-b384-a615286e707f
 
-https://github.com/gsantam/infinite-goldberg-variations/raw/main/docs/assets/readme_media/aria_changed_2_aria_like_reward_hacking.mp4
+https://github.com/user-attachments/assets/e6d5aca0-998b-4b6c-9272-4e3b9b583a81
 
 And others are more free, but still have quite a lot of similarities:
 
 https://github.com/user-attachments/assets/87f1db78-1f7f-4797-9659-eb4514aa9d66
+
+## The Variations
 
 Bach's [*Goldberg Variations*](https://open.spotify.com/album/1aCpHSQE5ghxibsQ5gkBe0?si=8XK24O7ZTUShSqC-5yzbNQ) have fascinated listeners and musicians for a long time:
 they have something hypnotic and even a bit obsessive, but they are also
@@ -293,13 +295,6 @@ subparts, which is close to the phrase layout of the Aria:
 
 https://github.com/user-attachments/assets/56f300b6-9181-48f5-94d3-d57fa0cb6746
 
-This one seems like a variation of the first variation, but with very
-interesting harmony and a second theme:
-
-
-
-https://github.com/user-attachments/assets/b8bf218d-3af3-4be6-90ad-04f487520ba0
-
 And this one has the first notes of the beginning of each part, but then it
 evolves them in a nice way:
 
@@ -313,6 +308,14 @@ This is an even better version of that same idea:
 
 
 https://github.com/user-attachments/assets/427a07cf-7f30-42b5-bd7c-acb23ebce884
+
+
+This one seems like a variation of the first variation, but with very
+interesting harmony and a second theme:
+
+
+
+https://github.com/user-attachments/assets/b8bf218d-3af3-4be6-90ad-04f487520ba0
 
 
 
