@@ -33,6 +33,8 @@ Others copy the Aria theme almost literally, but add different harmonizations:
 
 https://github.com/user-attachments/assets/7bcd20ce-b491-487b-b384-a615286e707f
 
+This other one has quite a different left hand:
+
 https://github.com/user-attachments/assets/e6d5aca0-998b-4b6c-9272-4e3b9b583a81
 
 And others are more free, but still have quite a lot of similarities:
@@ -329,6 +331,8 @@ https://github.com/user-attachments/assets/7bcd20ce-b491-487b-b384-a615286e707f
 
 
 
+
+This other one has quite a different left hand:
 
 https://github.com/user-attachments/assets/e6d5aca0-998b-4b6c-9272-4e3b9b583a81
 
