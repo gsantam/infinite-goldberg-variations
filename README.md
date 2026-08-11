@@ -30,6 +30,12 @@ This one is comically grandiloquent:
 https://github.com/user-attachments/assets/fc4643d0-b379-4ca5-80cf-7040da004c2e
 
 
+This looks like a waltz version:
+
+
+https://github.com/gsantam/infinite-goldberg-variations/raw/main/docs/assets/readme_media/waltz_version.mp4
+
+
 Others take the start of some of the real variations, but then develop them by
 fusing them with the Aria:
 
