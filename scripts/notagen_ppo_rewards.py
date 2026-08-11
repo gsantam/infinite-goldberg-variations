@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import bisect
 import re
-from collections import Counter
 from dataclasses import dataclass
 from typing import Any
 
@@ -33,6 +32,10 @@ from rewards.strict_similarity import (
     STRICT_SYMBOLIC_COMPONENT_WEIGHTS,
     STRICT_SYMBOLIC_COMPONENT_Z_KEY,
     written_harmony_reference,
+)
+from rewards.strict_similarity_baseline_norms import (
+    STRICT_SIMILARITY_GLOBAL_NORMS,
+    STRICT_SIMILARITY_Z_STD_FLOORS,
 )
 from scripts.custom_grpo_notagen import PATCH_STREAM, count_stream_lines
 from scripts.notagen_ppo_diagnostics import component_prefix_totals, prefix_totals
@@ -470,73 +473,149 @@ def _same_bar_metric_reward_events(
     ]
 
 
+def _strict_metric_norm(metric_name: str) -> tuple[float, float]:
+    norm = STRICT_SIMILARITY_GLOBAL_NORMS.get(metric_name)
+    if norm is None:
+        raise RuntimeError(f"missing strict similarity baseline norm for {metric_name!r}")
+    std_floor = float(STRICT_SIMILARITY_Z_STD_FLOORS.get(metric_name, 1e-4))
+    std = max(float(norm.get("std_safe", norm.get("std", 0.0))), std_floor)
+    if std <= 0.0:
+        raise RuntimeError(f"invalid strict similarity baseline std for {metric_name!r}: {std}")
+    return float(norm["mean"]), std
+
+
+def _span_for_candidate_index(candidate_spans: list[tuple[int, int]], candidate_idx: int) -> tuple[int, int] | None:
+    if not candidate_spans:
+        return None
+    if 0 <= candidate_idx < len(candidate_spans):
+        return candidate_spans[candidate_idx]
+    return candidate_spans[-1]
+
+
+def _terminal_metric_reward_event(
+    *,
+    name: str,
+    candidate_spans: list[tuple[int, int]],
+    total_value: float,
+) -> list[RewardEvent]:
+    if total_value == 0.0 or not candidate_spans:
+        return []
+    _start, end = candidate_spans[-1]
+    start = max(_start, end - 1)
+    if end <= start:
+        return []
+    return [RewardEvent(start=start, end=end, value=total_value, name=name)]
+
+
+def _correct_event_total(events: list[RewardEvent], total_value: float) -> list[RewardEvent]:
+    if not events:
+        return events
+    residual = total_value - sum(event.value for event in events)
+    if abs(residual) <= 1e-12:
+        return events
+    last = events[-1]
+    events[-1] = RewardEvent(
+        start=last.start,
+        end=last.end,
+        value=last.value + residual,
+        name=last.name,
+    )
+    return events
+
+
+def _signed_local_similarity_reward_events(
+    *,
+    name: str,
+    local_scores: list[tuple[tuple[int, int], float]],
+    baseline_mean: float,
+    total_value: float,
+) -> list[RewardEvent]:
+    if total_value == 0.0 or not local_scores:
+        return []
+    deltas = [float(score) - float(baseline_mean) for _span, score in local_scores]
+    total_delta = sum(deltas)
+    if abs(total_delta) <= 1e-12:
+        values = [total_value / float(len(local_scores)) for _item in local_scores]
+    else:
+        values = [total_value * (delta / total_delta) for delta in deltas]
+
+    events = [
+        RewardEvent(start=start, end=end, value=float(value), name=name)
+        for ((start, end), _score), value in zip(local_scores, values, strict=True)
+        if end > start and value != 0.0
+    ]
+    return _correct_event_total(events, total_value)
+
+
+def _signed_same_bar_metric_reward_events(
+    *,
+    name: str,
+    reference: list,
+    candidate: list,
+    candidate_spans: list[tuple[int, int]],
+    similarity_fn,
+    metric_name: str,
+    total_value: float,
+) -> list[RewardEvent]:
+    if total_value == 0.0 or not reference or not candidate_spans:
+        return []
+    baseline_mean, _std = _strict_metric_norm(metric_name)
+    local_scores: list[tuple[tuple[int, int], float]] = []
+    for idx, left in enumerate(reference):
+        span = _span_for_candidate_index(candidate_spans, idx)
+        if span is None:
+            continue
+        right = candidate[idx] if idx < len(candidate) else None
+        score = 0.0 if right is None else max(0.0, float(similarity_fn(left, right)))
+        local_scores.append((span, score))
+    return _signed_local_similarity_reward_events(
+        name=name,
+        local_scores=local_scores,
+        baseline_mean=baseline_mean,
+        total_value=total_value,
+    )
+
+
+def _signed_dtw_metric_reward_events(
+    *,
+    name: str,
+    reference: list,
+    candidate: list,
+    candidate_spans: list[tuple[int, int]],
+    similarity_fn,
+    metric_name: str,
+    total_value: float,
+    band_ratio: float,
+) -> list[RewardEvent]:
+    if total_value == 0.0 or not reference or not candidate or not candidate_spans:
+        return []
+    alignment = generic_dtw_alignment(reference, candidate, similarity_fn, band_ratio=band_ratio)
+    if not alignment.path:
+        return []
+    baseline_mean, _std = _strict_metric_norm(metric_name)
+    local_scores: list[tuple[tuple[int, int], float]] = []
+    for (_ref_idx, candidate_idx), local_similarity in zip(
+        alignment.path,
+        alignment.local_similarities,
+        strict=True,
+    ):
+        span = _span_for_candidate_index(candidate_spans, candidate_idx)
+        if span is None:
+            continue
+        local_scores.append((span, max(0.0, float(local_similarity))))
+    return _signed_local_similarity_reward_events(
+        name=name,
+        local_scores=local_scores,
+        baseline_mean=baseline_mean,
+        total_value=total_value,
+    )
+
+
 def _soft_root_bass_similarity(left: dict, right: dict) -> float:
     return 0.5 * pitch_class_similarity(left.get("root"), right.get("root")) + 0.5 * pitch_class_similarity(
         left.get("bass"),
         right.get("bass"),
     )
-
-
-def _root_bass_token(item: dict) -> tuple[int, int] | None:
-    root = item.get("root")
-    bass = item.get("bass")
-    if root is None or bass is None:
-        return None
-    return int(root), int(bass)
-
-
-def _root_bass_ngrams(harmony: list[dict], n: int) -> list[tuple[tuple[int, int], ...] | None]:
-    tokens = [_root_bass_token(item) for item in harmony]
-    grams: list[tuple[tuple[int, int], ...] | None] = []
-    if n <= 0 or len(tokens) < n:
-        return grams
-    for idx in range(len(tokens) - n + 1):
-        window = tokens[idx : idx + n]
-        grams.append(tuple(token for token in window if token is not None) if all(window) else None)
-    return grams
-
-
-def _ngram_metric_reward_events(
-    *,
-    name: str,
-    reference: list[dict],
-    candidate: list[dict],
-    candidate_spans: list[tuple[int, int]],
-    n: int,
-    total_value: float,
-) -> list[RewardEvent]:
-    if total_value == 0.0 or n <= 0 or len(candidate_spans) < n:
-        return []
-
-    reference_counts = Counter(gram for gram in _root_bass_ngrams(reference, n) if gram is not None)
-    if not reference_counts:
-        return []
-
-    candidate_grams = _root_bass_ngrams(candidate, n)
-    used_counts: Counter = Counter()
-    matched_spans: list[tuple[int, int]] = []
-    for start_idx, gram in enumerate(candidate_grams):
-        if gram is None:
-            continue
-        if used_counts[gram] >= reference_counts.get(gram, 0):
-            continue
-        end_idx = start_idx + n - 1
-        if end_idx >= len(candidate_spans):
-            continue
-        start = candidate_spans[start_idx][0]
-        end = candidate_spans[end_idx][1]
-        if end <= start:
-            continue
-        used_counts[gram] += 1
-        matched_spans.append((start, end))
-
-    if not matched_spans:
-        return []
-    value_per_match = total_value / float(len(matched_spans))
-    return [
-        RewardEvent(start=start, end=end, value=value_per_match, name=name)
-        for start, end in matched_spans
-    ]
 
 
 def _cadence_positions(reference_length: int) -> list[int]:
@@ -548,40 +627,6 @@ def _cadence_positions(reference_length: int) -> list[int]:
         for pos in range(step - 1, reference_length, step):
             positions.add(pos)
     return sorted(pos for pos in positions if 0 <= pos < reference_length)
-
-
-def _cadence_reward_events(
-    *,
-    name: str,
-    reference: list[dict],
-    candidate: list[dict],
-    candidate_spans: list[tuple[int, int]],
-    total_value: float,
-) -> list[RewardEvent]:
-    if total_value == 0.0 or not reference or not candidate or not candidate_spans:
-        return []
-
-    credits: list[tuple[int, float]] = []
-    for pos in _cadence_positions(len(reference)):
-        if pos >= len(candidate) or pos >= len(candidate_spans):
-            continue
-        credit = max(0.0, float(_soft_root_bass_similarity(reference[pos], candidate[pos])))
-        if credit > 0.0:
-            credits.append((pos, credit))
-
-    total_credit = sum(credit for _pos, credit in credits)
-    if total_credit <= 0.0:
-        return []
-    return [
-        RewardEvent(
-            start=candidate_spans[pos][0],
-            end=candidate_spans[pos][1],
-            value=total_value * (credit / total_credit),
-            name=name,
-        )
-        for pos, credit in credits
-        if candidate_spans[pos][1] > candidate_spans[pos][0]
-    ]
 
 
 def _strict_symbolic_component_value(
@@ -597,6 +642,24 @@ def _strict_symbolic_component_value(
         float(similarity_weights.aria_strict_symbolic)
         * metric_weight
         * float(final_score.breakdown.get(f"aria_{metric_name}_global_base_z", 0.0))
+    )
+    return _active_similarity_component(raw_component, final_score)
+
+
+def _strict_symbolic_dtw_subcomponent_value(
+    *,
+    metric_score: float,
+    final_score: RewardScore,
+    similarity_weights: SimilarityRewardWeights,
+) -> float:
+    metric_weight = float(STRICT_SYMBOLIC_COMPONENT_WEIGHTS.get("strict_dtw_combined_narrow", 0.0))
+    if metric_weight == 0.0 or similarity_weights.aria_strict_symbolic == 0.0:
+        return 0.0
+    baseline_mean, baseline_std = _strict_metric_norm("strict_dtw_combined_narrow")
+    raw_component = (
+        float(similarity_weights.aria_strict_symbolic)
+        * metric_weight
+        * ((float(metric_score) / 3.0 - baseline_mean / 3.0) / baseline_std)
     )
     return _active_similarity_component(raw_component, final_score)
 
@@ -621,65 +684,67 @@ def _strict_symbolic_reward_events(
         similarity_weights=similarity_weights,
     )
     events.extend(
-        _same_bar_metric_reward_events(
+        _signed_same_bar_metric_reward_events(
             name="aria_strict_aligned_root_bass_active",
             reference=reference_harmony,
             candidate=candidate_harmony,
             candidate_spans=candidate_spans,
             similarity_fn=_soft_root_bass_similarity,
+            metric_name="strict_aligned_root_bass",
             total_value=aligned_value,
         )
     )
 
-    dtw_value = _strict_symbolic_component_value(
-        metric_name="strict_dtw_combined_narrow",
-        final_score=final_score,
-        similarity_weights=similarity_weights,
-    )
     dtw_metric_specs = [
         (
             "aria_strict_harmony_dtw_narrow_active",
+            "aria_strict_harmony_dtw_narrow",
             reference_harmony,
             candidate_harmony,
             token_similarity,
         ),
         (
             "aria_strict_root_dtw_narrow_active",
+            "aria_strict_root_dtw_narrow",
             [item.get("root") for item in reference_harmony],
             [item.get("root") for item in candidate_harmony],
             pitch_class_similarity,
         ),
         (
             "aria_strict_bass_dtw_narrow_active",
+            "aria_strict_bass_dtw_narrow",
             [item.get("bass") for item in reference_harmony],
             [item.get("bass") for item in candidate_harmony],
             pitch_class_similarity,
         ),
     ]
-    for name, reference, candidate, similarity_fn in dtw_metric_specs:
+    for name, score_key, reference, candidate, similarity_fn in dtw_metric_specs:
+        metric_score = float(final_score.breakdown.get(score_key, 0.0))
         events.extend(
-            _dtw_metric_reward_events(
+            _signed_dtw_metric_reward_events(
                 name=name,
                 reference=reference,
                 candidate=candidate,
                 candidate_spans=candidate_spans,
                 similarity_fn=similarity_fn,
-                total_value=dtw_value / 3.0,
+                metric_name="strict_dtw_combined_narrow",
+                total_value=_strict_symbolic_dtw_subcomponent_value(
+                    metric_score=metric_score,
+                    final_score=final_score,
+                    similarity_weights=similarity_weights,
+                ),
                 band_ratio=band_ratio,
             )
         )
 
-    for metric_name, n in (
-        ("strict_root_bass_bigram_weighted_jaccard", 2),
-        ("strict_root_bass_fourgram_weighted_jaccard", 4),
+    for metric_name in (
+        "strict_root_bass_bigram_weighted_jaccard",
+        "strict_root_bass_fourgram_weighted_jaccard",
     ):
         events.extend(
-            _ngram_metric_reward_events(
+            _terminal_metric_reward_event(
                 name=f"aria_{metric_name}_active",
-                reference=reference_harmony,
-                candidate=candidate_harmony,
                 candidate_spans=candidate_spans,
-                n=n,
                 total_value=_strict_symbolic_component_value(
                     metric_name=metric_name,
                     final_score=final_score,
@@ -689,11 +754,19 @@ def _strict_symbolic_reward_events(
         )
 
     events.extend(
-        _cadence_reward_events(
+        _signed_same_bar_metric_reward_events(
             name="aria_strict_cadence_root_bass_active",
-            reference=reference_harmony,
-            candidate=candidate_harmony,
-            candidate_spans=candidate_spans,
+            reference=[reference_harmony[pos] for pos in _cadence_positions(len(reference_harmony))],
+            candidate=[
+                candidate_harmony[pos] if pos < len(candidate_harmony) else {}
+                for pos in _cadence_positions(len(reference_harmony))
+            ],
+            candidate_spans=[
+                _span_for_candidate_index(candidate_spans, pos) or candidate_spans[-1]
+                for pos in _cadence_positions(len(reference_harmony))
+            ],
+            similarity_fn=_soft_root_bass_similarity,
+            metric_name="strict_cadence_root_bass",
             total_value=_strict_symbolic_component_value(
                 metric_name="strict_cadence_root_bass",
                 final_score=final_score,

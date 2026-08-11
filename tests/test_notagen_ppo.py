@@ -10,7 +10,12 @@ try:
     import torch
     from transformers import GPT2Config
 
-    from rewards.strict_similarity import STRICT_SYMBOLIC_COMPONENT_WEIGHTS, STRICT_SYMBOLIC_COMPONENT_Z_KEY
+    from rewards.strict_similarity import (
+        STRICT_SYMBOLIC_COMPONENT_WEIGHTS,
+        STRICT_SYMBOLIC_COMPONENT_Z_KEY,
+        strict_similarity_global_base_z_scores,
+        strict_symbolic_similarity,
+    )
     from scripts.custom_ppo_notagen import (
         PatchRewardTrace,
         PatchValueHead,
@@ -219,23 +224,19 @@ class NotaGenPPOTests(unittest.TestCase):
             {"root": 0, "bass": 0, "quality": "maj", "top_midi": 72},
         ]
         candidate_harmony = [dict(item) for item in reference_harmony]
+        candidate_harmony[0] = {"root": 2, "bass": 2, "quality": "min", "top_midi": 62}
         candidate_spans = [(0, 4), (4, 8), (8, 12), (12, 16)]
-        metric_z_scores = {
-            "strict_aligned_root_bass": 0.4,
-            "strict_dtw_combined_narrow": 0.6,
-            "strict_root_bass_bigram_weighted_jaccard": 0.2,
-            "strict_root_bass_fourgram_weighted_jaccard": 0.1,
-            "strict_cadence_root_bass": 0.5,
-        }
+        strict_scores = strict_symbolic_similarity(reference_harmony, candidate_harmony, band_ratio=0.05)
+        strict_scores.update(strict_similarity_global_base_z_scores(strict_scores))
         expected_total = sum(
-            STRICT_SYMBOLIC_COMPONENT_WEIGHTS[name] * value
-            for name, value in metric_z_scores.items()
+            STRICT_SYMBOLIC_COMPONENT_WEIGHTS[name] * strict_scores[f"{name}_global_base_z"]
+            for name in STRICT_SYMBOLIC_COMPONENT_WEIGHTS
         )
         breakdown = {
             "raw_similarity_reward": expected_total,
             "clipped_similarity_reward": expected_total,
         }
-        breakdown.update({f"aria_{name}_global_base_z": value for name, value in metric_z_scores.items()})
+        breakdown.update({f"aria_{name}": value for name, value in strict_scores.items()})
 
         events = _strict_symbolic_reward_events(
             reference_harmony=reference_harmony,
@@ -255,7 +256,32 @@ class NotaGenPPOTests(unittest.TestCase):
         self.assertIn("aria_strict_root_bass_fourgram_weighted_jaccard_active", event_names)
         self.assertIn("aria_strict_cadence_root_bass_active", event_names)
         self.assertAlmostEqual(sum(event.value for event in events), expected_total)
+        self.assertTrue(
+            any(
+                event.value < 0.0
+                for event in events
+                if event.name
+                in {
+                    "aria_strict_aligned_root_bass_active",
+                    "aria_strict_harmony_dtw_narrow_active",
+                    "aria_strict_root_dtw_narrow_active",
+                    "aria_strict_bass_dtw_narrow_active",
+                    "aria_strict_cadence_root_bass_active",
+                }
+            )
+        )
         self.assertTrue(any(event.end < candidate_spans[-1][1] for event in events))
+        self.assertTrue(
+            all(
+                event.start >= candidate_spans[-1][1] - 1
+                for event in events
+                if event.name
+                in {
+                    "aria_strict_root_bass_bigram_weighted_jaccard_active",
+                    "aria_strict_root_bass_fourgram_weighted_jaccard_active",
+                }
+            )
+        )
 
     def test_offline_value_split_can_be_saved_and_reused(self):
         samples = [
