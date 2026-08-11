@@ -26,7 +26,9 @@ https://github.com/user-attachments/assets/56f300b6-9181-48f5-94d3-d57fa0cb6746
 
 This one is comically grandiloquent:
 
-https://github.com/gsantam/infinite-goldberg-variations/raw/main/docs/assets/readme_media/grandiloquent_comically_grandiloquent.mp4
+
+https://github.com/user-attachments/assets/fc4643d0-b379-4ca5-80cf-7040da004c2e
+
 
 Others take the start of some of the real variations, but then develop them by
 fusing them with the Aria:
