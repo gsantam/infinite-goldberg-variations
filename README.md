@@ -302,7 +302,7 @@ https://github.com/user-attachments/assets/56f300b6-9181-48f5-94d3-d57fa0cb6746
 And this one has the first notes of the beginning of each part, but then it
 evolves them in a nice way:
 
-https://github.com/user-attachments/assets/fd759a4e-45c8-4795-aa50-34744582e7f5
+https://github.com/user-attachments/assets/28d7d45f-7496-45b5-98e6-843f47b4fb1c
 
 This is an even better version of that same idea:
 
@@ -315,7 +315,11 @@ https://github.com/user-attachments/assets/b8bf218d-3af3-4be6-90ad-04f487520ba0
 
 Or these two, where the melody is almost the same as the Aria. This is when PPO
 starts making reward hacking visible, but it develops the material in very
-interesting, and sometimes almost Frankenstein-like, ways:
+interesting, and sometimes almost Frankenstein-like, ways. Another symptom of
+the same reward hacking is the high density of ornaments: by adding more notes,
+the model gets more chances for at least some of them to match the Aria harmony.
+Future versions should fix this by ignoring or discounting ornaments when
+computing the similarity reward:
 
 https://github.com/user-attachments/assets/7bcd20ce-b491-487b-b384-a615286e707f
 
