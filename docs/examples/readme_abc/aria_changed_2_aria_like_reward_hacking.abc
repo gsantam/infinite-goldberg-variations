@@ -1,0 +1,46 @@
+X:1
+T:aria_changed_2
+%Baroque
+%Bach, Johann Sebastian
+%Keyboard
+%%score 1 2
+L:1/8
+Q:1/4=120
+M:3/4
+K:G
+V:1 treble nm="Piano" snm="Pno"
+V:2 bass nm="Piano" snm="Pno"
+[V:1]g2 g2 Ma>b|[V:2]G,B,DCB,A,|
+[V:1]a{g}f{e} d4|[V:2]DA,D,E,F,D,|
+[V:1]MG2 G3 F/G/|[V:2]E,G,B,D^CB,|
+[V:1]A/4G/4F/G/4F/4E/{E} D4|[V:2]A,G,F,E,F,D,|
+[V:1]d2 d2 Me>=f|[V:2]B,,D,G,=F,E,D,|
+[V:1]e{d}c{B} A3 !turn!f|[V:2]C,E,A,G,A,C,|
+[V:1](g/<f/)(a/<g/) (f/<e/)(d/<c/){c} a>c|[V:2]D,A,B,A,G,F,|
+[V:1](B/<G/)F{F} MG4|[V:2]G,A,B,CB,A,|
+[V:1]g2 g2 Ma>b|[V:2]G,B,DCB,A,|
+[V:1]a{g}f{e} d4|[V:2]DA,D,E,F,D,|
+[V:1]MG2 G3 F/G/|[V:2]E,G,B,D^CB,|
+[V:1]A/4G/4F/G/4F/4E/{E} D4|[V:2]A,G,F,E,F,D,|
+[V:1]d2 d2 Me>=f|[V:2]B,,D,G,=F,E,D,|
+[V:1]e{d}c{B} A3 !turn!f|[V:2]C,E,A,G,A,C,|
+[V:1]g/<f/a/<g/ f/<e/d/<c/{c} a>c|[V:2]D,A,B,A,G,F,|
+[V:1]B/<G/F{F} MG4|[V:2]G,D,B,,D, G,,2|
+[V:1]Mb2 PB2 Mb^c'/4d'/4c'/4b/4|[V:2]G,B,DG=FE|
+[V:1]c'{b}a{g} f4|[V:2]AED^CDB,|
+[V:1]Mg3/2a/4b/4{b} Me3 f/g/|[V:2]E,G,B,D^CB,|
+[V:1]{g} a{g}f{e} d3 Pe|[V:2]^CB,A,G,F,E,|
+[V:1]Mf/<e/d/<^c/{c} d3 e/f/|[V:2]D,F,B,A,CB,|
+[V:1]Mg/<f/e/<^d/{d} e3 f/g/|[V:2]E,G,^CB,DC|
+[V:1]{g} f3/2e/4d/4 g/<f/e/<d/{d} b>d|[V:2]D^CDF,G,A,|
+[V:1]e/<^c/A{A} Md4|[V:2]B,,^CDA,F,D,|
+[V:1]d/4c/4Bc/4A/4{A} G3 A/B/|[V:2]G,,B,,E,D,E,=F,|
+[V:1]c/4B/4A/B/4A/4G/{F} F3 G/A/|[V:2]E,^C,D,=C,B,,A,,|
+[V:1]B/<A/c/<B/{B} e-e/4d/4c/4B/4{d} c/e/4d/4c/4B/4A/4G/4|[V:2]G,,D,G,B,A,G,|
+[V:1]F/4G/4F/4G/4PG3/4F/8G/8{G} A3 D|[V:2]D,A,DCB,A,|
+[V:1]B/4c/4B/4A/4B/4c/4d/4e/4{d} Mc3 d/e/|[V:2]G,B,DB,A,B,|
+[V:1]d/4c/4B/c/4d/4e/4f/4{g} Pf3 g/a/|[V:2]C,A,DCB,A,|
+[V:1]d3/2e/4f/4 g/4f/4e/4d/4c/4B/4A/4G/4{G} A3/2B/4c/4|[V:2]B,A,B,CDD,|
+[V:1]{c} MBB/4A/4G/{F} G4:|[V:2]G,3 D, G,,2:|
+
+

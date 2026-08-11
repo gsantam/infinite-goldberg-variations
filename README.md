@@ -55,6 +55,9 @@ And others are more free, but still have quite a lot of similarities:
 
 https://github.com/user-attachments/assets/87f1db78-1f7f-4797-9659-eb4514aa9d66
 
+The ABC sources for the media examples in this README are copied in
+[docs/examples/readme_abc](docs/examples/readme_abc/).
+
 ## The Variations
 
 Bach's [*Goldberg Variations*](https://open.spotify.com/album/1aCpHSQE5ghxibsQ5gkBe0?si=8XK24O7ZTUShSqC-5yzbNQ) have fascinated listeners and musicians for a long time:

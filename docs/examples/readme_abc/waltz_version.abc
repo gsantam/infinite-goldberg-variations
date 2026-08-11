@@ -1,0 +1,46 @@
+X:1
+T:Waltz render
+%Baroque
+%Bach, Johann Sebastian
+%Keyboard
+%%score 1 2
+L:1/8
+Q:1/4=120
+M:3/4
+K:G
+V:1 treble nm="Piano" snm="Pno"
+V:2 bass nm="Piano" snm="Pno"
+[V:1]|:"G" GBdgab|[V:2]|:G,2 z2 G,,2|
+[V:1]"D" FAdfab|[V:2]D,2 z2 D,,2|
+[V:1]"Em" GEGBeg|[V:2]E,,2 z F,,G,,E,,|
+[V:1]"A" ^c2 Bc A2|[V:2]A,,2 z2 A,,,2|
+[V:1]"D" DFAcfa|[V:2]D,2 z2 D,,2|
+[V:1]"G" BgAfGe|[V:2]G,,2 A,,2 B,,2|
+[V:1]"Am" A,2 D2 F2|[V:2]C,2 D,2 D,,2|
+[V:1]"G" G6|[V:2]G,,2 z G,D,B,,|
+[V:1]"G" B2 b2- bc'|[V:2]G,,2 z2 G,2|
+[V:1]"D" d'2 c'bag|[V:2]F,2 D,2 F,2|
+[V:1]"C" fgaf ga/b/|[V:2]G,2 F,2 E,2|
+[V:1]"A" e2 d^cBA|[V:2]A,2 E,2 A,,2|
+[V:1]"D" FAdfab|[V:2]F,2 z2 D,2|
+[V:1]"G" aggffe|[V:2]G,2 A,2 B,2|
+[V:1]"Em" ed E2"A7" ^c2|[V:2]G,2 A,2 A,,2|
+[V:1]"D" d6::[V:2]D,,D,F,A, D2::
+[V:1]"D7" AFDFAc|[V:2]D,2 z2 F,2|
+[V:1]"G" BGFGBd|[V:2]G,2 z2 B,,2|
+[V:1]"Am" E^DEFGA|[V:2]C,2 z2 A,,2|
+[V:1]"B7" F2 EF B,2|[V:2]B,,2 z2 B,,,2|
+[V:1]B,^DFA^df|[V:2]B,,2 z2 B,,,2|
+[V:1]"Em" ge"D"f^d"C"eG|[V:2]E,,2 F,,2 G,,2|
+[V:1]FAGEF^D|[V:2]A,,2 B,,2 B,,,2|
+[V:1]E4 z2|[V:2]E,,2 E,2 D,2|
+[V:1]"A7" EA^cegb|[V:2]^C,2 z2 A,,2|
+[V:1]"D" afdBAG|[V:2]D,2 z2 C,2|
+[V:1]"G" dfgbac'|[V:2]B,,2 G,,2 A,,2|
+[V:1]"D" agfe d2|[V:2]D,2 D,,2 C,,2|
+[V:1]"G" d=fedcB|[V:2]B,,,2 z2 B,,2|
+[V:1]"C" eg"G"fedc|[V:2]C,2 z2 C,,2|
+[V:1]"D" a2 d2"D7" f2|[V:2]D,,2 C,,2 D,,2|
+[V:1]"G" g6:|[V:2]G,,G,D,B,, G,,2:|
+
+

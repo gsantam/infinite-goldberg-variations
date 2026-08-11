@@ -1,0 +1,71 @@
+X:1
+%Baroque
+%Bach, Johann Sebastian
+%Keyboard
+%%score ( 1 2 3 4 ) ( 5 6 7 8 )
+L:1/8
+Q:1/4=72
+M:3/4
+K:G
+V:1 treble nm="Piano" snm="Pno"
+L:1/16
+V:2 treble 
+L:1/4
+V:3 treble 
+V:4 treble 
+L:1/4
+V:5 bass nm="Piano" snm="Pno"
+V:6 bass 
+V:7 bass 
+L:1/4
+V:8 bass 
+V:1
+V:2
+V:3
+V:4
+V:5
+V:6
+V:7
+V:8
+V:1 treble nm="Piano" snm="Pno"
+L:1/16
+V:2 treble 
+V:3 treble 
+V:4 bass nm="Piano" snm="Pno"
+L:1/16
+V:5 bass 
+V:6 bass 
+L:1/4
+V:7 bass 
+[r:0/31][V:1]"_ = 80" z d'bg dBGB dgbg|[V:2]B z z2 z4 z4|[V:4]G,4 B,4 G,4|
+[r:1/30][V:1]d'afd AFDF Adfd|[V:4]F,4 D4 F,4|
+[r:2/29][V:1]$ gdBG E^CA,C EG^ce|[V:4]E,4 A,4 A,,4|
+[r:3/28][V:1]fdAF[K:bass] DA,F,A,[K:treble] DF=Ac|[V:2]x4[K:bass] x4[K:treble] x4|[V:3]x4[K:bass] x4[K:treble] x4|[V:4]D,4 z2 C,2 B,,2A,,2|
+[r:4/27][V:1]BGDB,[K:bass] G,B,D[K:treble]=F GBd=f|[V:2]x4[K:bass] x3[K:treble] x5|[V:3]x4[K:bass] x3[K:treble] x5|[V:4]B,,4 z2 D,2 B,,2G,,2|
+[r:5/26][V:1]ecGE[K:bass] CG,C[K:treble]E Gceg|[V:2]x4[K:bass] x3[K:treble] x5|[V:3]x4[K:bass] x3[K:treble] x5|[V:4]C,4 z2 E,2 C,2A,,2|
+[r:6/25][V:1]fdAF[K:bass] DA,F,A, D[K:treble]FAc|[V:2]x4[K:bass] x5[K:treble] x3|[V:3]x4[K:bass] x5[K:treble] x3|[V:4]D,4 z2 D,2 B,,2G,,2|
+[r:7/24][V:1]BGDB,[K:bass] G,F,G,B,[K:treble] DFGA|[V:2]x4[K:bass] x4[K:treble] x4|[V:3]x4[K:bass] x4[K:treble] x4|[V:4]G,4 z G,D,B,, G,,B,,D,F,|
+[r:8/23][V:1]BgdB GBdg bgfg|[V:4]G,4 B,4 G,4|
+[r:9/22][V:1]A^ceg fdcd Gdcd|[V:4]$ ^C,4 D,4 z2 B,2|
+[r:10/21][V:1]Ad^cd ecBc GcBc|[V:4]$ ^C,4 z2 E,2 D,2C,2|
+[r:11/20][V:1]F^ceg fdcd Adcd|[V:4]D,4 D4 z2 F,2|
+[r:12/19][V:1]Gd^cd edcd Fdcd|[V:4]E,4 z2 F,2 G,2 E,2|
+[r:13/18][V:1]Gd^cd edcd Gdcd|[V:4]A,4 A,,4 z2 B,2|
+[r:14/17][V:1]Ad^cd EdcB AGFE|[V:4]^C,2 E,2 A,,2 C,2 E,2 G,2|
+[r:15/16][V:1]D12::[V:4]z D,F,A, D[I:staff -1]FA^c d4::
+[r:16/15][V:1]$ fad'a fadf Adfa|[V:4]$[I:staff +1] D,4 D4 C4|
+[r:17/14][V:1]d'bgd BGBd gbd'=f|[V:4]B,4 G,4 B,4|
+[r:18/13][V:1]ecAF ^DFAc BAGF|[V:4]C4 F,4 B,4|
+[r:19/12][V:1]GE[K:bass]B,G, E,G,B,^D[K:treble] EGB=d|[V:2]x2[K:bass] x6[K:treble] x4|[V:3]x2[K:bass] x6[K:treble] x4|[V:4]E,4 z2 E,2 D,2B,,2|
+[r:20/11][V:1]^cAGE ^CA,CE G_Bce|[V:4]E,4 z2 G,2 E,2 ^C,2|
+[r:21/10][V:1]^dBF^D[K:bass] B,F,B,D F[K:treble]Acd|[V:2]x4[K:bass] x5[K:treble] x3|[V:3]x4[K:bass] x5[K:treble] x3|[V:4]A,,4 z2 A,2 G,2F,2|
+[r:22/9][V:1]ecAF[K:bass] ^DB,DF[K:treble] AcBA|[V:2]x4[K:bass] x4[K:treble] x4|[V:3]x4[K:bass] x4[K:treble] x4|[V:4]G,2A,2B,2A,2G,2F,2|
+[r:23/8][V:1]GEB,A, G,F,G,B, E^DEF|[V:4]E,4 z2 A,2 G,2F,2|
+[r:24/7][V:1]GcGF GcFE FcED|[V:4]E,4E4 z2 A,2|
+[r:25/6][V:1]EBED CEBA BAGF|[V:4]G,4G,,4 z2 C2|
+[r:26/5][V:1]GcGF GcGF G^cGE|[V:4]$ A,4^A,4 z4|
+[r:27/4][V:1]$  FcFE ^DFcB AFED|[V:4]B,4 B,,4 z4|
+[r:28/3][V:1]EcBA GFED CEFG|[V:4]C,4 z2 E,2 A,2 G,2|
+[r:29/2][V:1]$  CBAG FEDC B,DFA|[V:4]$ F,4 z2 A,2 D2C2|
+[r:30/1][V:1]GdcB AGFE DCB,A,|[V:4]B,2A,2 B,2C2 D2 D,2|
+[r:31/0][V:1][K:bass] G,D,B,,G,, B,,D,G,F, G,4:|[V:2]$[K:bass] x8 D,4:|[V:3][K:bass] x8 z B,,3:|[V:4]G,4 G,,8:|
