@@ -10,7 +10,9 @@ I try some of the RL post-training methods that work for text in the context of
 music, by having rewards that try to make the generated piece similar to the
 Goldberg Aria, structurally, harmonically, musically. The original Aria sounds like:
 
-https://github.com/user-attachments/assets/fa3557df-cc84-4e95-8cbd-53407603f8d6
+
+https://github.com/user-attachments/assets/9c342583-e4be-45c4-a5ee-2629899bf657
+
 
 These are some examples of the result. One takes the initial notes and copies
 the harmony, but develops something completely different:
