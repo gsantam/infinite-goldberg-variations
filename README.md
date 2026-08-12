@@ -18,42 +18,61 @@ These are some examples of the result. One takes the initial notes and copies
 the harmony, but develops something completely different:
 
 
-https://github.com/user-attachments/assets/6e713de2-0826-46d9-aea7-06523b82ab02
+https://github.com/user-attachments/assets/2a3f401d-62aa-475e-9761-d3d036a1a9f6
 
 
 Another produces a different melody, but keeps the same structure and has
 subtle reminiscences of certain parts:
 
-https://github.com/user-attachments/assets/56f300b6-9181-48f5-94d3-d57fa0cb6746
+
+
+https://github.com/user-attachments/assets/6cf35a79-2620-47b7-9cba-e9f14c9e9afc
+
+
 
 This one is comically grandiloquent:
 
 
-https://github.com/user-attachments/assets/fc4643d0-b379-4ca5-80cf-7040da004c2e
+
+https://github.com/user-attachments/assets/d61ada9a-1c46-46df-8827-8e13029af14f
 
 
 This looks like a waltz version:
 
-https://github.com/user-attachments/assets/c24da42b-516a-46d9-b949-f396ff516693
+
+
+https://github.com/user-attachments/assets/e5770777-f73a-44d9-a108-1fca1ca69fc4
+
 
 Others take the start of some of the real variations, but then develop them by
 fusing them with the Aria:
 
-https://github.com/user-attachments/assets/427a07cf-7f30-42b5-bd7c-acb23ebce884
 
-https://github.com/user-attachments/assets/b8bf218d-3af3-4be6-90ad-04f487520ba0
+https://github.com/user-attachments/assets/e27a7151-70e2-4754-bfb6-f430dfa8f48c
+
+
+
+https://github.com/user-attachments/assets/f40ea133-fda4-498f-8b24-5f77170f2829
+
+
 
 Others copy the Aria theme almost literally, but add different harmonizations:
 
-https://github.com/user-attachments/assets/7bcd20ce-b491-487b-b384-a615286e707f
+
+https://github.com/user-attachments/assets/6c35ac34-cddb-473c-86e9-dcfad0aacc1b
+
 
 This other one has quite a different left hand:
 
-https://github.com/user-attachments/assets/e6d5aca0-998b-4b6c-9272-4e3b9b583a81
+
+https://github.com/user-attachments/assets/91ca73e6-9743-4007-8052-3568847ab8b0
+
 
 And others are more free, but still have quite a lot of similarities:
 
-https://github.com/user-attachments/assets/87f1db78-1f7f-4797-9659-eb4514aa9d66
+
+https://github.com/user-attachments/assets/b710c9bf-2dd6-4f15-8a13-dc8e055b48c1
+
 
 The ABC sources for the media examples in this README are copied in
 [docs/examples/readme_abc](docs/examples/readme_abc/).
